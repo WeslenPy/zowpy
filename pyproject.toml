@@ -1,0 +1,79 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zowpy"
+version = "0.1.0"
+description = "Modern async WhatsApp client library - Zero threads, zero sleeps, just await"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "GPL-3.0-or-later" }
+authors = [
+    { name = "ZowPy maintainers" }
+]
+keywords = ["whatsapp", "async", "axolotl", "noise", "bot"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Communications :: Chat",
+    "Topic :: Internet",
+]
+
+dependencies = [
+    "asyncpg>=0.29.0",
+    "aiosqlite>=0.19.0",
+    "protobuf>=5.0.0",
+    "betterproto>=2.0.0b7",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "loguru>=0.7.0",
+    "dissononce>=0.34.3",
+    "transitions>=0.9.0",
+    "pycryptodome>=3.19.0",
+    "python-axolotl-curve25519>=0.4.0",
+    "aiohttp>=3.9.0",
+    "aiofiles>=23.0.0",
+    "requests>=2.31.0",
+    "sqlalchemy>=2.0.0",
+    "alembic>=1.13.0",
+    "PySocks>=1.7.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.7.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["zowpy*"]
+
+[tool.black]
+line-length = 100
+target-version = ['py311']
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+strict = false
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
