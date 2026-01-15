@@ -41,14 +41,18 @@ async def main():
         print(f"📨 Mensagem recebida de {message.get('from', 'unknown')}: {message.get('text', '')}")
     
     @client.on_connected
-    async def handle_connected():
+    async def handle_connected(data=None):
         """Handler de conexão estabelecida"""
-        print("✅ Conectado ao WhatsApp!")
+        # data contém informações como {'account_id': '...'}
+        account_id = data.get('account_id', 'unknown') if data else 'unknown'
+        print(f"✅ Conectado ao WhatsApp! Account: {account_id}")
     
     @client.on_disconnected
-    async def handle_disconnected():
+    async def handle_disconnected(data=None):
         """Handler de desconexão"""
-        print("❌ Desconectado do WhatsApp")
+        # data contém informações como {'account_id': '...'}
+        account_id = data.get('account_id', 'unknown') if data else 'unknown'
+        print(f"❌ Desconectado do WhatsApp. Account: {account_id}")
     
     try:
         # Conecta (fluxo linear: conexão → handshake → autenticação)
@@ -58,7 +62,7 @@ async def main():
         
         # Envia mensagem
         to = "559885700260"  # Substitua pelo número de destino
-        await client.sync_devices(jids=[to])
+        await client.sync_contacts(numbers=[to],mode="delta")
 
         text = "Hello! Esta é uma mensagem de teste do ZowPy."
         print(f"📤 Enviando mensagem para {to}...")
@@ -68,14 +72,14 @@ async def main():
         # # Aguarda resposta (timeout de 30s)
         # # Estilo whatsmeow: pode filtrar por remetente, tipo, etc.
         # print("⏳ Aguardando resposta...")
-        try:
-            response = await client.wait_for_message(
-                timeout=30.0,
-                from_jid=f"{to}@s.whatsapp.net"  # Filtra por remetente
-            )
-            print(f"📨 Resposta recebida de {response.get('from')}: {response.get('text')}")
-        except Exception as e:
-            print(f"⏱️  Nenhuma resposta recebida: {e}")
+        # try:
+        #     response = await client.wait_for_message(
+        #         timeout=30.0,
+        #         from_jid=f"{to}@s.whatsapp.net"  # Filtra por remetente
+        #     )
+        #     print(f"📨 Resposta recebida de {response.get('from')}: {response.get('text')}")
+        # except Exception as e:
+        #     print(f"⏱️  Nenhuma resposta recebida: {e}")
         
         # Aguarda um pouco antes de desconectar
         print("⏳ Aguardando 5 segundos antes de desconectar...")

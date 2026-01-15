@@ -79,10 +79,33 @@ class ZowPyClient:
             )
             
             # Conecta eventos do cliente aos eventos públicos
-            self._client.events.on("connected", lambda *args, **kwargs: self._events.emit("connected", *args, **kwargs))
-            self._client.events.on("disconnected", lambda *args, **kwargs: self._events.emit("disconnected", *args, **kwargs))
-            self._client.events.on("message", lambda msg: self._events.emit("message", msg))
-            self._client.events.on("connection:error", lambda err: self._events.emit("connection:error", err))
+            # CORREÇÃO: Handlers devem ser async e aguardar emit() para evitar RuntimeWarning
+            # Os eventos são emitidos com dados como argumentos posicionais (*args)
+            async def forward_connected(*args, **kwargs):
+                # O evento "connected" é emitido com um dicionário como primeiro argumento posicional
+                # Extrai o primeiro argumento se existir, senão usa kwargs
+                event_data = args[0] if args else kwargs
+                await self._events.emit("connected", event_data)
+            
+            async def forward_disconnected(*args, **kwargs):
+                # O evento "disconnected" é emitido com um dicionário como primeiro argumento posicional
+                event_data = args[0] if args else kwargs
+                await self._events.emit("disconnected", event_data)
+            
+            async def forward_message(*args, **kwargs):
+                # O evento "message" pode vir como argumento posicional ou kwargs
+                message_data = args[0] if args else kwargs
+                await self._events.emit("message", message_data)
+            
+            async def forward_connection_error(*args, **kwargs):
+                # O evento "connection:error" pode vir como argumento posicional ou kwargs
+                error_data = args[0] if args else kwargs
+                await self._events.emit("connection:error", error_data)
+            
+            self._client.events.on("connected", forward_connected)
+            self._client.events.on("disconnected", forward_disconnected)
+            self._client.events.on("message", forward_message)
+            self._client.events.on("connection:error", forward_connection_error)
             
             # Conecta - await, não bloqueia
             await self._client.connect()

@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Optional
 from loguru import logger
 
 from ...protocol.structs import ProtocolNode
+from ...utils.jid import to_whatsapp_jid
 from ..builders.contact_builder import ContactBuilder
 from ..processors.iq_response import IQResponseProcessor
 
@@ -45,7 +46,7 @@ class ContactHandler:
         Sincroniza contatos.
         
         Args:
-            numbers: Lista de números de telefone (com ou sem +)
+            numbers: Lista de números de telefone (com ou sem +, ou JIDs)
             mode: Modo de sync (full ou delta)
             context: Contexto (registration ou interactive)
         
@@ -55,10 +56,33 @@ class ContactHandler:
         Raises:
             Exception: Se sync falhar
         """
-        logger.info(f"Sincronizando contatos: {len(numbers)} números, mode={mode}")
+        # CORREÇÃO: Normaliza números/JIDs antes de usar
+        normalized_numbers = []
+        for number in numbers:
+            try:
+                # Se for JID, extrai apenas o número
+                if "@" in number:
+                    # Extrai apenas a parte antes do @
+                    num = number.split("@")[0]
+                    # Remove device_id se existir
+                    if ":" in num:
+                        num = num.split(":")[0]
+                    normalized_numbers.append(num)
+                else:
+                    # Já é um número, remove device_id se existir
+                    if ":" in number:
+                        normalized_numbers.append(number.split(":")[0])
+                    else:
+                        normalized_numbers.append(number)
+            except Exception as e:
+                logger.warning(f"Erro ao normalizar número '{number}': {e}, usando como está")
+                normalized_numbers.append(number)
+        
+        logger.info(f"Sincronizando contatos: {len(normalized_numbers)} números, mode={mode}")
+        logger.debug(f"Números normalizados: {normalized_numbers}")
         
         iq_node = ContactBuilder.build_sync_contacts(
-            numbers=numbers,
+            numbers=normalized_numbers,
             mode=mode,
             context=context
         )
@@ -115,7 +139,7 @@ class ContactHandler:
         Sincroniza dispositivos de contatos.
         
         Args:
-            jids: Lista de JIDs dos contatos
+            jids: Lista de JIDs dos contatos (pode ser número, JID parcial ou completo)
             mode: Modo de sync (full ou delta)
             context: Contexto (registration ou interactive)
         
@@ -125,10 +149,35 @@ class ContactHandler:
         Raises:
             Exception: Se sync falhar
         """
-        logger.info(f"Sincronizando dispositivos: {len(jids)} contatos, mode={mode}")
+        # CORREÇÃO: Normaliza JIDs antes de usar
+        # Aceita números simples, JIDs parciais ou completos
+        normalized_jids = []
+        for jid in jids:
+            try:
+                # Remove @ e sufixo se existir, mantém apenas o número
+                # Para sync_devices, precisamos apenas do número (sem @s.whatsapp.net)
+                if "@" in jid:
+                    # Extrai apenas a parte antes do @
+                    number = jid.split("@")[0]
+                    # Remove device_id se existir (ex: "559885700260:0" -> "559885700260")
+                    if ":" in number:
+                        number = number.split(":")[0]
+                    normalized_jids.append(number)
+                else:
+                    # Já é um número, remove device_id se existir
+                    if ":" in jid:
+                        normalized_jids.append(jid.split(":")[0])
+                    else:
+                        normalized_jids.append(jid)
+            except Exception as e:
+                logger.warning(f"Erro ao normalizar JID '{jid}': {e}, usando como está")
+                normalized_jids.append(jid)
+        
+        logger.info(f"Sincronizando dispositivos: {len(normalized_jids)} contatos, mode={mode}")
+        logger.debug(f"JIDs normalizados: {normalized_jids}")
         
         iq_node = ContactBuilder.build_sync_devices(
-            jids=jids,
+            jids=normalized_jids,
             mode=mode,
             context=context
         )
@@ -185,7 +234,7 @@ class ContactHandler:
         Usa sync_contacts internamente.
         
         Args:
-            jid: JID do contato
+            jid: JID do contato (pode ser número, JID parcial ou completo)
         
         Returns:
             Dict com informações do contato
@@ -193,10 +242,22 @@ class ContactHandler:
         Raises:
             Exception: Se obtenção falhar
         """
-        # Extrai número do JID
-        number = jid.split("@")[0] if "@" in jid else jid
+        # CORREÇÃO: Normaliza JID antes de usar
+        try:
+            # Extrai número do JID, removendo @ e device_id se existir
+            if "@" in jid:
+                number = jid.split("@")[0]
+            else:
+                number = jid
+            
+            # Remove device_id se existir (ex: "559885700260:0" -> "559885700260")
+            if ":" in number:
+                number = number.split(":")[0]
+        except Exception as e:
+            logger.warning(f"Erro ao normalizar JID '{jid}': {e}, usando como está")
+            number = jid
         
-        # Sincroniza contato
+        # Sincroniza contato (sync_contacts já normaliza internamente, mas fazemos aqui também)
         result = await self.sync_contacts([number])
         
         # Retorna informações (estrutura pode variar)

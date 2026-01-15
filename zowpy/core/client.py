@@ -11,6 +11,7 @@ import time
 from typing import Optional, Dict, Any, Tuple, List
 from loguru import logger
 
+# from zowpy.axolotl.state.prekeyrecord import PreKeyRecord
 from zowpy.db.factory import AxolotlManagerFactory
 from zowpy.profile.profile import AsyncProfile
 from zowpy.config.v1.config import Config
@@ -297,6 +298,18 @@ class WhatsAppClient:
             # Emite eventos para compatibilidade com API pública
             await self.events.emit("connected", {"account_id": self.account_id})
             await self.events.emit("authenticated", {"account_id": self.account_id})
+            
+            # Envia presence "available" após login (igual ao zowsuplib)
+            # Baseado em yowbot_layer.onSuccess() linha 1025
+            try:
+                from .builders.presence_builder import PresenceBuilder
+                presence_node = PresenceBuilder.build_presence(
+                    presence_type=PresenceBuilder.TYPE_AVAILABLE
+                )
+                await self._send_protocol_node(presence_node)
+                logger.debug("Presence 'available' enviado após login (igual ao zowsuplib)")
+            except Exception as e:
+                logger.warning(f"Erro ao enviar presence após login: {e}")
             
         except Exception as e:
             logger.error(f"Erro ao conectar: {e}", exc_info=True)
@@ -906,6 +919,9 @@ class WhatsAppClient:
         
         Valida estrutura antes de enviar e loga detalhes.
         """
+
+        logger.debug(f"Enviando node: {node}")
+
         if not self.transport:
             raise RuntimeError("Transport não disponível")
         
@@ -1565,6 +1581,26 @@ class WhatsAppClient:
         
         logger.info("Desconectado")
     
+    async def reconnect(self) -> None:
+        """
+        Reconecta ao WhatsApp.
+        
+        Desconecta completamente e reconecta usando o mesmo account_id e configurações.
+        Útil após envio de prekeys ou outros eventos que requerem reconexão.
+        """
+        logger.info("Reconectando...")
+        
+        # Desconecta completamente
+        await self.disconnect()
+        
+        # Aguarda um pouco para garantir que tudo foi limpo
+        await asyncio.sleep(0.5)
+        
+        # Reconecta
+        await self.connect()
+        
+        logger.info("Reconectado com sucesso")
+    
     async def _check_and_flush_prekeys(self) -> None:
         """
         Verifica e envia prekeys não enviadas.
@@ -1689,20 +1725,19 @@ class WhatsAppClient:
         
         iq_id = iq_node.get_attribute("id")
         logger.info(f"[ZOWPY] IQ node criado com ID: {iq_id}")
-        
-        # Cria callbacks
-        async def on_success(node: ProtocolNode):
-            """Callback de sucesso"""
-            logger.info(f"Callback flush keys de sucesso: {node}")
-            await self._on_keys_flushed(prekeys, reboot_connection=reboot_connection)
-        
+   
         async def on_error(node: ProtocolNode):
             """Callback de erro"""
             logger.info(f"Callback flush keys  de erro: {node}")
             await self._on_sent_keys_error(node, iq_node, signed_prekey, prekeys, reboot_connection, retry_count)
         
+
+        async def on_success(node):
+            await self._on_keys_flushed(prekeys, reboot_connection=reboot_connection)
+
         # Registra callbacks e envia
         # O IQResponseProcessor processa automaticamente erros se o tipo for "error"
+
         self._iq_response_processor.register_callback(iq_id, on_success, timeout=30.0)
         # Para erros, vamos verificar no process_iq_response
 
@@ -1710,7 +1745,7 @@ class WhatsAppClient:
         
         logger.info(f"Prekeys enviadas: {len(prekeys)} prekeys, signed_prekey_id={signed_prekey.getId()}")
     
-    async def _on_keys_flushed(self, prekeys: List, reboot_connection: bool = False) -> None:
+    async def _on_keys_flushed(self, prekeys: list, reboot_connection: bool = False) -> None:
         """
         Callback quando prekeys são enviadas com sucesso.
         
@@ -1718,19 +1753,16 @@ class WhatsAppClient:
         """
         async with self._keys_retry_lock:
             self._pending_keys_retry = None
+      
         
-        # Marca prekeys como enviadas
-        prekey_ids = [prekey.getId() for prekey in prekeys]
-        await self.axolotl_manager.set_prekeys_as_sent(prekey_ids)
+        await self.axolotl_manager.set_prekeys_as_sent(prekeys)
         
-        logger.info(f"Prekeys marcadas como enviadas: {len(prekey_ids)} prekeys")
+        logger.info(f"Prekeys marcadas como enviadas: {len(prekeys)} prekeys")
         
         if reboot_connection:
             logger.info("Reiniciando conexão após envio de prekeys...")
-            # Desconecta e reconecta
-            await self.disconnect()
-            # Reconexão será feita pelo usuário ou sistema externo
-            # Por enquanto, apenas desconecta
+            # Reconecta usando o método reconnect
+            await self.reconnect()
     
     async def _on_sent_keys_error(
         self,

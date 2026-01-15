@@ -184,13 +184,14 @@ class ContactBuilder:
         )
         
         # Adiciona node <query> com subnodes
+        # CORREÇÃO: Baseado em DevicesGetSyncIqProtocolEntity.toProtocolTreeNode()
+        # O query deve ter <lid> e <devices version="2"> (não status e contact)
         query_node = ProtocolNode(
             tag="query",
             attributes={},
             children=[
                 ProtocolNode(tag="lid", attributes={}, children=[]),
-                ProtocolNode(tag="status", attributes={}, children=[]),
-                ProtocolNode(tag="contact", attributes={}, children=[])
+                ProtocolNode(tag="devices", attributes={"version": "2"}, children=[])
             ]
         )
         usync_node.children.append(query_node)
@@ -203,16 +204,23 @@ class ContactBuilder:
         )
         
         for jid in jids:
-            # Cria estrutura: <user><contact>jid</contact></user>
-            contact_node = ProtocolNode(
-                tag="contact",
-                attributes={},
-                data=jid.encode("utf-8")
-            )
+            # CORREÇÃO: Formato correto baseado em DevicesGetSyncIqProtocolEntity.toProtocolTreeNode()
+            # O zowsuplib usa <user jid="..."> com JID completo
+            # Se o jid for apenas número, precisa converter para JID completo
+            if "@" in jid:
+                # JID completo: usa como atributo jid diretamente
+                user_jid = jid
+            else:
+                # Apenas número: converte para JID completo
+                # Remove device_id se existir (ex: "559885700260:0" -> "559885700260")
+                number = jid.split(":")[0] if ":" in jid else jid
+                user_jid = f"{number}@s.whatsapp.net"
+            
+            # Usa formato do zowsuplib: <user jid="...">
             user_node = ProtocolNode(
                 tag="user",
-                attributes={},
-                children=[contact_node]
+                attributes={"jid": user_jid},
+                children=[]
             )
             list_node.children.append(user_node)
         
