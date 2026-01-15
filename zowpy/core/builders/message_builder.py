@@ -173,15 +173,14 @@ class MessageBuilder:
     
     def _generate_message_id(self) -> str:
         """
-        Gera ID único para mensagem.
+        Gera ID único para mensagem seguindo padrão do zowsuplib.
+        
+        Baseado em MessageProtocolEntity._generateId() do zowsuplib.
         
         Returns:
-            String com ID único
+            String com ID único gerado
         """
-        # Formato: timestamp-uuid
-        timestamp = int(time.time())
-        unique_id = str(uuid.uuid4()).replace("-", "")[:8]
-        return f"{timestamp}-{unique_id}"
+        return ProtocolNode._generateId(type=ProtocolNode.ID_TYPE_ANDROID)
     
     def _is_group_jid(self, jid: str) -> bool:
         """

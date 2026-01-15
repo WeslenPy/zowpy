@@ -54,7 +54,7 @@ class KeyExchangeMessage:
                 self.identityKey = IdentityKey(message.identityKey, 0)
 
             except InvalidKeyException as e:
-                raise InvalidMessageException(e)
+                raise InvalidMessageException(str(e) if str(e) else "Invalid key exchange message")
         else:
             self.supportedVersion = CiphertextMessage.CURRENT_VERSION
             self.version = messageVersion

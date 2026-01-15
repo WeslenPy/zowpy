@@ -110,10 +110,9 @@ class NotificationProcessor(BaseProcessor):
             logger.info("Recebida RequestKeysEncryptNotification, enviando prekeys...")
             if self._flush_prekeys:
                 try:
-                    # Obtém signed_prekey e prekeys não enviadas
-                    # Por enquanto, apenas loga - a implementação completa requer acesso ao client
                     logger.debug("RequestKeysEncryptNotification processada (flush_prekeys será chamado pelo client)")
                     # O client deve chamar _check_and_flush_prekeys() quando receber esta notification
+                    await self._flush_prekeys()
                 except Exception as e:
                     logger.error(f"Erro ao processar RequestKeysEncryptNotification: {e}")
             else:

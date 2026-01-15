@@ -62,9 +62,9 @@ class PrekeyBuilder:
     @staticmethod
     def build_set_keys_iq(
         identity_key: bytes,
-        signed_prekey: Tuple[int, bytes, bytes],  # (id, public_key, signature)
-        prekeys: Dict[int, bytes],  # id -> public_key
-        registration_id: int,
+        signed_prekey: Tuple[bytes, bytes, bytes],  # (id ajustado, public_key, signature)
+        prekeys: Dict[bytes, bytes],  # id ajustado -> public_key ajustado
+        registration_id: bytes,  # ID ajustado
         djb_type: int = 5,
         iq_id: Optional[str] = None
     ) -> ProtocolNode:
@@ -73,11 +73,13 @@ class PrekeyBuilder:
         
         Baseado em SetKeysIqProtocolEntity.toProtocolTreeNode()
         
+        CORREÇÃO: Agora recebe IDs já ajustados (bytes) como no zowsuplib.
+        
         Args:
             identity_key: Chave de identidade pública ajustada (já processada por _adjust_array)
-            signed_prekey: Tupla (id: int, public_key: bytes ajustado, signature: bytes ajustado)
-            prekeys: Dicionário {id: int -> public_key: bytes ajustado}
-            registration_id: ID de registro (será ajustado internamente)
+            signed_prekey: Tupla (id ajustado: bytes, public_key ajustado: bytes, signature ajustado: bytes)
+            prekeys: Dicionário {id ajustado: bytes -> public_key ajustado: bytes}
+            registration_id: ID de registro ajustado (bytes, já processado por _adjust_id com byte_count=4)
             djb_type: Tipo DJB (padrão 5)
             iq_id: ID do IQ (gerado se None)
         
@@ -108,11 +110,10 @@ class PrekeyBuilder:
             attributes={},
             children=[]
         )
+        keyNodes = []
         
         for key_id, public_key in prekeys.items():
-            # Ajusta apenas o ID (public_key já vem ajustado de _flush_prekeys())
-            adjusted_id = PrekeyBuilder._adjust_id(key_id)
-            
+            # CORREÇÃO: ID já vem ajustado (bytes), não precisa ajustar novamente
             key_node = ProtocolNode(
                 tag="key",
                 attributes={},
@@ -120,7 +121,7 @@ class PrekeyBuilder:
                     ProtocolNode(
                         tag="id",
                         attributes={},
-                        data=adjusted_id
+                        data=key_id  # ID já ajustado (bytes)
                     ),
                     ProtocolNode(
                         tag="value",
@@ -129,12 +130,15 @@ class PrekeyBuilder:
                     )
                 ]
             )
-            list_node.children.append(key_node)
+            keyNodes.append(key_node)
+
+
+        list_node.add_children(keyNodes)
+            
         
         # Cria signed prekey node
-        # signed_value e signed_signature já vêm ajustados de _flush_prekeys()
+        # CORREÇÃO: signed_id já vem ajustado (bytes), não precisa ajustar novamente
         signed_id, signed_value, signed_signature = signed_prekey
-        adjusted_signed_id = PrekeyBuilder._adjust_id(signed_id)
         
         skey_node = ProtocolNode(
             tag="skey",
@@ -143,7 +147,7 @@ class PrekeyBuilder:
                 ProtocolNode(
                     tag="id",
                     attributes={},
-                    data=adjusted_signed_id
+                    data=signed_id  # ID já ajustado (bytes)
                 ),
                 ProtocolNode(
                     tag="value",
@@ -159,11 +163,11 @@ class PrekeyBuilder:
         )
         
         # Cria registration node
-        adjusted_reg_id = PrekeyBuilder._adjust_id(registration_id, byte_count=4)
+        # CORREÇÃO: registration_id já vem ajustado (bytes), não precisa ajustar novamente
         reg_node = ProtocolNode(
             tag="registration",
             attributes={},
-            data=adjusted_reg_id
+            data=registration_id  # ID já ajustado (bytes)
         )
         
         # Cria type node
@@ -174,17 +178,18 @@ class PrekeyBuilder:
         )
         
         # Adiciona todos os children ao node IQ
-        node.children = [
+        node.add_children([
             list_node,
             identity_node,
             reg_node,
             type_node,
             skey_node
-        ]
+        ])
         
-        logger.debug(f"Set keys IQ construído: prekeys={len(prekeys)}, registration_id={registration_id}")
+        logger.debug(f"Set keys IQ construído: prekeys={len(prekeys)}, registration_id_len={len(registration_id)}")
+        ldata = list(node) if type(node) is bytearray else node
+        logger.debug(f"tx:\n{ldata}")
 
-        logger.debug(f"Set keys IQ construído: {node}")
         return node
     
     @staticmethod

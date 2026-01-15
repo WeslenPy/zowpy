@@ -93,12 +93,11 @@ class AxolotlManager(object):
         len_pending_prekeys = len(await self._store.loadPreKeys())
         logger.debug(f"len(pending_prekeys) = {len_pending_prekeys}")
 
-
         if force or len_pending_prekeys < self.THRESHOLD_REGEN:
             count_gen = self.COUNT_GEN_PREKEYS
             max_prekey_id = await self._store.preKeyStore.loadMaxPreKeyId()
             logger.info(f"Generating {count_gen} prekeys, current max_prekey_id={max_prekey_id}")
-            prekeys = await asyncio.to_thread(lambda: KeyHelper.generatePreKeys(max_prekey_id + 1, count_gen))
+            prekeys = await KeyHelper.generatePreKeys(max_prekey_id + 1, count_gen)
             logger.info(f"Storing {len(prekeys)} prekeys")
             for i in range(0, len(prekeys)):
                 key = prekeys[i]
@@ -113,7 +112,7 @@ class AxolotlManager(object):
     async def load_unsent_prekeys(self):
         logger.debug("load_unsent_prekeys")
         # Usa o método do store que já gerencia a sessão de banco
-        unsent = await self._store.loadPreKeys()
+        unsent = await self._store.preKeyStore.loadUnsentPendingPreKeys()
         if unsent and len(unsent) > 0:
             logger.info(f"Loaded {len(unsent)} unsent prekeys")
         return unsent if unsent else []
@@ -140,7 +139,7 @@ class AxolotlManager(object):
                 new_signed_prekey_id = latest_signed_prekey.getId() + 1
         else:
             new_signed_prekey_id = random.randint(0,800)
-        signed_prekey = await asyncio.to_thread(lambda: KeyHelper.generateSignedPreKey(self._identity, new_signed_prekey_id))
+        signed_prekey = await KeyHelper.generateSignedPreKey(self._identity, new_signed_prekey_id)
         await self._store.storeSignedPreKey(signed_prekey.getId(), signed_prekey)
         return signed_prekey
 
@@ -274,12 +273,12 @@ class AxolotlManager(object):
             plaintext = await asyncio.to_thread(lambda: group_cipher.decrypt(data))
             plaintext = self._unpad(plaintext)
             return plaintext
-        except NoSessionException:
-            raise exceptions.NoSessionException()
-        except DuplicateMessageException:
-            raise exceptions.DuplicateMessageException()
-        except InvalidMessageException:
-            raise exceptions.InvalidMessageException()
+        except NoSessionException as e:
+            raise exceptions.NoSessionException(str(e) if str(e) else "No session")
+        except DuplicateMessageException as e:
+            raise exceptions.DuplicateMessageException(str(e) if str(e) else "Duplicate message")
+        except InvalidMessageException as e:
+            raise exceptions.InvalidMessageException(str(e) if str(e) else "Invalid message")
 
     async def group_create_skmsg(self, groupid):
         logger.debug(f"group_create_skmsg(groupid={groupid})")

@@ -49,7 +49,7 @@ class PreKeyWhisperMessage(CiphertextMessage):
                 self.identityKey = IdentityKey(Curve.decodePoint(bytearray(preKeyWhisperMessage.identityKey), 0))
                 self.message = WhisperMessage(serialized=preKeyWhisperMessage.message)
             except (InvalidKeyException, LegacyMessageException, DecodeError) as e:
-                raise InvalidMessageException(e)
+                raise InvalidMessageException(str(e) if str(e) else "Invalid prekey whisper message")
 
         else:
             self.version = messageVersion

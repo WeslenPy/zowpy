@@ -50,7 +50,7 @@ class SenderKeyDistributionMessage(CiphertextMessage):
                 self.signatureKey = Curve.decodePoint(bytearray(distributionMessage.signingKey), 0)
 
             except Exception as e:
-                raise InvalidMessageException(e)
+                raise InvalidMessageException(str(e) if str(e) else "Invalid sender key distribution message")
         else:
             version = [ByteUtil.intsToByteHighAndLow(self.__class__.CURRENT_VERSION, self.__class__.CURRENT_VERSION)]
             self.id = id

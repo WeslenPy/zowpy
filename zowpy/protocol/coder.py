@@ -24,13 +24,9 @@ class AsyncEncoder:
         """
         :param token_dictionary: Dicionário de tokens (opcional)
         """
-        if WriteEncoder is None:
-            logger.warning("WriteEncoder não disponível, funcionalidade limitada")
-            self._writer = None
-        else:
-            if token_dictionary is None and TokenDictionary is not None:
-                token_dictionary = TokenDictionary()
-            self._writer = WriteEncoder(token_dictionary) if token_dictionary else None
+        if token_dictionary is None and TokenDictionary is not None:
+            token_dictionary = TokenDictionary()
+        self._writer = WriteEncoder(token_dictionary) if token_dictionary else None
 
     async def encode(self, node: ProtocolNode) -> bytes:
         """
@@ -47,6 +43,8 @@ class AsyncEncoder:
             return b""
 
         # Operação de codificação pode ser pesada, executa em thread pool
+
+        # logger.debug(f"Encoding node: {node}")
         return await asyncio.to_thread(
             self._writer.protocolNodeToBytes, node
         )
@@ -59,13 +57,9 @@ class AsyncDecoder:
         """
         :param token_dictionary: Dicionário de tokens (opcional)
         """
-        if ReadDecoder is None:
-            logger.warning("ReadDecoder não disponível, funcionalidade limitada")
-            self._reader = None
-        else:
-            if token_dictionary is None and TokenDictionary is not None:
-                token_dictionary = TokenDictionary()
-            self._reader = ReadDecoder(token_dictionary) if token_dictionary else None
+        if token_dictionary is None and TokenDictionary is not None:
+            token_dictionary = TokenDictionary()
+        self._reader = ReadDecoder(token_dictionary) if token_dictionary else None
 
     async def decode(self, data: bytes) -> Optional[ProtocolNode]:
         """
@@ -107,9 +101,11 @@ class AsyncCoder:
         :param node: Nó do protocolo
         :type node: ProtocolNode
         """
-        logger.debug(f"Encoding and sending node: {node}")
+        # logger.debug(f"Encoding and sending node: {node}")
         encoded = await self.encoder.encode(node)
         await self.events.emit("coder:encoded", {"data": encoded})
+
+        return encoded
 
     async def receive_and_decode(self, data: bytes) -> Optional[ProtocolNode]:
         """
@@ -123,7 +119,7 @@ class AsyncCoder:
         node = await self.decoder.decode(data)
         if node:
             # Log específico para IQ decodificado
-            logger.debug(f"Node decodificado: {node}")
+            # logger.debug(f"Node decodificado: {node}")
             await self.events.emit("coder:decoded", {"node": node})
         return node
 

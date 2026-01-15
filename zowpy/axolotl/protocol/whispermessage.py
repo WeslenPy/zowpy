@@ -47,7 +47,7 @@ class WhisperMessage(CiphertextMessage):
                 self.previousCounter = whisperMessage.previousCounter
                 self.ciphertext = whisperMessage.ciphertext
             except InvalidKeyException as e:
-                raise InvalidMessageException(e)
+                raise InvalidMessageException(str(e) if str(e) else "Invalid whisper message")
         else:
             version = ByteUtil.intsToByteHighAndLow(messageVersion, self.__class__.CURRENT_VERSION)
             message = whisperprotos.WhisperMessage()

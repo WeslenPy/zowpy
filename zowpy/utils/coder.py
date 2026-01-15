@@ -3,6 +3,8 @@ import binascii
 import sys
 import zlib
 
+from zowpy.protocol.nodes import ProtocolTreeNode
+
 from ..protocol.structs import ProtocolNode
 
 
@@ -314,15 +316,9 @@ class WriteEncoder:
         """Alias para compatibilidade com código antigo."""
         return self.protocolNodeToBytes(node)
 
-    def writeInternal(self, node, data):
+    def writeInternal(self, node:ProtocolTreeNode, data):
         # Support both hasChildren() and has_children() for compatibility
-        has_children = False
-        if hasattr(node, 'has_children'):
-            has_children = node.has_children()
-        elif hasattr(node, 'hasChildren'):
-            has_children = node.hasChildren()
-        else:
-            has_children = len(node.children) > 0 if hasattr(node, 'children') else False
+        has_children = node.has_children()
         
         x = 1 + \
         (0 if node.attributes is None else len(node.attributes) * 2) + \

@@ -206,8 +206,6 @@ class WhatsAppClient:
                     unsent_prekeys = await self.axolotl_manager.load_unsent_prekeys()
                     if unsent_prekeys is None:
                         unsent_prekeys = []
-                    elif not isinstance(unsent_prekeys, list):
-                        unsent_prekeys = list(unsent_prekeys) if hasattr(unsent_prekeys, '__iter__') else []
                     
                     if len(unsent_prekeys) > 0:
                         logger.info(f"Encontradas {len(unsent_prekeys)} prekeys não enviadas, definindo passive=True para handshake")
@@ -257,10 +255,25 @@ class WhatsAppClient:
             await self._perform_handshake()
             logger.info("✓ Handshake concluído")
             
-            # 8. Aguarda <success> do servidor
-            logger.info("Aguardando confirmação do servidor (<success>)...")
+            # 7.5. Envia stream:stream após handshake (conforme fluxograma zowsuplib)
+            logger.info("Enviando stream:stream...")
+            await self._send_stream_start()
+            logger.info("✓ stream:stream enviado")
+            
+            # 8. Aguarda <success> do servidor (pode receber stream:features antes)
+            logger.info("Aguardando confirmação do servidor (<success> ou stream:features)...")
             await self._wait_for_success()
             logger.info("✓ Autenticado com sucesso")
+            
+            # 8.5. Define PROP_IDENTITY_AUTOTRUST = True (conforme fluxograma zowsuplib)
+            logger.info("Definindo PROP_IDENTITY_AUTOTRUST = True...")
+            await self._set_identity_autotrust(True)
+            logger.info("✓ PROP_IDENTITY_AUTOTRUST definido")
+            
+            # 8.6. Atualiza status da conta no banco de dados
+            logger.info("Atualizando status da conta no banco...")
+            await self._update_account_status()
+            logger.info("✓ Status da conta atualizado")
             
             # 9. Inicializa handlers públicos (após conexão)
             logger.info("Inicializando handlers públicos...")
@@ -365,13 +378,14 @@ class WhatsAppClient:
         self._receipt_processor = receipt_processor  # Guarda referência para atualizar depois
         self._node_router.register(AckProcessor(self.events))
         self._node_router.register(PresenceProcessor(self.events))
-        self._node_router.register(IQProcessor(self.events))
+        # IQProcessor precisa do IQResponseProcessor para chamar callbacks
+        self._node_router.register(IQProcessor(self.events, self._iq_response_processor))
         
         # NotificationProcessor precisa de funções do client
         # Será configurado após conexão quando _send_ack estiver disponível
         notification_processor = NotificationProcessor(
             events=self.events,
-            flush_prekeys_fn=None,  # Será configurado após conexão
+            flush_prekeys_fn=self._check_and_flush_prekeys,  # Será configurado após conexão
             get_keys_fn=None,  # Será configurado após conexão
             send_ack_fn=None  # Será configurado após conexão
         )
@@ -553,13 +567,120 @@ class WhatsAppClient:
         
         logger.info("✓ Transport criado")
     
+    async def _send_stream_start(self) -> None:
+        """
+        Envia stream:stream para o servidor após handshake.
+        
+        Baseado no fluxograma do zowsuplib:
+        - Após ProtocolReady, envia stream:stream para iniciar o stream XMPP
+        """
+        logger.info("Enviando stream:stream para o servidor...")
+        
+        stream_node = ProtocolNode(
+            tag="stream:stream",
+            attributes={
+                "to": "s.whatsapp.net",
+                "version": "1.0",
+                "xmlns": "jabber:client",
+                "xmlns:stream": "http://etherx.jabber.org/streams"
+            }
+        )
+        
+        await self._send_protocol_node(stream_node)
+        logger.info("✓ stream:stream enviado")
+    
+    async def _send_auth_credentials(self) -> None:
+        """
+        Envia credenciais de autenticação após receber stream:features.
+        
+        Baseado no fluxograma do zowsuplib:
+        - Após receber stream:features, envia <auth> com credenciais
+        """
+        logger.info("Enviando <auth> com credenciais...")
+        
+        # Obtém username do profile
+        username = await self.profile.username if self.profile else None
+        if not username:
+            username = self.account_id.replace("+", "").replace("-", "").replace(" ", "")
+        
+        # Cria node <auth> conforme protocolo WhatsApp
+        auth_node = ProtocolNode(
+            tag="auth",
+            attributes={
+                "mechanism": "WAUTH-2",
+                "user": str(username),
+            }
+        )
+        
+        await self._send_protocol_node(auth_node)
+        logger.info(f"✓ <auth> enviado com user={username}")
+    
+    async def _set_identity_autotrust(self, value: bool) -> None:
+        """
+        Define PROP_IDENTITY_AUTOTRUST.
+        
+        Baseado no fluxograma do zowsuplib:
+        - Após login bem-sucedido, define PROP_IDENTITY_AUTOTRUST = True
+        - Isso permite confiar automaticamente em identidades recebidas
+        
+        No zowpy, isso é usado pelo axolotl_manager ao criar sessões.
+        O valor é armazenado como atributo do cliente para uso futuro.
+        """
+        # Armazena como atributo do cliente
+        self._identity_autotrust = value
+        
+        # O axolotl_manager já usa autotrust=True ao criar sessões
+        # Este flag pode ser usado para outras operações que precisem confiar automaticamente
+        logger.info(f"PROP_IDENTITY_AUTOTRUST definido como {value}")
+        
+        # Log para debug
+        if self.axolotl_manager:
+            logger.debug(f"identity_autotrust={value} será usado pelo axolotl_manager ao criar sessões")
+    
+    async def _update_account_status(self) -> None:
+        """
+        Atualiza status da conta no banco de dados após autenticação.
+        
+        Baseado no fluxograma do zowsuplib:
+        - update_account_status: marca conta como logged_in
+        """
+        if not self.db_pool:
+            logger.debug("db_pool não disponível, pulando atualização de status")
+            return
+        
+        try:
+            from ..db.models import Account
+            from sqlalchemy import select
+            
+            async with self.db_pool.get_session() as session:
+                result = await session.execute(
+                    select(Account).filter_by(phone=self.account_id)
+                )
+                account = result.scalar_one_or_none()
+                
+                if account:
+                    account.is_logged_in = True
+                    account.is_initialized = True
+                    
+                    # Atualiza pushname se disponível no config
+                    if self.config and self.config.pushname:
+                        account.pushname = self.config.pushname
+                    
+                    await session.commit()
+                    logger.info(f"Account {self.account_id} marcado como logged_in no banco")
+                else:
+                    logger.warning(f"Account {self.account_id} não encontrado no banco para atualizar status")
+        except Exception as e:
+            logger.warning(f"Erro ao atualizar status de login no banco: {e}", exc_info=True)
+    
     async def _wait_for_success(self, timeout: float = 30.0) -> None:
         """
         Aguarda <success> do servidor de forma linear.
         
         Baseado no zowsuplib:
-        - Servidor envia <success> diretamente após handshake (sem stream:features)
-        - Processa mensagens até receber <success>
+        - Após enviar stream:stream, servidor pode enviar stream:features
+        - Se receber stream:features, envia <auth> com credenciais
+        - Servidor então envia <success> ou <failure>
         
         Args:
             timeout: Timeout em segundos
@@ -601,7 +722,6 @@ class WhatsAppClient:
             if not node:
                 continue
 
-
             logger.debug(f"Node recebido: {node}")
             logger.info(f"Node recebido: tag={node.tag}")
              
@@ -614,8 +734,12 @@ class WhatsAppClient:
                 logger.error(f"<failure> recebido: code={error_code}")
                 raise AuthenticationError(f"Login falhou: code={error_code}")
             elif node.tag == "stream:features":
-                logger.info("stream:features recebido (não esperado após handshake, mas ignorando)")
-                # Não é esperado após handshake, mas não é erro
+                logger.info("stream:features recebido, enviando <auth>...")
+                # Processa stream:features e envia auth
+                await self.auth_handler.handle_stream_features(node)
+                # Envia <auth> após receber stream:features
+                await self._send_auth_credentials()
+                logger.info("✓ <auth> enviado após stream:features")
                 continue
             else:
                 logger.debug(f"Node {node.tag} recebido antes de autenticação, ignorando...")
@@ -791,6 +915,8 @@ class WhatsAppClient:
         
         # Codifica node
         encoded_bytes = await self.coder.encoder.encode(node)
+
+        # logger.debug(f"Encoded bytes: {encoded_bytes}")
         
         # Converte lista para bytes se necessário (WriteEncoder retorna lista)
         if isinstance(encoded_bytes, list):
@@ -1455,11 +1581,9 @@ class WhatsAppClient:
                 self._unsent_prekeys = []
             elif isinstance(unsent_prekeys_result, list):
                 self._unsent_prekeys = unsent_prekeys_result
-            else:
-                # Se não for lista, tenta converter
-                logger.warning(f"load_unsent_prekeys retornou tipo inesperado: {type(unsent_prekeys_result)}, convertendo para lista")
-                self._unsent_prekeys = list(unsent_prekeys_result) if hasattr(unsent_prekeys_result, '__iter__') else []
-            
+
+
+
             if len(self._unsent_prekeys) > 0:
                 logger.info(f"Encontradas {len(self._unsent_prekeys)} prekeys não enviadas, enviando...")
                 signed_prekey = await self.axolotl_manager.load_latest_signed_prekey(generate=True)
@@ -1500,42 +1624,71 @@ class WhatsAppClient:
             self._pending_keys_retry = (signed_prekey, prekeys, reboot_connection, retry_count)
         
         # Prepara dicionário de prekeys
-        # Nota: Os IDs são passados como int, o builder fará o ajuste
+        # CORREÇÃO: Ajustar IDs antes de passar para o builder (como no zowsuplib)
+        logger.info("[ZOWPY] Preparando prekeys_dict (comparação com zowsuplib)...")
         prekeys_dict = {}
         for prekey in prekeys:
             key_pair = prekey.getKeyPair()
             # Serializa public key (remove primeiro byte)
             public_key_bytes = key_pair.getPublicKey().serialize()[1:]
-            # Ajusta apenas o array, o ID será ajustado pelo builder
+            # Ajusta array e ID (como no zowsuplib)
             adjusted_key = PrekeyBuilder._adjust_array(public_key_bytes)
-            prekeys_dict[prekey.getId()] = adjusted_key  # Passa ID como int
+            prekey_id = prekey.getId()
+            adjusted_id = PrekeyBuilder._adjust_id(prekey_id)  # Ajusta ID aqui
+            prekeys_dict[adjusted_id] = adjusted_key  # Usa bytes ajustado como chave
+            
+            # Log detalhado para comparação
+            logger.debug(f"[ZOWPY] Prekey preparado: id_int={prekey_id}, id_ajustado_len={len(adjusted_id)}, public_key_raw_len={len(public_key_bytes)}, adjusted_key_len={len(adjusted_key)}")
+        
+        logger.info(f"[ZOWPY] prekeys_dict criado com {len(prekeys_dict)} prekeys (chaves são bytes ajustados, valores são bytes ajustados)")
         
         # Prepara signed prekey
-        # Nota: O ID será ajustado pelo builder
+        # CORREÇÃO: Ajustar ID antes de passar para o builder (como no zowsuplib)
+        logger.info("[ZOWPY] Preparando signed_prekey (comparação com zowsuplib)...")
+        signed_prekey_id = signed_prekey.getId()
+        adjusted_signed_id = PrekeyBuilder._adjust_id(signed_prekey_id)  # Ajusta ID aqui
         signed_public_key = signed_prekey.getKeyPair().getPublicKey().serialize()[1:]
         signed_adjusted_key = PrekeyBuilder._adjust_array(signed_public_key)
         signed_signature = signed_prekey.getSignature()
         signed_adjusted_sig = PrekeyBuilder._adjust_array(signed_signature)
-        signed_key_tuple = (signed_prekey.getId(), signed_adjusted_key, signed_adjusted_sig)  # Passa ID como int
+        signed_key_tuple = (adjusted_signed_id, signed_adjusted_key, signed_adjusted_sig)  # ID já ajustado (bytes)
+        
+        logger.info(f"[ZOWPY] Signed prekey preparado: id_int={signed_prekey_id}, id_ajustado_len={len(adjusted_signed_id)}, public_key_raw_len={len(signed_public_key)}, adjusted_key_len={len(signed_adjusted_key)}, signature_raw_len={len(signed_signature)}, adjusted_sig_len={len(signed_adjusted_sig)}")
         
         # Prepara identity key
+        logger.info("[ZOWPY] Preparando identity_key (comparação com zowsuplib)...")
         identity_public_key = self.axolotl_manager.identity.getPublicKey().serialize()[1:]
         adjusted_identity = PrekeyBuilder._adjust_array(identity_public_key)
+        logger.info(f"[ZOWPY] Identity key preparado: raw_len={len(identity_public_key)}, adjusted_len={len(adjusted_identity)}")
         
         # Prepara registration ID
-        registration_id = self.axolotl_manager.registration_id
+        # CORREÇÃO: Ajustar registration ID antes de passar para o builder (como no zowsuplib)
+        registration_id_int = self.axolotl_manager.registration_id
+        adjusted_registration_id = PrekeyBuilder._adjust_id(registration_id_int, byte_count=4)  # Ajusta ID aqui
+        logger.info(f"[ZOWPY] Registration ID: {registration_id_int} (int) -> ajustado: {len(adjusted_registration_id)} bytes")
         
         # Cria IQ node
+        logger.info("[ZOWPY] Chamando PrekeyBuilder.build_set_keys_iq()...")
+        logger.info(f"[ZOWPY] Parâmetros: prekeys_dict_len={len(prekeys_dict)}, registration_id_ajustado_len={len(adjusted_registration_id)}, djb_type=5")
+        logger.info("[ZOWPY] Comparação esperada com zowsuplib:")
+        logger.info("[ZOWSUPLIB] SetKeysIqProtocolEntity(identityKey, signedPreKey, preKeys, Curve.DJB_TYPE, registrationId)")
+        logger.info("[ZOWSUPLIB] - identityKey: bytes ajustados (adjustArray)")
+        logger.info("[ZOWSUPLIB] - signedPreKey: tuple(id_ajustado, key_ajustado, sig_ajustado)")
+        logger.info("[ZOWSUPLIB] - preKeys: dict{id_ajustado: key_ajustado}")
+        logger.info("[ZOWSUPLIB] - djbType: 5 (Curve.DJB_TYPE)")
+        logger.info("[ZOWSUPLIB] - registrationId: bytes ajustados (adjustId, byte_count=4)")
+        
         iq_node = PrekeyBuilder.build_set_keys_iq(
             identity_key=adjusted_identity,
             signed_prekey=signed_key_tuple,
             prekeys=prekeys_dict,
-            registration_id=registration_id,
+            registration_id=adjusted_registration_id,  # Passa bytes ajustado
             djb_type=5,  # Curve.DJB_TYPE
             iq_id=None  # Será gerado
         )
         
         iq_id = iq_node.get_attribute("id")
+        logger.info(f"[ZOWPY] IQ node criado com ID: {iq_id}")
         
         # Cria callbacks
         async def on_success(node: ProtocolNode):
@@ -1552,6 +1705,7 @@ class WhatsAppClient:
         # O IQResponseProcessor processa automaticamente erros se o tipo for "error"
         self._iq_response_processor.register_callback(iq_id, on_success, timeout=30.0)
         # Para erros, vamos verificar no process_iq_response
+
         await self._send_protocol_node(iq_node)
         
         logger.info(f"Prekeys enviadas: {len(prekeys)} prekeys, signed_prekey_id={signed_prekey.getId()}")

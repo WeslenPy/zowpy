@@ -1,9 +1,28 @@
+import asyncio
 from ....axolotl.state.identitykeystore import IdentityKeyStore
 from ....axolotl.identitykey import IdentityKey
 from ....axolotl.identitykeypair import IdentityKeyPair
 from ....axolotl.util.keyhelper import KeyHelper
 from ....axolotl.ecc.djbec import *
 import sys
+
+def _run_async(coro):
+    """Helper para executar corrotina em contexto síncrono"""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # Se já há um loop rodando, cria um novo
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(coro)
+            finally:
+                loop.close()
+        else:
+            return loop.run_until_complete(coro)
+    except RuntimeError:
+        # Não há loop, cria um novo
+        return asyncio.run(coro)
 
 class LiteIdentityKeyStore(IdentityKeyStore):
     def __init__(self, dbConn):
@@ -19,8 +38,8 @@ class LiteIdentityKeyStore(IdentityKeyStore):
                        "next_prekey_id INTEGER, timestamp INTEGER);")
 
         if self.getLocalRegistrationId() is None or self.getIdentityKeyPair() is None:
-            identity = KeyHelper.generateIdentityKeyPair()
-            registration_id = KeyHelper.generateRegistrationId(True)
+            identity = _run_async(KeyHelper.generateIdentityKeyPair())
+            registration_id = _run_async(KeyHelper.generateRegistrationId(True))
             self._storeLocalData(registration_id, identity)
 
     def getIdentityKeyPair(self):

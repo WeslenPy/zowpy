@@ -45,7 +45,7 @@ class SenderKeyMessage(CiphertextMessage):
                 self.iteration = senderKeyMessage.iteration
                 self.ciphertext = senderKeyMessage.ciphertext
             except Exception as e:
-                raise InvalidMessageException(e)
+                raise InvalidMessageException(str(e) if str(e) else "Invalid sender key message")
         else:
             version = [ByteUtil.intsToByteHighAndLow(self.__class__.CURRENT_VERSION, self.__class__.CURRENT_VERSION)]
 
@@ -85,7 +85,7 @@ class SenderKeyMessage(CiphertextMessage):
             if not Curve.verifySignature(signatureKey, parts[0], parts[1]):
                 raise InvalidMessageException("Invalid signature!")
         except InvalidKeyException as e:
-            raise InvalidMessageException(e)
+            raise InvalidMessageException(str(e) if str(e) else "Invalid signature key")
 
     def getSignature(self, signatureKey, serialized):
         """

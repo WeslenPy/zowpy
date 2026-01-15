@@ -71,8 +71,8 @@ class SqlIdentityKeyStore:
 
     async def initialize(self):
         if await self.getLocalRegistrationId() is None or await self.getIdentityKeyPair() is None:
-            identity = KeyHelper.generateIdentityKeyPair()
-            registration_id = KeyHelper.generateRegistrationId(True)
+            identity = await KeyHelper.generateIdentityKeyPair()
+            registration_id = await KeyHelper.generateRegistrationId(True)
             await self._storeLocalData(registration_id, identity)
 
     async def _query_local_row(self) -> Optional[models.Identity]:
@@ -1391,7 +1391,7 @@ class SqlAxolotlStore(AxolotlStore):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            result = await self.preKeyStore.loadUnsentPendingPreKeys()
+            result = await self.preKeyStore.loadPendingPreKeys()
             logger.debug(f"SqlAxolotlStore.loadPreKeys: loaded {len(result)} unsent prekeys")
             return result
 

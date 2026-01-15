@@ -4,8 +4,6 @@ IQ Builder - Classe base para construir IQs.
 Baseado nos protocol entities do zowsuplib, mas totalmente assíncrono e moderno.
 """
 
-import uuid
-import time
 from typing import Optional, Dict, Any
 from loguru import logger
 
@@ -17,17 +15,24 @@ class IQBuilder:
     Classe base para construir IQs.
     
     Fornece funcionalidades comuns para todos os tipos de IQ.
+    Baseado em IqProtocolEntity do zowsuplib.
     """
     
     @staticmethod
-    def generate_iq_id() -> str:
+    def generate_iq_id(id_type: int = ProtocolNode.ID_TYPE_ANDROID) -> str:
         """
-        Gera ID único para IQ.
+        Gera ID único para IQ seguindo padrão do zowsuplib.
+        
+        Baseado em IqProtocolEntity._generateId() do zowsuplib.
+        Por padrão usa ID_TYPE_ANDROID (32 caracteres hex aleatórios).
+        
+        Args:
+            id_type: Tipo de ID (ProtocolNode.ID_TYPE_ANDROID ou ID_TYPE_IOS)
         
         Returns:
-            String com ID único
+            String com ID único gerado
         """
-        return f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
+        return ProtocolNode._generateId(short=True, type=id_type)
     
     @staticmethod
     def build_base_iq(

@@ -27,7 +27,7 @@ async def main():
     7. Cliente pronto!
     """
     # Importa conta (se necessário)
-    six_parts= "201289193569,nC5oANqadIvx/nVWQMP6s0qsjLIGn86xm7Zvdrjhlno=,gFIVdleRnjuvl6E8GBe4HvxLbx809f2YBOqsWXynVUQ=,uU4s9KuKHAwpt48eI4Z/T/UAVZCFXZ99nRUQQpXYzk8=,0O2YWyewGqlt1Gx2iPPt2VON3x6LCIFd30hvUoqi62Q=,MjAxMjg5MTkzNTY5I00HpRDnltgXGFLvaF/bS8+mLBEx"
+    six_parts= "201208868278,+PfRJy8TA13JI8rZiQYLnWZ+X0sEYDmB08ZzxiSsWxo=,aL74nYQzRkb3OGioDiAbeCMBadegkXBPO3TE5xf3nFM=,MbuNxcpVZuFg6C4IC2+knQeyvdd+R2icsOSh1vD57Xk=,qCPWUX3807N+/KU4hkogYh9REvvGOxpugFj2CQWIynM=,MjAxMjA4ODY4Mjc4I2nimRzHQYZasFIhLa1u1gEQrfAm"
     await import_account_from_six_parts(six_parts, env="smb_android")
     
     # Cria cliente (substitua pelo seu número)

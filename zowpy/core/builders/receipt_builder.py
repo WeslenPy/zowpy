@@ -146,12 +146,12 @@ class ReceiptBuilder:
     @staticmethod
     def _generate_id() -> str:
         """
-        Gera ID único para receipt.
+        Gera ID único para receipt seguindo padrão do zowsuplib.
+        
+        Baseado em OutgoingReceiptProtocolEntity._generateId() do zowsuplib.
         
         Returns:
-            String com ID único
+            String com ID único gerado
         """
-        import time
-        import uuid
-        return f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
+        return ProtocolNode._generateId(type=ProtocolNode.ID_TYPE_ANDROID)
 

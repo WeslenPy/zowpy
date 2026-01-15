@@ -37,7 +37,7 @@ class GroupCipher:
 
             return senderKeyMessage.serialize()
         except InvalidKeyIdException as e:
-            raise NoSessionException(e)
+            raise NoSessionException(str(e) if str(e) else "No session")
 
     def decrypt(self, senderKeyMessageBytes):
         """
@@ -60,13 +60,13 @@ class GroupCipher:
 
             return plaintext
         except (InvalidKeyException, InvalidKeyIdException) as e:
-            raise InvalidMessageException(e)
+            raise InvalidMessageException(str(e) if str(e) else "Invalid key")
 
         except ValueError as e:
-            raise InvalidMessageException(e)
+            raise InvalidMessageException(str(e) if str(e) else "Invalid value")
 
         except Exception as e:
-            raise InvalidMessageException(e)
+            raise InvalidMessageException(str(e) if str(e) else "Invalid message")
 
     def getSenderKey(self, senderKeyState, iteration):
         senderChainKey = senderKeyState.getSenderChainKey()
@@ -99,7 +99,7 @@ class GroupCipher:
             plaintext = cipher.decrypt(ciphertext)
             return plaintext
         except Exception as e:
-            raise InvalidMessageException(e)
+            raise InvalidMessageException(str(e) if str(e) else "Decryption failed")
 
     def getCipherText(self, iv, key, plaintext):
         """
