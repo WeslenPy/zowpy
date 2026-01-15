@@ -111,6 +111,146 @@ class ZowPyClient:
         
         return message_id
     
+    # ========== Grupos ==========
+    
+    async def create_group(self, subject: str, participants: list) -> str:
+        """Cria um novo grupo."""
+        if not self._client or not self._client.group_handler:
+            raise ConnectionError("Cliente não conectado")
+        return await self._client.group_handler.create_group(subject, participants)
+    
+    async def get_group_info(self, group_jid: str) -> dict:
+        """Obtém informações do grupo."""
+        if not self._client or not self._client.group_handler:
+            raise ConnectionError("Cliente não conectado")
+        return await self._client.group_handler.get_group_info(group_jid)
+    
+    async def list_groups(self, include_participants: bool = True) -> list:
+        """Lista todos os grupos."""
+        if not self._client or not self._client.group_handler:
+            raise ConnectionError("Cliente não conectado")
+        return await self._client.group_handler.list_groups(include_participants)
+    
+    async def add_participants(self, group_jid: str, participants: list) -> dict:
+        """Adiciona participantes ao grupo."""
+        if not self._client or not self._client.group_handler:
+            raise ConnectionError("Cliente não conectado")
+        return await self._client.group_handler.add_participants(group_jid, participants)
+    
+    async def remove_participants(self, group_jid: str, participants: list) -> dict:
+        """Remove participantes do grupo."""
+        if not self._client or not self._client.group_handler:
+            raise ConnectionError("Cliente não conectado")
+        return await self._client.group_handler.remove_participants(group_jid, participants)
+    
+    async def promote_participants(self, group_jid: str, participants: list) -> bool:
+        """Promove participantes a admin."""
+        if not self._client or not self._client.group_handler:
+            raise ConnectionError("Cliente não conectado")
+        return await self._client.group_handler.promote_participants(group_jid, participants)
+    
+    async def demote_participants(self, group_jid: str, participants: list) -> bool:
+        """Rebaixa participantes de admin."""
+        if not self._client or not self._client.group_handler:
+            raise ConnectionError("Cliente não conectado")
+        return await self._client.group_handler.demote_participants(group_jid, participants)
+    
+    async def leave_group(self, group_jid: str) -> bool:
+        """Sai do grupo."""
+        if not self._client or not self._client.group_handler:
+            raise ConnectionError("Cliente não conectado")
+        return await self._client.group_handler.leave_group(group_jid)
+    
+    async def set_group_subject(self, group_jid: str, subject: str) -> bool:
+        """Define assunto do grupo."""
+        if not self._client or not self._client.group_handler:
+            raise ConnectionError("Cliente não conectado")
+        return await self._client.group_handler.set_subject(group_jid, subject)
+    
+    async def set_group_description(self, group_jid: str, description: str) -> bool:
+        """Define descrição do grupo."""
+        if not self._client or not self._client.group_handler:
+            raise ConnectionError("Cliente não conectado")
+        return await self._client.group_handler.set_description(group_jid, description)
+    
+    async def get_group_invite_code(self, group_jid: str) -> str:
+        """Obtém código de convite do grupo."""
+        if not self._client or not self._client.group_handler:
+            raise ConnectionError("Cliente não conectado")
+        return await self._client.group_handler.get_invite_code(group_jid)
+    
+    async def join_group_with_code(self, code: str) -> str:
+        """Entra em grupo com código de convite."""
+        if not self._client or not self._client.group_handler:
+            raise ConnectionError("Cliente não conectado")
+        return await self._client.group_handler.join_with_code(code)
+    
+    async def approve_group_participants(self, group_jid: str, participants: list, action: str = "approve") -> bool:
+        """Aprova ou rejeita participantes pendentes."""
+        if not self._client or not self._client.group_handler:
+            raise ConnectionError("Cliente não conectado")
+        return await self._client.group_handler.approve_participants(group_jid, participants, action)
+    
+    async def set_group_settings(self, group_jid: str, setting: str, value: str = None) -> bool:
+        """Define configurações do grupo."""
+        if not self._client or not self._client.group_handler:
+            raise ConnectionError("Cliente não conectado")
+        return await self._client.group_handler.set_settings(group_jid, setting, value)
+    
+    # ========== Contatos ==========
+    
+    async def sync_contacts(self, numbers: list, mode: str = "full", context: str = "interactive") -> dict:
+        """Sincroniza contatos."""
+        if not self._client or not self._client.contact_handler:
+            raise ConnectionError("Cliente não conectado")
+        return await self._client.contact_handler.sync_contacts(numbers, mode, context)
+    
+    async def sync_devices(self, jids: list, mode: str = "full", context: str = "interactive") -> list:
+        """Sincroniza dispositivos de contatos."""
+        if not self._client or not self._client.contact_handler:
+            raise ConnectionError("Cliente não conectado")
+        return await self._client.contact_handler.sync_devices(jids, mode, context)
+    
+    async def get_contact_info(self, jid: str) -> dict:
+        """Obtém informações de um contato."""
+        if not self._client or not self._client.contact_handler:
+            raise ConnectionError("Cliente não conectado")
+        return await self._client.contact_handler.get_contact_info(jid)
+    
+    # ========== Presença ==========
+    
+    async def set_presence(self, presence_type: str = "available", to: str = None) -> bool:
+        """Define presença."""
+        if not self._client or not self._client.presence_handler_public:
+            raise ConnectionError("Cliente não conectado")
+        return await self._client.presence_handler_public.set_presence(presence_type, to)
+    
+    async def set_status(self, status: str) -> bool:
+        """Define status."""
+        if not self._client or not self._client.presence_handler_public:
+            raise ConnectionError("Cliente não conectado")
+        return await self._client.presence_handler_public.set_status(status)
+    
+    # ========== Perfil ==========
+    
+    async def get_profile_picture(self, jid: str) -> bytes:
+        """Obtém foto de perfil."""
+        if not self._client or not self._client.profile_handler:
+            raise ConnectionError("Cliente não conectado")
+        return await self._client.profile_handler.get_profile_picture(jid)
+    
+    async def set_profile_picture(self, picture_data: bytes) -> bool:
+        """Define foto de perfil."""
+        if not self._client or not self._client.profile_handler:
+            raise ConnectionError("Cliente não conectado")
+        return await self._client.profile_handler.set_profile_picture(picture_data)
+    
+    async def get_status(self, jid: str) -> str:
+        """Obtém status de um contato."""
+        if not self._client or not self._client.profile_handler:
+            raise ConnectionError("Cliente não conectado")
+        return await self._client.profile_handler.get_status(jid)
+    
     async def wait_for_message(
         self,
         timeout: Optional[float] = None,
@@ -214,5 +354,6 @@ class ZowPyClient:
     def on_disconnected(self, handler: Callable) -> None:
         """Registra handler de desconexão"""
         self._events.on("disconnected", handler)
+
 
 

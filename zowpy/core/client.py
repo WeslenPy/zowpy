@@ -8,7 +8,7 @@ Fluxo direto: conexão → handshake → autenticação.
 import asyncio
 import base64
 import time
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 from loguru import logger
 
 from zowpy.db.factory import AxolotlManagerFactory
@@ -35,6 +35,42 @@ from ..protocol.auth import AsyncAuthHandler
 from ..protocol.structs import ProtocolNode
 from ..db.manager import AxolotlManager
 from ..utils.jid import normalize, to_whatsapp_jid
+from ..axolotl.protocol.whispermessage import WhisperMessage
+from ..axolotl.protocol.prekeywhispermessage import PreKeyWhisperMessage
+
+# Nova arquitetura de processors
+from .processors.router import NodeRouter
+from .processors.message import MessageProcessor
+from .processors.receipt import ReceiptProcessor
+from .processors.ack import AckProcessor
+from .processors.presence import PresenceProcessor
+from .processors.iq import IQProcessor
+from .processors.notification import NotificationProcessor
+from .processors.group import GroupProcessor
+from .processors.iq_response import IQResponseProcessor
+from .encryption.receiver import EncryptionReceiver
+from .encryption.sender import EncryptionSender
+from .builders.message_builder import MessageBuilder
+from ..proto.messages import AsyncMessageParser
+
+# Handlers públicos
+from .handlers.group_handler import GroupHandler
+from .handlers.contact_handler import ContactHandler
+from .handlers.presence_handler import PresenceHandler
+from .handlers.profile_handler import ProfileHandler
+
+# Builders
+from .builders.prekey_builder import PrekeyBuilder
+
+# Imports para _get_keys_for_recipient
+import sys
+import binascii
+from ..axolotl.state.prekeybundle import PreKeyBundle
+from ..axolotl.identitykey import IdentityKey
+from ..axolotl.ecc.curve import Curve
+from ..axolotl.ecc.djbec import DjbECPublicKey
+from ..axolotl import exceptions
+from ..utils.constants import YowConstants
 
 
 class AuthenticationError(Exception):
@@ -83,13 +119,26 @@ class WhatsAppClient:
         self.coder: Optional[AsyncCoder] = None
         self.axolotl_manager: Optional[AxolotlManager] = None
         
-        # Stores e handlers
+        # Stores e handlers (legacy - mantidos para compatibilidade)
         self.state_store: Optional[AsyncStateStore] = None
         self.message_handler: Optional[AsyncMessageHandler] = None
         self.acks_handler: Optional[AsyncAcksHandler] = None
         self.receipts_handler: Optional[AsyncReceiptHandler] = None
         self.presence_handler: Optional[AsyncPresenceHandler] = None
         self.auth_handler: Optional[AsyncAuthHandler] = None
+        
+        # Nova arquitetura de processors
+        self._node_router: Optional[NodeRouter] = None
+        self._encryption_receiver: Optional[EncryptionReceiver] = None
+        self._encryption_sender: Optional[EncryptionSender] = None
+        self._message_builder: Optional[MessageBuilder] = None
+        self._iq_response_processor: Optional[IQResponseProcessor] = None
+        
+        # Handlers públicos
+        self.group_handler: Optional[GroupHandler] = None
+        self.contact_handler: Optional[ContactHandler] = None
+        self.presence_handler_public: Optional[PresenceHandler] = None
+        self.profile_handler: Optional[ProfileHandler] = None
         
         # Config
         self.profile: Optional[AsyncProfile] = None
@@ -101,6 +150,18 @@ class WhatsAppClient:
         self._running = False
         self._connected = False
         self._authenticated = False
+        
+        # Prekeys não enviadas e retry
+        self._unsent_prekeys: List = []
+        self._pending_keys_retry: Optional[Tuple] = None
+        self._keys_retry_lock = asyncio.Lock()
+        
+        # Fila de mensagens enviadas (para retry)
+        self._sent_messages_queue: List[ProtocolNode] = []
+        self._MAX_SENT_QUEUE = 256
+        
+        # Mensagens pendentes (quando não há sessão)
+        self._pending_messages: Dict[Tuple[str, Optional[str]], List[ProtocolNode]] = {}
         
         # Tasks
         self._message_loop_task: Optional[asyncio.Task] = None
@@ -170,7 +231,17 @@ class WhatsAppClient:
             await self._wait_for_success()
             logger.info("✓ Autenticado com sucesso")
             
-            # 9. Inicia loops de processamento
+            # 9. Inicializa handlers públicos (após conexão)
+            logger.info("Inicializando handlers públicos...")
+            await self._initialize_handlers()
+            logger.info("✓ Handlers inicializados")
+            
+            # 9.5. Envia prekeys não enviadas (se houver)
+            logger.info("Verificando prekeys não enviadas...")
+            await self._check_and_flush_prekeys()
+            logger.info("✓ Prekeys verificadas")
+            
+            # 10. Inicia loops de processamento
             logger.info("Iniciando loops de processamento...")
             self._running = True
             self._connected = True
@@ -208,12 +279,79 @@ class WhatsAppClient:
         events = AsyncEventEmitter()
         self.coder = AsyncCoder(events)
         
-        # Handlers (sem eventos - versão simplificada)
+        # Handlers (legacy - mantidos para compatibilidade)
         self.message_handler = AsyncMessageHandler(events)
         self.acks_handler = AsyncAcksHandler(events)
         self.receipts_handler = AsyncReceiptHandler(events)
         self.presence_handler = AsyncPresenceHandler(events)
         self.auth_handler = AsyncAuthHandler(events)
+        
+        # Nova arquitetura de processors
+        self._node_router = NodeRouter()
+        
+        # IQ Response Processor
+        self._iq_response_processor = IQResponseProcessor()
+        
+        # Encryption layer
+        self._encryption_receiver = EncryptionReceiver(
+            self.axolotl_manager,
+            get_keys_fn=None,  # Será configurado após conexão
+            process_pending_fn=None  # Será configurado após conexão
+        )
+        self._encryption_sender = EncryptionSender(self.axolotl_manager)
+        
+        # Message builder
+        self._message_builder = MessageBuilder(self._encryption_sender)
+        
+        # Message parser
+        message_parser = AsyncMessageParser()
+        
+        # ReceiptBuilder
+        from .builders.receipt_builder import ReceiptBuilder
+        receipt_builder = ReceiptBuilder()
+        
+        # Função para enviar receipt
+        async def send_receipt_fn(receipt_node: ProtocolNode):
+            await self._send_protocol_node(receipt_node)
+        
+        # Registra processors
+        self._node_router.register(
+            MessageProcessor(
+                encryption_receiver=self._encryption_receiver,
+                message_parser=message_parser,
+                events=self.events,
+                receipt_builder=receipt_builder,
+                send_receipt_fn=send_receipt_fn
+            )
+        )
+        # ReceiptProcessor precisa de funções do client
+        receipt_processor = ReceiptProcessor(
+            events=self.events,
+            get_enqueued_message_fn=None,  # Será configurado após conexão
+            resend_message_fn=None  # Será configurado após conexão
+        )
+        self._node_router.register(receipt_processor)
+        self._receipt_processor = receipt_processor  # Guarda referência para atualizar depois
+        self._node_router.register(AckProcessor(self.events))
+        self._node_router.register(PresenceProcessor(self.events))
+        self._node_router.register(IQProcessor(self.events))
+        
+        # NotificationProcessor precisa de funções do client
+        # Será configurado após conexão quando _send_ack estiver disponível
+        notification_processor = NotificationProcessor(
+            events=self.events,
+            flush_prekeys_fn=None,  # Será configurado após conexão
+            get_keys_fn=None,  # Será configurado após conexão
+            send_ack_fn=None  # Será configurado após conexão
+        )
+        self._node_router.register(notification_processor)
+        self._notification_processor = notification_processor  # Guarda referência para atualizar depois
+        
+        self._node_router.register(GroupProcessor(self.events))
+        
+        # Inicializa handlers públicos (serão configurados após conexão)
+        # Os handlers precisam de send_iq_fn e send_presence_fn que só existem após conexão
+        # Será chamado em _initialize_handlers() após conexão
         
         # Client config (para handshake)
         from ..config.network import NetworkEnv
@@ -472,7 +610,8 @@ class WhatsAppClient:
                 if not node:
                     continue
                 
-                # Processa node (passa dados brutos para handlers que precisam)
+                # Processa node usando router (passa dados descriptografados)
+                # O router/processor vai descriptografar novamente se necessário
                 await self._process_protocol_node(node, raw_data=decrypted)
                 
             except asyncio.TimeoutError:
@@ -485,42 +624,69 @@ class WhatsAppClient:
                 await asyncio.sleep(0.1)
     
     async def _process_protocol_node(self, node: ProtocolNode, raw_data: Optional[bytes] = None) -> None:
-        """Processa node do protocolo."""
-        tag = node.tag
+        """
+        Processa node do protocolo usando NodeRouter.
         
+        Usa a nova arquitetura de processors para processar nodes de forma moderna e limpa.
+        """
         try:
-            if tag == "message":
-                # Se temos dados brutos, passa para o handler (espera bytes)
-                if raw_data:
-                    await self.message_handler.handle_message(raw_data, from_jid=node.get_attribute("from"))
-                else:
-                    # Se não temos dados brutos, apenas emite evento com dados do node
-                    body_child = node.get_child("body")
-                    message_data = {
-                        "from": node.get_attribute("from"),
-                        "text": body_child.data.decode('utf-8') if body_child and body_child.data else "",
-                        "type": node.get_attribute("type"),
-                        "id": node.get_attribute("id"),
-                    }
-                    await self.events.emit("message", message_data)
-            elif tag == "ack":
-                await self.acks_handler.handle_ack(node)
-            elif tag == "receipt":
-                await self.receipts_handler.handle_receipt(node)
-            elif tag == "presence":
-                await self.presence_handler.handle_presence(node)
-            elif tag == "iq":
-                await self._handle_iq(node)
-            else:
-                logger.debug(f"Node não processado: {tag}")
+            # Usa router para processar node
+            result = await self._node_router.route(node, raw_data)
+            
+            if result is None:
+                logger.debug(f"Node {node.tag} não processado por nenhum processor")
         
         except Exception as e:
-            logger.error(f"Erro ao processar node {tag}: {e}", exc_info=True)
+            logger.error(f"Erro ao processar node {node.tag}: {e}", exc_info=True)
+    
+    async def _initialize_handlers(self) -> None:
+        """Inicializa handlers públicos após conexão."""
+        # Função para enviar IQ
+        async def send_iq_fn(iq_node: ProtocolNode):
+            await self._send_protocol_node(iq_node)
+        
+        # Função para enviar presence
+        async def send_presence_fn(presence_node: ProtocolNode):
+            await self._send_protocol_node(presence_node)
+        
+        # Inicializa handlers
+        self.group_handler = GroupHandler(
+            send_iq_fn=send_iq_fn,
+            iq_response_processor=self._iq_response_processor
+        )
+        
+        self.contact_handler = ContactHandler(
+            send_iq_fn=send_iq_fn,
+            iq_response_processor=self._iq_response_processor
+        )
+        
+        self.presence_handler_public = PresenceHandler(
+            send_presence_fn=send_presence_fn
+        )
+        
+        self.profile_handler = ProfileHandler(
+            send_iq_fn=send_iq_fn,
+            iq_response_processor=self._iq_response_processor
+        )
+        
+        # Atualiza EncryptionReceiver com funções disponíveis
+        if self._encryption_receiver:
+            self._encryption_receiver._get_keys = self._get_keys_for_recipient
+            self._encryption_receiver._process_pending = self._process_pending_messages
+            self._encryption_receiver._send_pkmsg_for_invalid_message = self._send_pkmsg_for_invalid_message
     
     async def _handle_iq(self, node: ProtocolNode) -> None:
-        """Processa IQ."""
+        """Processa IQ recebido."""
         logger.debug(f"Processando IQ: {node.get_attribute('type')}")
-        # Por enquanto apenas loga
+        # Processa resposta de IQ através do IQResponseProcessor
+        if self._iq_response_processor:
+            processed = await self._iq_response_processor.process_iq_response(node)
+            # Se não foi processado e é erro, tenta processar erro de prekeys
+            if not processed and node.get_attribute("type") == "error":
+                iq_id = node.get_attribute("id")
+                # Verifica se é erro de prekeys (pode ter callback de erro registrado)
+                # Por enquanto, apenas loga
+                logger.debug(f"IQ error não processado: {iq_id}")
     
     async def _keepalive_loop(self) -> None:
         """Loop de keepalive."""
@@ -544,6 +710,37 @@ class WhatsAppClient:
         )
         await self._send_protocol_node(keepalive_node)
     
+    async def _send_ack(
+        self,
+        message_id: str,
+        message_type: str,
+        notification_type: str,
+        from_jid: str
+    ) -> None:
+        """
+        Envia ACK para notification ou message.
+        
+        Baseado em OutgoingAckProtocolEntity.
+        
+        Args:
+            message_id: ID da mensagem/notification
+            message_type: Tipo da mensagem (notification, message, etc.)
+            notification_type: Tipo da notification (encrypt, etc.)
+            from_jid: JID do remetente
+        """
+        ack_node = ProtocolNode(
+            tag="ack",
+            attributes={
+                "id": message_id,
+                "class": message_type,
+                "type": notification_type,
+                "to": from_jid
+            },
+            children=[]
+        )
+        await self._send_protocol_node(ack_node)
+        logger.debug(f"ACK enviado: id={message_id}, type={notification_type}, to={from_jid}")
+    
     async def _send_protocol_node(self, node: ProtocolNode) -> None:
         """Envia protocol node."""
         if not self.transport:
@@ -551,6 +748,10 @@ class WhatsAppClient:
         
         # Codifica node
         encoded_bytes = await self.coder.encoder.encode(node)
+        
+        # Converte lista para bytes se necessário (WriteEncoder retorna lista)
+        if isinstance(encoded_bytes, list):
+            encoded_bytes = bytes(encoded_bytes)
         
         # Envia via transport (criptografa e envia)
         await self.transport.send(encoded_bytes)
@@ -561,34 +762,498 @@ class WhatsAppClient:
         text: str,
         message_id: Optional[str] = None
     ) -> str:
-        """Envia mensagem de texto."""
+        """
+        Envia mensagem de texto seguindo o fluxo completo do zowsuplib.
+        
+        Fluxo:
+        1. Cria node de mensagem com <proto> (sem criptografar ainda)
+        2. Verifica se é grupo ou contato individual
+        3. Se contato: sincroniza dispositivos, verifica sessões, obtém chaves se necessário
+        4. Criptografa para cada dispositivo
+        5. Adiciona reporting token, device-identity, etc.
+        6. Envia
+        
+        Args:
+            to: JID do destinatário
+            text: Texto da mensagem
+            message_id: ID da mensagem (gerado se None)
+        
+        Returns:
+            ID da mensagem enviada
+        """
         if not self._authenticated:
             raise RuntimeError("Not authenticated")
         
         to_jid = to_whatsapp_jid(to)
         
+        # 1. Gera ID se não fornecido
         if not message_id:
             message_id = f"{int(time.time() * 1000)}-{self.account_id}"
+        
+        # 2. Cria protobuf Message
+        from ..proto.e2e_pb2 import Message
+        message = Message()
+        message.conversation = text
+        proto_bytes = message.SerializeToString()
+        
+        # 3. Cria node base com <proto> (ainda não criptografado)
+        proto_node = ProtocolNode(
+            tag="proto",
+            attributes={},
+            data=proto_bytes
+        )
         
         message_node = ProtocolNode(
             tag="message",
             attributes={
                 "to": to_jid,
-                "id": message_id,
                 "type": "text",
+                "id": message_id,
+                "t": str(int(time.time()))
             },
-            children=[
-                ProtocolNode(
-                    tag="body",
-                    data=text.encode('utf-8')
-                )
-            ]
+            children=[proto_node]
         )
         
-        await self._send_protocol_node(message_node)
-        logger.info(f"Mensagem enviada para {to_jid}: {text[:50]}...")
+        # 4. Verifica se é grupo
+        is_group = self._is_group_jid(to_jid)
         
+        if is_group:
+            # Envia para grupo
+            await self._send_to_group(message_node, proto_bytes)
+        else:
+            # Envia para contato individual
+            await self._send_to_contact(message_node, proto_bytes, to_jid)
+        
+        logger.info(f"Mensagem enviada para {to_jid}: {text[:50]}...")
         return message_id
+    
+    def _is_group_jid(self, jid: str) -> bool:
+        """Verifica se JID é de grupo"""
+        return "-" in jid.split("@")[0] or "@g.us" in jid or "broadcast" in jid
+    
+    async def _send_to_contact(self, message_node: ProtocolNode, proto_bytes: bytes, to_jid: str) -> None:
+        """
+        Envia mensagem para contato individual.
+        
+        Fluxo baseado em AxolotlSendLayer.processPlaintextNodeAndSend():
+        1. Verifica se precisa sincronizar dispositivos
+        2. Verifica quais dispositivos têm sessão
+        3. Obtém chaves para dispositivos sem sessão
+        4. Criptografa para cada dispositivo
+        5. Envia
+        """
+        account = to_jid.split('@')[0]
+        
+        # Verifica se tem dispositivo específico (ex: 123456789:0)
+        if ":" in account:
+            # Dispositivo específico
+            jids = [to_jid]
+            await self._send_to_contacts_with_sessions(message_node, proto_bytes, jids)
+        elif "lid" in to_jid:
+            # LID (Linked ID)
+            jids = [to_jid]
+            await self._send_to_contacts_with_sessions(message_node, proto_bytes, jids)
+        else:
+            # Precisa sincronizar dispositivos primeiro
+            recipient_id = account
+            
+            # Obtém todas as sessões existentes para este recipient
+            session_jids = await self.axolotl_manager.get_all_session_usernames(recipient_id)
+            
+            if session_jids:
+                # Tem sessões, envia para elas
+                await self._send_to_contacts_with_sessions(message_node, proto_bytes, session_jids)
+            else:
+                # Não tem sessão, sincroniza dispositivos e obtém chaves
+                await self._sync_devices_and_send(message_node, proto_bytes, to_jid)
+    
+    async def _send_to_contacts_with_sessions(
+        self, 
+        message_node: ProtocolNode, 
+        proto_bytes: bytes, 
+        jids: list[str]
+    ) -> None:
+        """
+        Envia mensagem para múltiplos contatos/dispositivos que têm sessão.
+        
+        Baseado em AxolotlSendLayer.sendToContactsWithSessions()
+        """
+        
+        enc_entities = []
+        
+        for jid in jids:
+            recipient_id = jid.split('@')[0]
+            
+            # Criptografa para este dispositivo
+            ciphertext = await self.axolotl_manager.encrypt(recipient_id, proto_bytes)
+            
+            # Identifica tipo
+            if isinstance(ciphertext, PreKeyWhisperMessage):
+                enc_type = "pkmsg"
+            elif isinstance(ciphertext, WhisperMessage):
+                enc_type = "msg"
+            else:
+                enc_type = "msg"
+            
+            # Cria node <enc>
+            enc_node = ProtocolNode(
+                tag="enc",
+                attributes={
+                    "type": enc_type,
+                    "v": "2"
+                },
+                data=ciphertext.serialize()
+            )
+            
+            enc_entities.append(enc_node)
+        
+        # Adiciona enc entities ao message node
+        message_node.children.extend(enc_entities)
+        
+        # Adiciona elementos extras (reporting, device-identity, etc.)
+        await self._add_message_extras(message_node)
+        
+        # Enfileira mensagem antes de enviar (para retry)
+        self._enqueue_sent_message(message_node)
+        
+        # Envia
+        await self._send_protocol_node(message_node)
+    
+    async def _sync_devices_and_send(
+        self, 
+        message_node: ProtocolNode, 
+        proto_bytes: bytes, 
+        to_jid: str
+    ) -> None:
+        """
+        Sincroniza dispositivos do contato e envia mensagem.
+        
+        Baseado em AxolotlSendLayer.sendToContact() com sincronização de dispositivos.
+        """
+        recipient_id = to_jid.split('@')[0]
+        
+        try:
+            # Sincroniza dispositivos usando ContactHandler
+            if self.contact_handler:
+                devices = await self.contact_handler.sync_devices([to_jid])
+                if devices:
+                    # Envia para todos os dispositivos encontrados
+                    await self._send_to_contacts_with_sessions(message_node, proto_bytes, devices)
+                    return
+            
+            # Se não conseguiu sincronizar ou não há handler, tenta enviar como PKMSG
+            await self._send_as_pkmsg(message_node, proto_bytes, to_jid)
+        
+        except Exception as e:
+            logger.warning(f"Erro ao sincronizar dispositivos, enviando como PKMSG: {e}")
+            await self._send_as_pkmsg(message_node, proto_bytes, to_jid)
+    
+    async def _send_as_pkmsg(self, message_node: ProtocolNode, proto_bytes: bytes, to_jid: str) -> None:
+        """
+        Envia mensagem como PKMSG (quando não há sessão).
+        
+        Baseado em AxolotlSendLayer.sendToContactAsPkmsg()
+        """
+        
+        recipient_id = to_jid.split('@')[0]
+        
+        # Obtém chaves antes de criptografar
+        await self._get_keys_for_recipient(recipient_id)
+        
+        try:
+            # Tenta criptografar (vai criar sessão se necessário)
+            ciphertext = await self.axolotl_manager.encrypt(recipient_id, proto_bytes)
+            
+            # Cria node <enc> como PKMSG
+            enc_node = ProtocolNode(
+                tag="enc",
+                attributes={
+                    "type": "pkmsg" if isinstance(ciphertext, PreKeyWhisperMessage) else "msg",
+                    "v": "2"
+                },
+                data=ciphertext.serialize()
+            )
+            
+            message_node.children.append(enc_node)
+            
+            # Adiciona elementos extras
+            await self._add_message_extras(message_node)
+            
+            # Enfileira mensagem antes de enviar (para retry)
+            self._enqueue_sent_message(message_node)
+            
+            # Envia
+            await self._send_protocol_node(message_node)
+        
+        except (IndexError, Exception) as e:
+            # Se falhar por falta de sessão/prekeys, loga erro mais claro
+            error_msg = str(e)
+            if "bytearray index out of range" in error_msg or "NoSessionException" in error_msg or "No session" in error_msg:
+                logger.error(
+                    f"Não é possível enviar mensagem para {recipient_id}: "
+                    f"sessão não existe e não foi possível criar automaticamente. "
+                    f"É necessário obter prekeys primeiro via IQ antes de enviar mensagem."
+                )
+                raise RuntimeError(
+                    f"Não é possível enviar mensagem: sessão não existe para {recipient_id}. "
+                    f"Obtenha prekeys primeiro usando sync_devices ou get_keys_for_recipient."
+                ) from e
+            raise
+    
+    async def _get_keys_for_recipient(
+        self,
+        recipient_id: str,
+        reason: Optional[str] = None
+    ) -> Tuple[List[str], Dict[str, Exception]]:
+        """
+        Obtém chaves para um recipient (prekeys, identity keys, etc.).
+        
+        Baseado em AxolotlBaseLayer.getKeysFor()
+        
+        Args:
+            recipient_id: ID do recipient (username ou JID completo)
+            reason: Razão para obter chaves (opcional)
+        
+        Returns:
+            Tuple[List[str], Dict[str, Exception]]: (success_jids, error_jids)
+        """
+        if "@" not in recipient_id:
+            recipient_jid = f"{recipient_id}@{YowConstants.WHATSAPP_SERVER}"
+        else:
+            recipient_jid = recipient_id
+        
+        jids = [recipient_jid]
+        
+        logger.debug(f"Obtendo chaves para {recipient_jid}, reason={reason}")
+        
+        # Cria IQ para obter chaves
+        iq_node = PrekeyBuilder.build_get_keys_iq(
+            jids=jids,
+            reason=reason,
+            iq_id=None
+        )
+        
+        iq_id = iq_node.get_attribute("id")
+        
+        # Cria future para aguardar resposta
+        future = asyncio.Future()
+        success_jids = []
+        error_jids: Dict[str, Exception] = {}
+        
+        async def on_success(result_node: ProtocolNode):
+            """Callback de sucesso"""
+            try:
+                # Extrai PreKeyBundle da resposta
+                # Baseado em ResultGetKeysIqProtocolEntity.fromProtocolTreeNode()
+                list_node = result_node.get_child("list")
+                if not list_node:
+                    logger.warning("Resposta de get keys sem node <list>")
+                    future.set_result(([], {}))
+                    return
+                
+                user_nodes = list_node.children
+                for user_node in user_nodes:
+                    jid = user_node.get_attribute("jid")
+                    if not jid:
+                        continue
+                    
+                    # Verifica se tem erro
+                    error_child = user_node.get_child("error")
+                    if error_child:
+                        error_code = error_child.get_attribute("code")
+                        error_text = error_child.get_attribute("text")
+                        error_jids[jid] = Exception(f"Erro {error_code}: {error_text}")
+                        continue
+                    
+                    # Extrai componentes do PreKeyBundle
+                    registration_node = user_node.get_child("registration")
+                    identity_node = user_node.get_child("identity")
+                    signed_prekey_node = user_node.get_child("skey")
+                    prekey_node = user_node.get_child("key")
+                    
+                    if not registration_node or not identity_node or not signed_prekey_node:
+                        error_jids[jid] = Exception("Faltam parâmetros obrigatórios na resposta")
+                        continue
+                    
+                    # Converte bytes para int
+                    def _bytes_to_int(val):
+                        if sys.version_info >= (3, 0):
+                            val_enc = val.encode('latin-1') if type(val) is str else val
+                        else:
+                            val_enc = val
+                        return int(binascii.hexlify(val_enc), 16)
+                    
+                    def _enc_str(string):
+                        if sys.version_info >= (3, 0) and type(string) is str:
+                            return string.encode('latin-1')
+                        return string
+                    
+                    registration_id = _bytes_to_int(registration_node.data)
+                    identity_key = IdentityKey(DjbECPublicKey(_enc_str(identity_node.data)))
+                    
+                    # Signed prekey
+                    signed_prekey_id = _bytes_to_int(signed_prekey_node.get_child("id").data)
+                    signed_prekey_pub = DjbECPublicKey(_enc_str(signed_prekey_node.get_child("value").data))
+                    signed_prekey_sig = _enc_str(signed_prekey_node.get_child("signature").data)
+                    
+                    # Prekey (opcional)
+                    prekey_id = None
+                    prekey_public = None
+                    if prekey_node:
+                        prekey_id = _bytes_to_int(prekey_node.get_child("id").data)
+                        prekey_public = DjbECPublicKey(_enc_str(prekey_node.get_child("value").data))
+                    
+                    # Cria PreKeyBundle
+                    prekey_bundle = PreKeyBundle(
+                        registration_id,
+                        1,  # device_id
+                        prekey_id,
+                        prekey_public,
+                        signed_prekey_id,
+                        signed_prekey_pub,
+                        signed_prekey_sig,
+                        identity_key
+                    )
+                    
+                    # Cria sessão
+                    username = jid.split('@')[0]
+                    try:
+                        await self.axolotl_manager.create_session(username, prekey_bundle, autotrust=True)
+                        success_jids.append(jid)
+                        logger.info(f"Sessão criada para {jid}")
+                    except exceptions.UntrustedIdentityException as e:
+                        error_jids[jid] = e
+                        logger.warning(f"Identity não confiável para {jid}: {e}")
+                    except Exception as e:
+                        error_jids[jid] = e
+                        logger.error(f"Erro ao criar sessão para {jid}: {e}")
+                
+                future.set_result((success_jids, error_jids))
+            
+            except Exception as e:
+                logger.error(f"Erro ao processar resposta de get keys: {e}", exc_info=True)
+                future.set_exception(e)
+        
+        async def on_error(error_node: ProtocolNode):
+            """Callback de erro"""
+            error_jids[recipient_jid] = Exception(f"Erro ao obter chaves: {error_node.get_attribute('type')}")
+            future.set_result(([], error_jids))
+        
+        # Registra callbacks e envia
+        self._iq_response_processor.register_callback(iq_id, on_success, timeout=30.0)
+        await self._send_protocol_node(iq_node)
+        
+        try:
+            # Aguarda resposta
+            result = await asyncio.wait_for(future, timeout=30.0)
+            return result
+        except asyncio.TimeoutError:
+            self._iq_response_processor.unregister_callback(iq_id)
+            logger.error(f"Timeout ao obter chaves para {recipient_jid}")
+            return ([], {recipient_jid: Exception("Timeout ao obter chaves")})
+        except Exception as e:
+            self._iq_response_processor.unregister_callback(iq_id)
+            logger.error(f"Erro ao obter chaves para {recipient_jid}: {e}")
+            return ([], {recipient_jid: e})
+    
+    async def _send_to_group(self, message_node: ProtocolNode, proto_bytes: bytes) -> None:
+        """
+        Envia mensagem para grupo.
+        
+        Baseado em AxolotlSendLayer.sendToGroupWithSessions()
+        """
+        
+        group_jid = message_node.get_attribute("to")
+        
+        try:
+            # Criptografa com sender key do grupo
+            ciphertext = await self.axolotl_manager.group_encrypt(group_jid, proto_bytes)
+            
+            # Cria node <enc> como SKMSG
+            enc_node = ProtocolNode(
+                tag="enc",
+                attributes={
+                    "type": "skmsg",
+                    "v": "2"
+                },
+                data=ciphertext
+            )
+            
+            message_node.children.append(enc_node)
+            
+        except Exception as e:
+            # Verifica se é NoSessionException
+            if "NoSessionException" in str(type(e)) or "No session" in str(e) or "No sender key" in str(e):
+                # Sender key não existe, criar antes
+                logger.warning(f"Sender key não encontrado para grupo {group_jid}, criando...")
+                await self.axolotl_manager.group_create_skmsg(group_jid)
+                # Tentar criptografar novamente
+                ciphertext = await self.axolotl_manager.group_encrypt(group_jid, proto_bytes)
+                
+                enc_node = ProtocolNode(
+                    tag="enc",
+                    attributes={
+                        "type": "skmsg",
+                        "v": "2"
+                    },
+                    data=ciphertext
+                )
+                
+                message_node.children.append(enc_node)
+            else:
+                raise
+        
+        # Adiciona elementos extras
+        await self._add_message_extras(message_node)
+        
+        # Enfileira mensagem antes de enviar (para retry)
+        self._enqueue_sent_message(message_node)
+        
+        # Envia
+        await self._send_protocol_node(message_node)
+    
+    async def _add_message_extras(self, message_node: ProtocolNode) -> None:
+        """
+        Adiciona elementos extras à mensagem (reporting, device-identity, etc.).
+        
+        Baseado em AxolotlSendLayer.sendEncEntities()
+        """
+        import os
+        import base64
+        
+        # Adiciona reporting token (se não for peer message)
+        category = message_node.get_attribute("category")
+        if category != "peer":
+            reporting = ProtocolNode(
+                tag="reporting",
+                attributes={},
+                children=[]
+            )
+            reporting_token = ProtocolNode(
+                tag="reporting_token",
+                attributes={"v": "2"},
+                data=os.urandom(16)
+            )
+            reporting.children.append(reporting_token)
+            message_node.children.append(reporting)
+        
+        # Adiciona device-identity se houver
+        if self.profile and self.config:
+            if hasattr(self.config, 'device_identity') and self.config.device_identity:
+                try:
+                    did_data = base64.b64decode(self.config.device_identity)
+                    device_identity = ProtocolNode(
+                        tag="device-identity",
+                        attributes={},
+                        data=did_data
+                    )
+                    message_node.children.append(device_identity)
+                except Exception as e:
+                    logger.warning(f"Erro ao adicionar device-identity: {e}")
+        
+        # Adiciona tctoken se necessário (para mensagens de negócios)
+        # tctoken é usado para mensagens de negócios verificadas
+        # Por enquanto, não implementado - pode ser adicionado quando necessário
     
     def is_connected(self) -> bool:
         """Verifica se está conectado e autenticado"""
@@ -634,4 +1299,366 @@ class WhatsAppClient:
         await self.events.emit("disconnected", {"account_id": self.account_id})
         
         logger.info("Desconectado")
+    
+    async def _check_and_flush_prekeys(self) -> None:
+        """
+        Verifica e envia prekeys não enviadas.
+        
+        Baseado em AxolotlControlLayer.onAuthed()
+        """
+        try:
+            # Carrega prekeys não enviadas
+            unsent_prekeys_result = await self.axolotl_manager.load_unsent_prekeys()
+            logger.debug(f"load_unsent_prekeys retornou tipo: {type(unsent_prekeys_result)}")
+            
+            # Garante que é uma lista
+            if unsent_prekeys_result is None:
+                self._unsent_prekeys = []
+            elif isinstance(unsent_prekeys_result, list):
+                self._unsent_prekeys = unsent_prekeys_result
+            else:
+                # Se não for lista, tenta converter
+                logger.warning(f"load_unsent_prekeys retornou tipo inesperado: {type(unsent_prekeys_result)}, convertendo para lista")
+                self._unsent_prekeys = list(unsent_prekeys_result) if hasattr(unsent_prekeys_result, '__iter__') else []
+            
+            if len(self._unsent_prekeys) > 0:
+                logger.info(f"Encontradas {len(self._unsent_prekeys)} prekeys não enviadas, enviando...")
+                signed_prekey = await self.axolotl_manager.load_latest_signed_prekey(generate=True)
+                if signed_prekey:
+                    await self._flush_prekeys(signed_prekey, self._unsent_prekeys[:], reboot_connection=True)
+                    self._unsent_prekeys = []
+                else:
+                    logger.warning("Não foi possível gerar signed_prekey, não é possível enviar prekeys")
+            else:
+                logger.debug("Nenhuma prekey não enviada encontrada")
+        except Exception as e:
+            logger.exception(e)
+            logger.error(f"Erro ao verificar/enviar prekeys: {e}", exc_info=True)
+    
+    async def _flush_prekeys(
+        self,
+        signed_prekey,
+        prekeys: List,
+        reboot_connection: bool = False,
+        retry_count: int = 0
+    ) -> None:
+        """
+        Envia prekeys para o servidor.
+        
+        Baseado em AxolotlControlLayer.flush_keys()
+        
+        Args:
+            signed_prekey: SignedPreKeyRecord
+            prekeys: Lista de PreKeyRecord
+            reboot_connection: Se deve reiniciar conexão após enviar
+            retry_count: Contador de retry (para retry automático)
+        """
+        import random
+        import binascii
+        
+        # Armazena informações para retry se necessário
+        async with self._keys_retry_lock:
+            self._pending_keys_retry = (signed_prekey, prekeys, reboot_connection, retry_count)
+        
+        # Prepara dicionário de prekeys
+        # Nota: Os IDs são passados como int, o builder fará o ajuste
+        prekeys_dict = {}
+        for prekey in prekeys:
+            key_pair = prekey.getKeyPair()
+            # Serializa public key (remove primeiro byte)
+            public_key_bytes = key_pair.getPublicKey().serialize()[1:]
+            # Ajusta apenas o array, o ID será ajustado pelo builder
+            adjusted_key = PrekeyBuilder._adjust_array(public_key_bytes)
+            prekeys_dict[prekey.getId()] = adjusted_key  # Passa ID como int
+        
+        # Prepara signed prekey
+        # Nota: O ID será ajustado pelo builder
+        signed_public_key = signed_prekey.getKeyPair().getPublicKey().serialize()[1:]
+        signed_adjusted_key = PrekeyBuilder._adjust_array(signed_public_key)
+        signed_signature = signed_prekey.getSignature()
+        signed_adjusted_sig = PrekeyBuilder._adjust_array(signed_signature)
+        signed_key_tuple = (signed_prekey.getId(), signed_adjusted_key, signed_adjusted_sig)  # Passa ID como int
+        
+        # Prepara identity key
+        identity_public_key = self.axolotl_manager.identity.getPublicKey().serialize()[1:]
+        adjusted_identity = PrekeyBuilder._adjust_array(identity_public_key)
+        
+        # Prepara registration ID
+        registration_id = self.axolotl_manager.registration_id
+        
+        # Cria IQ node
+        iq_node = PrekeyBuilder.build_set_keys_iq(
+            identity_key=adjusted_identity,
+            signed_prekey=signed_key_tuple,
+            prekeys=prekeys_dict,
+            registration_id=registration_id,
+            djb_type=5,  # Curve.DJB_TYPE
+            iq_id=None  # Será gerado
+        )
+        
+        iq_id = iq_node.get_attribute("id")
+        
+        # Cria callbacks
+        async def on_success(node: ProtocolNode):
+            """Callback de sucesso"""
+            logger.info(f"Callback flush keys de sucesso: {node}")
+            await self._on_keys_flushed(prekeys, reboot_connection=reboot_connection)
+        
+        async def on_error(node: ProtocolNode):
+            """Callback de erro"""
+            logger.info(f"Callback flush keys  de erro: {node}")
+            await self._on_sent_keys_error(node, iq_node, signed_prekey, prekeys, reboot_connection, retry_count)
+        
+        # Registra callbacks e envia
+        # O IQResponseProcessor processa automaticamente erros se o tipo for "error"
+        self._iq_response_processor.register_callback(iq_id, on_success, timeout=30.0)
+        # Para erros, vamos verificar no process_iq_response
+        await self._send_protocol_node(iq_node)
+        
+        logger.info(f"Prekeys enviadas: {len(prekeys)} prekeys, signed_prekey_id={signed_prekey.getId()}")
+    
+    async def _on_keys_flushed(self, prekeys: List, reboot_connection: bool = False) -> None:
+        """
+        Callback quando prekeys são enviadas com sucesso.
+        
+        Baseado em AxolotlControlLayer.on_keys_flushed()
+        """
+        async with self._keys_retry_lock:
+            self._pending_keys_retry = None
+        
+        # Marca prekeys como enviadas
+        prekey_ids = [prekey.getId() for prekey in prekeys]
+        await self.axolotl_manager.set_prekeys_as_sent(prekey_ids)
+        
+        logger.info(f"Prekeys marcadas como enviadas: {len(prekey_ids)} prekeys")
+        
+        if reboot_connection:
+            logger.info("Reiniciando conexão após envio de prekeys...")
+            # Desconecta e reconecta
+            await self.disconnect()
+            # Reconexão será feita pelo usuário ou sistema externo
+            # Por enquanto, apenas desconecta
+    
+    async def _on_sent_keys_error(
+        self,
+        error_node: ProtocolNode,
+        original_iq: ProtocolNode,
+        signed_prekey,
+        prekeys: List,
+        reboot_connection: bool,
+        retry_count: int
+    ) -> None:
+        """
+        Trata erros ao enviar prekeys.
+        
+        Baseado em AxolotlControlLayer.onSentKeysError()
+        """
+        import random
+        
+        # Extrai informações do erro
+        error_child = error_node.get_child("error")
+        if error_child:
+            error_code = error_child.get_attribute("code")
+            error_text = error_child.get_attribute("text")
+            backoff = error_child.get_attribute("backoff")
+            
+            logger.warning(f"Erro ao enviar prekeys: code={error_code}, text={error_text}, backoff={backoff}")
+            
+            # Se for erro 503 (service-unavailable), tenta retry com backoff
+            if error_code == "503":
+                async with self._keys_retry_lock:
+                    if self._pending_keys_retry is None:
+                        logger.warning("Erro 503 ao enviar prekeys, mas não há informações de retry disponíveis.")
+                        return
+                    
+                    retry_count += 1
+                    
+                    if retry_count >= 5:  # Máximo de 5 tentativas
+                        logger.error(f"Falha ao enviar prekeys após {retry_count} tentativas. Desistindo.")
+                        self._pending_keys_retry = None
+                        return
+                    
+                    # Calcula backoff exponencial com jitter
+                    backoff_seconds = min(2 ** retry_count + random.uniform(0, 1), 60)  # Máximo 60 segundos
+                    logger.info(f"Erro 503 ao enviar prekeys. Agendando retry {retry_count}/5 em {backoff_seconds:.1f} segundos...")
+                    
+                    # Atualiza o contador de retry
+                    self._pending_keys_retry = (signed_prekey, prekeys, reboot_connection, retry_count)
+                    
+                    # Agenda retry
+                    await asyncio.sleep(backoff_seconds)
+                    
+                    # Verifica se ainda está pendente
+                    async with self._keys_retry_lock:
+                        if self._pending_keys_retry:
+                            logger.info(f"Tentando reenviar prekeys (tentativa {retry_count + 1}/5)...")
+                            await self._flush_prekeys(signed_prekey, prekeys, reboot_connection=reboot_connection, retry_count=retry_count)
+            else:
+                # Outros erros (não 503)
+                logger.error(f"Erro ao enviar prekeys: code={error_code}, text={error_text}. Não será feito retry automático.")
+                async with self._keys_retry_lock:
+                    self._pending_keys_retry = None
+        else:
+            logger.warning("Erro ao enviar prekeys, mas não foi possível extrair informações do erro")
+            async with self._keys_retry_lock:
+                self._pending_keys_retry = None
+    
+    def _enqueue_sent_message(self, node: ProtocolNode) -> None:
+        """
+        Adiciona mensagem à fila de mensagens enviadas.
+        
+        Baseado em AxolotlSendLayer.enqueueSent()
+        
+        Args:
+            node: Protocol node da mensagem enviada
+        """
+        if len(self._sent_messages_queue) >= self._MAX_SENT_QUEUE:
+            logger.warning("Fila de mensagens enviadas cheia, removendo mensagem mais antiga")
+            self._sent_messages_queue.pop(0)
+        
+        self._sent_messages_queue.append(node)
+        logger.debug(f"Mensagem enfileirada: id={node.get_attribute('id')}")
+    
+    async def _get_enqueued_message(
+        self,
+        message_id: str,
+        keep_enqueued: bool = False
+    ) -> Optional[ProtocolNode]:
+        """
+        Busca mensagem na fila de mensagens enviadas.
+        
+        Baseado em AxolotlSendLayer.getEnqueuedMessageNode()
+        
+        Args:
+            message_id: ID da mensagem
+            keep_enqueued: Se True, não remove da fila
+        
+        Returns:
+            ProtocolNode da mensagem ou None se não encontrada
+        """
+        for i in range(len(self._sent_messages_queue)):
+            if self._sent_messages_queue[i].get_attribute("id") == message_id:
+                if keep_enqueued:
+                    return self._sent_messages_queue[i]
+                return self._sent_messages_queue.pop(i)
+        
+        return None
+    
+    async def _resend_message(
+        self,
+        message_node: ProtocolNode,
+        retry_jid: Optional[str] = None,
+        retry_count: int = 0
+    ) -> None:
+        """
+        Re-envia mensagem em caso de retry.
+        
+        Baseado em AxolotlSendLayer.receive() para retry receipts.
+        
+        Args:
+            message_node: Protocol node da mensagem original
+            retry_jid: JID específico para retry (opcional)
+            retry_count: Contador de retry
+        """
+        try:
+            # Extrai proto bytes da mensagem original
+            proto_node = message_node.get_child("proto")
+            if not proto_node or not proto_node.data:
+                logger.error("Mensagem original não tem <proto> com dados, não é possível re-enviar")
+                return
+            
+            proto_bytes = proto_node.data
+            to_jid = message_node.get_attribute("to")
+            
+            logger.info(f"Re-enviando mensagem {message_node.get_attribute('id')} para {to_jid} (retry_count={retry_count})")
+            
+            # Se tiver retry_jid específico, envia apenas para ele
+            if retry_jid:
+                # Obtém chaves para o JID específico
+                success_jids, error_jids = await self._get_keys_for_recipient(retry_jid.split('@')[0], reason="retry")
+                if success_jids:
+                    await self._send_to_contacts_with_sessions(message_node, proto_bytes, [retry_jid])
+                else:
+                    logger.error(f"Erro ao obter chaves para retry_jid {retry_jid}: {error_jids}")
+            else:
+                # Re-envia para todos os dispositivos (mesmo fluxo original)
+                await self._send_to_contact(message_node, proto_bytes, to_jid)
+        
+        except Exception as e:
+            logger.error(f"Erro ao re-enviar mensagem: {e}", exc_info=True)
+    
+    async def _process_pending_messages(
+        self,
+        from_jid: str,
+        participant_jid: Optional[str] = None
+    ) -> None:
+        """
+        Processa mensagens pendentes após obter sessão.
+        
+        Baseado em AxolotlReceiveLayer.processPendingIncomingMessages()
+        
+        Args:
+            from_jid: JID do remetente
+            participant_jid: JID do participante (para grupos, opcional)
+        """
+        conversation_id = (from_jid, participant_jid)
+        
+        if conversation_id not in self._encryption_receiver._pending_messages:
+            logger.debug(f"Nenhuma mensagem pendente para {conversation_id}")
+            return
+        
+        pending = self._encryption_receiver._pending_messages[conversation_id]
+        logger.info(f"Processando {len(pending)} mensagens pendentes para {conversation_id}")
+        
+        # Processa cada mensagem pendente
+        for message_node in pending:
+            try:
+                # Tenta descriptografar novamente
+                decrypted_bytes = await self._encryption_receiver.decrypt_message(message_node)
+                if decrypted_bytes:
+                    # Processa mensagem descriptografada
+                    await self._process_protocol_node(message_node, decrypted_bytes)
+            except Exception as e:
+                logger.error(f"Erro ao processar mensagem pendente: {e}", exc_info=True)
+        
+        # Remove mensagens processadas
+        del self._encryption_receiver._pending_messages[conversation_id]
+        logger.info(f"Mensagens pendentes processadas e removidas para {conversation_id}")
+    
+    async def _send_pkmsg_for_invalid_message(
+        self,
+        from_jid: str,
+        message_id: str,
+        participant: Optional[str] = None
+    ) -> None:
+        """
+        Envia PKMSG para sincronização quando InvalidMessage após múltiplas tentativas.
+        
+        Baseado em AxolotlReceiveLayer.send_pkmsg_for_invalid_message()
+        
+        Args:
+            from_jid: JID do remetente
+            message_id: ID da mensagem que falhou
+            participant: Participante (para grupos, opcional)
+        """
+        try:
+            sender_jid = participant if participant else from_jid
+            
+            logger.info(f"Enviando PKMSG para sincronização com {sender_jid}")
+            
+            # Obtém chaves do remetente
+            success_jids, error_jids = await self._get_keys_for_recipient(sender_jid.split('@')[0], reason="invalid_message")
+            
+            if not success_jids:
+                logger.error(f"Erro ao obter chaves para sincronização: {error_jids}")
+                return
+            
+            # Cria mensagem PKMSG vazia para forçar re-sincronização
+            # Por enquanto, apenas loga - a implementação completa requer criar mensagem de sincronização
+            logger.info(f"PKMSG de sincronização seria enviado para {sender_jid} (implementação completa requer mensagem de sincronização)")
+        
+        except Exception as e:
+            logger.error(f"Erro ao enviar PKMSG para sincronização: {e}", exc_info=True)
+
+
 

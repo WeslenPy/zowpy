@@ -30,3 +30,4 @@ class ByteUtil:
             parts.append(input[first_len + second_len: first_len + second_len + third_len])
         return parts
 
+

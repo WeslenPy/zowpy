@@ -66,7 +66,10 @@ class AxolotlManager(object):
         assert self._registration_id is not None
         assert self._identity is not None
 
-        self._group_session_builder = GroupSessionBuilder(self._store)
+        # GroupSessionBuilder precisa de senderKeyStore síncrono
+        from ..db.store.sync_wrapper import SyncStoreWrapper
+        sync_store = SyncStoreWrapper(self._store)
+        self._group_session_builder = GroupSessionBuilder(sync_store)
         self._session_ciphers = {} # type: dict[str, SessionCipher]
         self._group_ciphers = {} # type: dict[str, GroupCipher]
         # logger.debug(f"Initialized AxolotlManager [username={self._username}, db={store}]")
@@ -109,10 +112,11 @@ class AxolotlManager(object):
 
     async def load_unsent_prekeys(self):
         logger.debug("load_unsent_prekeys")
-        unsent = await self._store.preKeyStore.loadUnsentPendingPreKeys()
-        if len(unsent) > 0:
+        # Usa o método do store que já gerencia a sessão de banco
+        unsent = await self._store.loadPreKeys()
+        if unsent and len(unsent) > 0:
             logger.info(f"Loaded {len(unsent)} unsent prekeys")
-        return unsent
+        return unsent if unsent else []
 
     async def set_prekeys_as_sent(self, prekeyIds):
         """
@@ -153,8 +157,11 @@ class AxolotlManager(object):
         key = "%s-%d" % (username,deviceid)        
         if key in self._session_ciphers:
             session_cipher = self._session_ciphers[key]
-        else:                        
-            session_cipher= SessionCipher(self._store, self._store, self._store, self._store, username, deviceid)
+        else:
+            # Cria wrapper síncrono do store para uso com SessionCipher
+            from ..db.store.sync_wrapper import SyncStoreWrapper
+            sync_store = SyncStoreWrapper(self._store)
+            session_cipher= SessionCipher(sync_store, sync_store, sync_store, sync_store, username, deviceid)
             self._session_ciphers[key] = session_cipher
         return session_cipher
 
@@ -164,7 +171,11 @@ class AxolotlManager(object):
         if senderkeyname in self._group_ciphers:
             group_cipher = self._group_ciphers[senderkeyname]
         else:
-            group_cipher = GroupCipher(self._store.senderKeyStore, senderkeyname)
+            # GroupCipher precisa de um senderKeyStore síncrono
+            # Cria wrapper síncrono que também funciona como SenderKeyStore
+            from ..db.store.sync_wrapper import SyncStoreWrapper
+            sync_store = SyncStoreWrapper(self._store)
+            group_cipher = GroupCipher(sync_store, senderkeyname)
             self._group_ciphers[senderkeyname] = group_cipher
         return group_cipher
 
@@ -304,7 +315,10 @@ class AxolotlManager(object):
 
         recipient,a,deviceid = WATools.jidDecode(username)
 
-        session_builder = SessionBuilder(self._store, self._store, self._store, self._store, recipient, deviceid)
+        # Usa wrapper síncrono para SessionBuilder
+        from ..db.store.sync_wrapper import SyncStoreWrapper
+        sync_store = SyncStoreWrapper(self._store)
+        session_builder = SessionBuilder(sync_store, sync_store, sync_store, sync_store, recipient, deviceid)
         try:
             await asyncio.to_thread(lambda: session_builder.processPreKeyBundle(prekeybundle))
         except UntrustedIdentityException as ex:

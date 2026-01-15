@@ -74,3 +74,4 @@ WhatsAppClient (Core)
 - **Memory**: 40-60% reduction
 
 
+

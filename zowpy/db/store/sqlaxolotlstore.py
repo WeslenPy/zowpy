@@ -24,7 +24,7 @@ from ...db.models import Account
 from ...db import models
 from ...db.pool import AsyncDatabasePool
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete, update, exists
 from ...utils.tools import WATools
 
 from zowpy.protocol.historysync.attributes import (
@@ -139,11 +139,11 @@ class SqlIdentityKeyStore:
             # Delete existing
             logger.debug(f"saveIdentity: deleting existing identity for recipientId={recipientId}, deviceId={deviceId}")
             await self.db.execute(
-                select(models.Identity).filter(
+                delete(models.Identity).filter(
                     models.Identity.account_id == self.account.id,
                     models.Identity.recipient_id == recipientId,
                     models.Identity.device_id == deviceId,
-                ).delete()
+                )
             )
             pub_key = identityKey.getPublicKey().serialize()
             logger.debug(f"saveIdentity: inserting new identity, public_key_len={len(pub_key)}")
@@ -226,15 +226,12 @@ class SqlPreKeyStore:
             return
         try:
             await self.db.execute(
-                select(models.PreKey)
+                update(models.PreKey)
                 .filter(
                     models.PreKey.account_id == self.account.id,
                     models.PreKey.prekey_id.in_(prekeyIds),
                 )
-                .update(
-                    {models.PreKey.sent_to_server: True},
-                    synchronize_session=False,
-                )
+                .values(sent_to_server=True)
             )
             await self.db.commit()
         except Exception as e:
@@ -273,24 +270,26 @@ class SqlPreKeyStore:
 
     async def containsPreKey(self, preKeyId: int) -> bool:
         result = await self.db.execute(
-            select(models.PreKey.id)
-            .filter(
-                models.PreKey.account_id == self.account.id,
-                models.PreKey.prekey_id == preKeyId,
+            select(
+                exists(
+                    select(models.PreKey.id)
+                    .filter(
+                        models.PreKey.account_id == self.account.id,
+                        models.PreKey.prekey_id == preKeyId,
+                    )
+                )
             )
-            .exists()
         )
-        return result.scalar()
+        return result.scalar() or False
 
     async def removePreKey(self, preKeyId: int) -> None:
         try:
             await self.db.execute(
-                select(models.PreKey)
+                delete(models.PreKey)
                 .filter(
                     models.PreKey.account_id == self.account.id,
                     models.PreKey.prekey_id == preKeyId,
                 )
-                .delete(synchronize_session=False)
             )
             await self.db.commit()
         except Exception as e:
@@ -308,9 +307,8 @@ class SqlPreKeyStore:
 
     async def clear(self) -> None:
         await self.db.execute(
-            select(models.PreKey)
+            delete(models.PreKey)
             .filter(models.PreKey.account_id == self.account.id)
-            .delete(synchronize_session=False)
         )
         await self.db.commit()
 
@@ -355,12 +353,11 @@ class SqlSignedPreKeyStore:
             # Delete existing
             logger.debug(f"storeSignedPreKey: deleting existing signed prekey for signedPreKeyId={signedPreKeyId}")
             await self.db.execute(
-                select(models.SignedPreKey)
+                delete(models.SignedPreKey)
                 .filter(
                     models.SignedPreKey.account_id == self.account.id,
                     models.SignedPreKey.prekey_id == signedPreKeyId,
                 )
-                .delete()
             )
             record_data = signedPreKeyRecord.serialize()
             timestamp = signedPreKeyRecord.getTimestamp()
@@ -381,24 +378,26 @@ class SqlSignedPreKeyStore:
 
     async def containsSignedPreKey(self, signedPreKeyId: int) -> bool:
         result = await self.db.execute(
-            select(models.SignedPreKey.id)
-            .filter(
-                models.SignedPreKey.account_id == self.account.id,
-                models.SignedPreKey.prekey_id == signedPreKeyId,
+            select(
+                exists(
+                    select(models.SignedPreKey.id)
+                    .filter(
+                        models.SignedPreKey.account_id == self.account.id,
+                        models.SignedPreKey.prekey_id == signedPreKeyId,
+                    )
+                )
             )
-            .exists()
         )
-        return result.scalar()
+        return result.scalar() or False
 
     async def removeSignedPreKey(self, signedPreKeyId: int) -> None:
         try:
             await self.db.execute(
-                select(models.SignedPreKey)
+                delete(models.SignedPreKey)
                 .filter(
                     models.SignedPreKey.account_id == self.account.id,
                     models.SignedPreKey.prekey_id == signedPreKeyId,
                 )
-                .delete()
             )
             await self.db.commit()
         except Exception as e:
@@ -450,13 +449,12 @@ class SqlSessionStore:
             # Delete existing first
             logger.debug(f"storeSession: deleting existing session for recipient={recipient}, deviceId={deviceId}")
             await self.db.execute(
-                select(models.Session)
+                delete(models.Session)
                 .filter(
                     models.Session.account_id == self.account.id,
                     models.Session.recipient_id == recipient,
                     models.Session.device_id == deviceId,
                 )
-                .delete()
             )
 
             record_data = sessionRecord.serialize()
@@ -481,38 +479,39 @@ class SqlSessionStore:
     async def containsSession(self, recipient: int, deviceId: int) -> bool:
         logger.debug(f"containsSession: checking session for recipient={recipient}, deviceId={deviceId}")
         result = await self.db.execute(
-            select(models.Session.id)
-            .filter(
-                models.Session.account_id == self.account.id,
-                models.Session.recipient_id == recipient,
-                models.Session.device_id == deviceId,
+            select(
+                exists(
+                    select(models.Session.id)
+                    .filter(
+                        models.Session.account_id == self.account.id,
+                        models.Session.recipient_id == recipient,
+                        models.Session.device_id == deviceId,
+                    )
+                )
             )
-            .exists()
         )
-        exists = result.scalar()
-        logger.debug(f"containsSession: session exists={exists}")
-        return exists
+        session_exists = result.scalar() or False
+        logger.debug(f"containsSession: session exists={session_exists}")
+        return session_exists
 
     async def deleteSession(self, recipient: int, deviceId: int) -> None:
         await self.db.execute(
-            select(models.Session)
+            delete(models.Session)
             .filter(
                 models.Session.account_id == self.account.id,
                 models.Session.recipient_id == recipient,
                 models.Session.device_id == deviceId,
             )
-            .delete(synchronize_session=False)
         )
         await self.db.commit()
 
     async def deleteAllSessions(self, recipient: int) -> None:
         await self.db.execute(
-            select(models.Session)
+            delete(models.Session)
             .filter(
                 models.Session.account_id == self.account.id,
                 models.Session.recipient_id == recipient,
             )
-            .delete(synchronize_session=False)
         )
         await self.db.commit()
 
@@ -782,12 +781,11 @@ class SqlTaskMsgStore:
         from datetime import datetime
         now = datetime.utcnow()
         result = await self.db.execute(
-            select(models.TaskMsg)
+            delete(models.TaskMsg)
             .filter(
                 models.TaskMsg.account_id == self.account.id,
                 models.TaskMsg.expires_at < now,
             )
-            .delete(synchronize_session=False)
         )
         await self.db.commit()
         return result.rowcount
@@ -859,12 +857,11 @@ class SqlAppStateStore:
 
     async def deleteAppStateKey(self, key_id: bytes) -> None:
         await self.db.execute(
-            select(models.AppStateKey)
+            delete(models.AppStateKey)
             .filter(
                 models.AppStateKey.account_id == self.account.id,
                 models.AppStateKey.key_id == key_id,
             )
-            .delete()
         )
         await self.db.commit()
 
@@ -917,12 +914,11 @@ class SqlContactStore:
 
     async def removeContact(self, jid: str) -> bool:
         await self.db.execute(
-            select(models.Contact)
+            delete(models.Contact)
             .filter(
                 models.Contact.account_id == self.account.id,
                 models.Contact.jid == jid,
             )
-            .delete()
         )
         await self.db.commit()
         return True
@@ -1029,12 +1025,11 @@ class SqlTrustedContactStore:
             return False
 
         await self.db.execute(
-            select(models.TrustedContact)
+            delete(models.TrustedContact)
             .filter(
                 models.TrustedContact.account_id == self.account.id,
                 models.TrustedContact.jid == jid,
             )
-            .delete()
         )
         row = models.TrustedContact(
             account_id=self.account.id,
@@ -1059,12 +1054,11 @@ class SqlTrustedContactStore:
 
     async def removeTrustedContact(self, jid: str) -> bool:
         await self.db.execute(
-            select(models.TrustedContact)
+            delete(models.TrustedContact)
             .filter(
                 models.TrustedContact.account_id == self.account.id,
                 models.TrustedContact.jid == jid,
             )
-            .delete()
         )
         await self.db.commit()
         return True
@@ -1501,7 +1495,7 @@ class SqlAxolotlStore(AxolotlStore):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            return self.signedPreKeyStore.loadSignedPreKeys()
+            return await self.signedPreKeyStore.loadSignedPreKeys()
 
     async def storeSignedPreKey(self, signedPreKeyId, signedPreKeyRecord):
         logger.debug(f"SqlAxolotlStore.storeSignedPreKey: signedPreKeyId={signedPreKeyId}")

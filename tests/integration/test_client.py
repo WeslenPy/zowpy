@@ -35,3 +35,4 @@ async def test_client_events():
     assert len(events_received) == 0
 
 
+

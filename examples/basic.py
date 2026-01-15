@@ -11,7 +11,7 @@ from zowpy.core.import_account import import_account_from_six_parts
 from loguru import logger
 
 # Configura logging
-logger.add("logs/basic.log", rotation="10 MB", retention="7 days", level="DEBUG")
+logger.add("logs/basic.log",  level="DEBUG")
 
 async def main():
     """
@@ -57,23 +57,25 @@ async def main():
         print("✅ Cliente conectado e autenticado!")
         
         # Envia mensagem
-        # to = "201288480973"  # Substitua pelo número de destino
-        # text = "Hello! Esta é uma mensagem de teste do ZowPy."
-        # print(f"📤 Enviando mensagem para {to}...")
-        # msg_id = await client.send_text(to, text)
-        # print(f"✅ Mensagem enviada! ID: {msg_id}")
+        to = "559885700260"  # Substitua pelo número de destino
+        await client.sync_devices(jids=[to])
+
+        text = "Hello! Esta é uma mensagem de teste do ZowPy."
+        print(f"📤 Enviando mensagem para {to}...")
+        msg_id = await client.send_text(to, text)
+        print(f"✅ Mensagem enviada! ID: {msg_id}")
         
         # # Aguarda resposta (timeout de 30s)
         # # Estilo whatsmeow: pode filtrar por remetente, tipo, etc.
         # print("⏳ Aguardando resposta...")
-        # try:
-        #     response = await client.wait_for_message(
-        #         timeout=30.0,
-        #         from_jid=f"{to}@s.whatsapp.net"  # Filtra por remetente
-        #     )
-        #     print(f"📨 Resposta recebida de {response.get('from')}: {response.get('text')}")
-        # except Exception as e:
-        #     print(f"⏱️  Nenhuma resposta recebida: {e}")
+        try:
+            response = await client.wait_for_message(
+                timeout=30.0,
+                from_jid=f"{to}@s.whatsapp.net"  # Filtra por remetente
+            )
+            print(f"📨 Resposta recebida de {response.get('from')}: {response.get('text')}")
+        except Exception as e:
+            print(f"⏱️  Nenhuma resposta recebida: {e}")
         
         # Aguarda um pouco antes de desconectar
         print("⏳ Aguardando 5 segundos antes de desconectar...")
@@ -91,5 +93,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 

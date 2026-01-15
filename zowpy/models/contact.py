@@ -16,3 +16,4 @@ class Contact:
     is_verified: bool = False
 
 
+

@@ -41,6 +41,7 @@ class AsyncEncoder:
         :return: Bytes codificados
         :rtype: bytes
         """
+        # logger.debug(f"Encoding node: {node}")
         if self._writer is None:
             # Fallback básico
             return b""
@@ -106,6 +107,7 @@ class AsyncCoder:
         :param node: Nó do protocolo
         :type node: ProtocolNode
         """
+        logger.debug(f"Encoding and sending node: {node}")
         encoded = await self.encoder.encode(node)
         await self.events.emit("coder:encoded", {"data": encoded})
 

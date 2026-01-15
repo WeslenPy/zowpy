@@ -3,23 +3,8 @@ import binascii
 import sys
 import zlib
 
-# Import ProtocolNode from protocol.structs
-try:
-    from ..protocol.structs import ProtocolNode
-except ImportError:
-    # Fallback: define minimal version
-    from dataclasses import dataclass, field
-    from typing import Optional, Dict, List
-    
-    @dataclass
-    class ProtocolNode:
-        tag: str
-        attributes: Dict[str, str] = field(default_factory=dict)
-        children: List = field(default_factory=list)
-        data: Optional[bytes] = None
-        
-        def has_children(self):
-            return len(self.children) > 0
+from ..protocol.structs import ProtocolNode
+
 
 class ReadDecoder:
     def __init__(self, tokenDictionary):
