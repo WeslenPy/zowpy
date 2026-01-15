@@ -8,7 +8,7 @@ import asyncio
 import base64
 import time
 import struct
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 from loguru import logger
 
 from zowpy.db.factory import AxolotlManagerFactory
@@ -111,6 +111,9 @@ class WhatsAppClient:
         self._keepalive_task: Optional[asyncio.Task] = None
         self._bridge_task: Optional[asyncio.Task] = None
         
+        # Prekeys não enviadas (para envio após autenticação)
+        self._unsent_prekeys: List = []
+        
         # Configuração
         self.client_config: Optional[ClientConfig] = None
 
@@ -137,7 +140,48 @@ class WhatsAppClient:
             # 1. Inicializa stores e handlers
             await self._initialize_components()
             
-            # 2. Conecta TCP socket
+            # 2. Gera prekeys ANTES da conexão para evitar timeout
+            if self.axolotl_manager:
+                try:
+                    logger.info("Gerando prekeys antes da conexão...")
+                    prekeys = await self.axolotl_manager.level_prekeys()
+                    if prekeys:
+                        logger.info(f"Geradas {len(prekeys)} prekeys com sucesso")
+                    else:
+                        logger.info("Prekeys já existem em quantidade suficiente (não foi necessário gerar)")
+                except Exception as e:
+                    logger.warning(f"Erro ao gerar prekeys (não crítico): {e}")
+            
+            # 2.5. Verifica prekeys não enviadas e define passive=True se necessário
+            # (Baseado em AxolotlControlLayer.on_connected() no zowsuplib)
+            if self.axolotl_manager:
+                try:
+                    unsent_prekeys = await self.axolotl_manager.load_unsent_prekeys()
+                    if unsent_prekeys is None:
+                        unsent_prekeys = []
+                    elif not isinstance(unsent_prekeys, list):
+                        unsent_prekeys = list(unsent_prekeys) if hasattr(unsent_prekeys, '__iter__') else []
+                    
+                    if len(unsent_prekeys) > 0:
+                        logger.info(f"Encontradas {len(unsent_prekeys)} prekeys não enviadas, definindo passive=True para handshake")
+                        # Atualiza client_config com passive=True (será usado no handshake)
+                        # CRÍTICO: O servidor precisa saber que este cliente precisa enviar prekeys
+                        self.client_config = ClientConfig(
+                            username=self.client_config.username,
+                            passive=True,  # CRÍTICO: Define passive=True para o servidor saber que precisa enviar prekeys
+                            pushname=self.client_config.pushname,
+                            short_connect=self.client_config.short_connect,
+                            useragent=self.client_config.useragent,
+                        )
+                        self._unsent_prekeys = unsent_prekeys[:]  # Armazena para envio após autenticação
+                    else:
+                        logger.debug("Nenhuma prekey não enviada encontrada, usando passive=False")
+                        self._unsent_prekeys = []
+                except Exception as e:
+                    logger.warning(f"Erro ao verificar prekeys não enviadas (não crítico): {e}")
+                    self._unsent_prekeys = []
+            
+            # 3. Conecta TCP socket
             self.connection = AsyncConnection(
                 self.endpoint,
                 proxy=self.proxy,
@@ -169,11 +213,11 @@ class WhatsAppClient:
             # 4. Pequeno delay para garantir que o bridge está processando
             await asyncio.sleep(0.05)
             
-            # 5. EVENT_STATE_CONNECTED: Gera prekeys e emite EVENT_AUTH
+            # 5. EVENT_STATE_CONNECTED: Emite EVENT_AUTH (prekeys já foram gerados antes da conexão)
             # Seguindo o fluxo do zowsuplib:
             # - YowNetworkLayer.onConnected() → emite EVENT_STATE_CONNECTED
             # - YowAuthenticationProtocolLayer.on_connected() → emite EVENT_AUTH
-            # - AxolotlControlLayer.on_connected() → chama level_prekeys()
+            # - AxolotlControlLayer.on_connected() → chama level_prekeys() (já feito antes da conexão)
             logger.debug("Calling _on_tcp_connected (bridge já está ativo)")
             await self._on_tcp_connected()
             
@@ -636,9 +680,16 @@ class WhatsAppClient:
                 # Recebe mensagem descriptografada do transport
                 decrypted = await self.noise_protocol.receive(timeout=1.0)
                 if decrypted:
+                    logger.debug(f"[IQ] Dados recebidos na fonte: {len(decrypted)} bytes")
                     # Decodifica protocol node
                     node = await self.coder.receive_and_decode(decrypted)
                     if node:
+                        # Log específico para IQ recebido na fonte
+                        if node.tag == "iq":
+                            iq_type = node.get_attribute("type")
+                            iq_id = node.get_attribute("id")
+                            iq_from = node.get_attribute("from")
+                            logger.info(f"[IQ] IQ recebido na fonte: type={iq_type}, id={iq_id}, from={iq_from}, tag={node.tag}")
                         # Processa node (inclui autenticação)
                         await self._process_protocol_node(node)
                 
@@ -683,6 +734,10 @@ class WhatsAppClient:
             elif tag == "message":
                 await self.message_handler.handle_message(node)
             elif tag == "iq":
+                iq_type = node.get_attribute("type")
+                iq_id = node.get_attribute("id")
+                iq_from = node.get_attribute("from")
+                logger.info(f"[IQ] IQ detectado no processamento: type={iq_type}, id={iq_id}, from={iq_from}")
                 await self._handle_iq(node)
             elif tag == "ack":
                 await self.acks_handler.handle_ack(node)
@@ -704,7 +759,10 @@ class WhatsAppClient:
         iq_type = node.get_attribute("type")
         iq_id = node.get_attribute("id")
         xmlns = node.get_attribute("xmlns")
+        iq_from = node.get_attribute("from")
+        iq_to = node.get_attribute("to")
         
+        logger.info(f"[IQ] Iniciando processamento de IQ: type={iq_type}, id={iq_id}, xmlns={xmlns}, from={iq_from}, to={iq_to}")
         logger.debug(f"Processando IQ: type={iq_type}, id={iq_id}, xmlns={xmlns}")
         
         # Processa diferentes tipos de IQ
@@ -921,23 +979,14 @@ class WhatsAppClient:
         Seguindo o fluxo do zowsuplib:
         - YowNetworkLayer.onConnected() → emite EVENT_STATE_CONNECTED
         - YowAuthenticationProtocolLayer.on_connected() → emite EVENT_AUTH
-        - AxolotlControlLayer.on_connected() → chama level_prekeys()
+        - AxolotlControlLayer.on_connected() → chama level_prekeys() (já feito antes da conexão)
         """
         logger.info("EVENT_STATE_CONNECTED: Conexão TCP estabelecida")
         
-        # 1. Gera prekeys (equivalente a AxolotlControlLayer.on_connected())
-        if self.axolotl_manager:
-            try:
-                logger.info("Gerando prekeys após conexão TCP estabelecida...")
-                prekeys = await self.axolotl_manager.level_prekeys()
-                if prekeys:
-                    logger.info(f"Geradas {len(prekeys)} prekeys com sucesso")
-                else:
-                    logger.info("Prekeys já existem em quantidade suficiente (não foi necessário gerar)")
-            except Exception as e:
-                logger.warning(f"Erro ao gerar prekeys (não crítico): {e}")
+        # Nota: Prekeys já foram gerados antes da conexão TCP para evitar timeout
+        # Não é necessário gerar novamente aqui
         
-        # 2. Emite EVENT_AUTH (equivalente a YowAuthenticationProtocolLayer.on_connected())
+        # Emite EVENT_AUTH (equivalente a YowAuthenticationProtocolLayer.on_connected())
         # Isso iniciará o handshake quando o handler _on_auth for chamado
         logger.info("Emitindo EVENT_AUTH para iniciar handshake")
         await self.events.emit(AsyncAuthHandler.EVENT_AUTH, {})

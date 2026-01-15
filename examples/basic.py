@@ -27,11 +27,11 @@ async def main():
     7. Cliente pronto!
     """
     # Importa conta (se necessário)
-    six_parts = "201288480973,AlRIiQrA/5lc+fKvMbL1oCsLU1NzuRXzZGQlnY6VvBo=,sDuD+i4yroP8UvXssgPKLea7B9GV3X9C9SZ4XkzGQUI=,WqvR/LO+GfvDtASa0XVuGlmRJlhwZ1SKbow3aMjmeAc=,2F/XuRqbi/vps/4XIP8Y1YLJlhCW7D9B5/Dew7KN23Y=,MjAxMjg4NDgwOTczI7fskl6SZSyH5qJtFVZkFKg2mU7d"
+    six_parts= "201289193569,nC5oANqadIvx/nVWQMP6s0qsjLIGn86xm7Zvdrjhlno=,gFIVdleRnjuvl6E8GBe4HvxLbx809f2YBOqsWXynVUQ=,uU4s9KuKHAwpt48eI4Z/T/UAVZCFXZ99nRUQQpXYzk8=,0O2YWyewGqlt1Gx2iPPt2VON3x6LCIFd30hvUoqi62Q=,MjAxMjg5MTkzNTY5I00HpRDnltgXGFLvaF/bS8+mLBEx"
     await import_account_from_six_parts(six_parts, env="smb_android")
     
     # Cria cliente (substitua pelo seu número)
-    account_id = "201288480973"  # Substitua pelo seu número
+    account_id = six_parts.split(",")[0]  # Substitua pelo seu número
     client = ZowPyClient(account_id)
     
     # Eventos

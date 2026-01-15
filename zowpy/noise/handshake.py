@@ -116,6 +116,8 @@ class AsyncWAHandshake:
             HandshakeFailedException: Se handshake falhar
         """
         logger.info("Iniciando handshake assíncrono")
+
+        logger.info(f"Client config: {client_config}")
         
         # Configura DH
         dh = X25519DH()

@@ -122,6 +122,8 @@ class AsyncCoder:
         """
         node = await self.decoder.decode(data)
         if node:
+            # Log específico para IQ decodificado
+            logger.debug(f"Node decodificado: {node}")
             await self.events.emit("coder:decoded", {"node": node})
         return node
 

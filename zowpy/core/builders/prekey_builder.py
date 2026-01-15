@@ -74,10 +74,10 @@ class PrekeyBuilder:
         Baseado em SetKeysIqProtocolEntity.toProtocolTreeNode()
         
         Args:
-            identity_key: Chave de identidade pública (sem primeiro byte)
-            signed_prekey: Tupla (id, public_key, signature)
-            prekeys: Dicionário de prekeys {id: public_key}
-            registration_id: ID de registro
+            identity_key: Chave de identidade pública ajustada (já processada por _adjust_array)
+            signed_prekey: Tupla (id: int, public_key: bytes ajustado, signature: bytes ajustado)
+            prekeys: Dicionário {id: int -> public_key: bytes ajustado}
+            registration_id: ID de registro (será ajustado internamente)
             djb_type: Tipo DJB (padrão 5)
             iq_id: ID do IQ (gerado se None)
         
@@ -95,12 +95,11 @@ class PrekeyBuilder:
             to=YowConstants.WHATSAPP_SERVER
         )
         
-        # Ajusta identity key
-        adjusted_identity = PrekeyBuilder._adjust_array(identity_key)
+        # Identity key já vem ajustado de _flush_prekeys()
         identity_node = ProtocolNode(
             tag="identity",
             attributes={},
-            data=adjusted_identity
+            data=identity_key  # Usa diretamente, sem ajuste
         )
         
         # Cria lista de prekeys
@@ -111,9 +110,8 @@ class PrekeyBuilder:
         )
         
         for key_id, public_key in prekeys.items():
-            # Ajusta ID e public key
+            # Ajusta apenas o ID (public_key já vem ajustado de _flush_prekeys())
             adjusted_id = PrekeyBuilder._adjust_id(key_id)
-            adjusted_key = PrekeyBuilder._adjust_array(public_key)
             
             key_node = ProtocolNode(
                 tag="key",
@@ -127,17 +125,16 @@ class PrekeyBuilder:
                     ProtocolNode(
                         tag="value",
                         attributes={},
-                        data=adjusted_key
+                        data=public_key  # Usa diretamente, sem ajuste
                     )
                 ]
             )
             list_node.children.append(key_node)
         
         # Cria signed prekey node
+        # signed_value e signed_signature já vêm ajustados de _flush_prekeys()
         signed_id, signed_value, signed_signature = signed_prekey
         adjusted_signed_id = PrekeyBuilder._adjust_id(signed_id)
-        adjusted_signed_value = PrekeyBuilder._adjust_array(signed_value)
-        adjusted_signed_signature = PrekeyBuilder._adjust_array(signed_signature)
         
         skey_node = ProtocolNode(
             tag="skey",
@@ -151,12 +148,12 @@ class PrekeyBuilder:
                 ProtocolNode(
                     tag="value",
                     attributes={},
-                    data=adjusted_signed_value
+                    data=signed_value  # Usa diretamente, sem ajuste
                 ),
                 ProtocolNode(
                     tag="signature",
                     attributes={},
-                    data=adjusted_signed_signature
+                    data=signed_signature  # Usa diretamente, sem ajuste
                 )
             ]
         )
@@ -186,6 +183,8 @@ class PrekeyBuilder:
         ]
         
         logger.debug(f"Set keys IQ construído: prekeys={len(prekeys)}, registration_id={registration_id}")
+
+        logger.debug(f"Set keys IQ construído: {node}")
         return node
     
     @staticmethod

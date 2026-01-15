@@ -51,6 +51,8 @@ from .processors.iq_response import IQResponseProcessor
 from .encryption.receiver import EncryptionReceiver
 from .encryption.sender import EncryptionSender
 from .builders.message_builder import MessageBuilder
+from .builders.enc_entity import EncEntity
+from .builders.encrypted_message_builder import EncryptedMessageBuilder
 from ..proto.messages import AsyncMessageParser
 
 # Handlers públicos
@@ -192,21 +194,50 @@ class WhatsAppClient:
             # 1. Inicializa componentes
             await self._initialize_components()
             
-            # 2. Conecta TCP socket
+            # 2. Gera prekeys ANTES da conexão para evitar timeout
+            logger.info("Gerando prekeys antes da conexão...")
+            await self._load_prekeys()
+            logger.info("✓ Prekeys gerados")
+            
+            # 2.5. Verifica prekeys não enviadas e define passive=True se necessário
+            # (Baseado em AxolotlControlLayer.on_connected() no zowsuplib)
+            if self.axolotl_manager:
+                try:
+                    unsent_prekeys = await self.axolotl_manager.load_unsent_prekeys()
+                    if unsent_prekeys is None:
+                        unsent_prekeys = []
+                    elif not isinstance(unsent_prekeys, list):
+                        unsent_prekeys = list(unsent_prekeys) if hasattr(unsent_prekeys, '__iter__') else []
+                    
+                    if len(unsent_prekeys) > 0:
+                        logger.info(f"Encontradas {len(unsent_prekeys)} prekeys não enviadas, definindo passive=True para handshake")
+                        # Atualiza client_config com passive=True (será usado no handshake)
+                        # CRÍTICO: O servidor precisa saber que este cliente precisa enviar prekeys
+                        self.client_config = ClientConfig(
+                            username=self.client_config.username,
+                            passive=True,  # CRÍTICO: Define passive=True para o servidor saber que precisa enviar prekeys
+                            pushname=self.client_config.pushname,
+                            short_connect=self.client_config.short_connect,
+                            useragent=self.client_config.useragent,
+                        )
+                        self._unsent_prekeys = unsent_prekeys[:]  # Armazena para envio após autenticação
+                    else:
+                        logger.debug("Nenhuma prekey não enviada encontrada, usando passive=False")
+                        self._unsent_prekeys = []
+                except Exception as e:
+                    logger.warning(f"Erro ao verificar prekeys não enviadas (não crítico): {e}")
+                    self._unsent_prekeys = []
+            
+            # 3. Conecta TCP socket
             logger.info("Conectando TCP socket...")
             self.connection = AsyncConnection(self.endpoint, proxy=self.proxy)
             await self.connection.connect()
             logger.info("✓ TCP socket conectado")
             
-            # 3. Envia header WA\x06\x03
+            # 4. Envia header WA\x06\x03
             logger.info("Enviando header WA\\x06\\x03...")
             await self.connection.send_header()
             logger.info("✓ Header enviado")
-            
-            # 4. Carrega/gera prekeys (equivalente a AxolotlControlLayer.on_connected())
-            logger.info("Carregando/gerando prekeys...")
-            await self._load_prekeys()
-            logger.info("✓ Prekeys carregados")
             
             # 5. Cria stream
             logger.info("Criando stream segmentado...")
@@ -579,7 +610,7 @@ class WhatsAppClient:
                 logger.info("✓ <success> recebido do servidor")
                 return  # Sucesso!
             elif node.tag == "failure":
-                error_code = node.get_attribute("code", "unknown")
+                error_code = node.get_attribute("code") or node.get_attribute("reason") or "unknown"
                 logger.error(f"<failure> recebido: code={error_code}")
                 raise AuthenticationError(f"Login falhou: code={error_code}")
             elif node.tag == "stream:features":
@@ -677,6 +708,10 @@ class WhatsAppClient:
     
     async def _handle_iq(self, node: ProtocolNode) -> None:
         """Processa IQ recebido."""
+        iq_type = node.get_attribute("type")
+        iq_id = node.get_attribute("id")
+        iq_from = node.get_attribute("from")
+        logger.info(f"[IQ] IQ recebido no client._handle_iq: type={iq_type}, id={iq_id}, from={iq_from}")
         logger.debug(f"Processando IQ: {node.get_attribute('type')}")
         # Processa resposta de IQ através do IQResponseProcessor
         if self._iq_response_processor:
@@ -742,9 +777,17 @@ class WhatsAppClient:
         logger.debug(f"ACK enviado: id={message_id}, type={notification_type}, to={from_jid}")
     
     async def _send_protocol_node(self, node: ProtocolNode) -> None:
-        """Envia protocol node."""
+        """
+        Envia protocol node.
+        
+        Valida estrutura antes de enviar e loga detalhes.
+        """
         if not self.transport:
             raise RuntimeError("Transport não disponível")
+        
+        # Validação da estrutura (para debug)
+        if logger._core.min_level <= 10:  # DEBUG
+            self._validate_node_structure(node)
         
         # Codifica node
         encoded_bytes = await self.coder.encoder.encode(node)
@@ -753,8 +796,46 @@ class WhatsAppClient:
         if isinstance(encoded_bytes, list):
             encoded_bytes = bytes(encoded_bytes)
         
+        logger.debug(f"Enviando node {node.tag}: {len(encoded_bytes)} bytes")
+        
         # Envia via transport (criptografa e envia)
         await self.transport.send(encoded_bytes)
+    
+    def _validate_node_structure(self, node: ProtocolNode) -> None:
+        """
+        Valida estrutura do node antes de enviar (apenas para debug).
+        
+        Verifica:
+        - Se enc entities estão corretas
+        - Se participants node está correto (se grupo)
+        - Se elementos extras estão presentes
+        """
+        if node.tag != "message":
+            return
+        
+        # Verifica enc entities
+        enc_nodes = [c for c in node.children if c.tag == "enc"]
+        participants_node = node.get_child("participants")
+        
+        logger.debug(f"Node structure validation:")
+        logger.debug(f"  - Tag: {node.tag}")
+        logger.debug(f"  - Enc nodes: {len(enc_nodes)}")
+        logger.debug(f"  - Participants node: {participants_node is not None}")
+        
+        if participants_node:
+            to_nodes = [c for c in participants_node.children if c.tag == "to"]
+            logger.debug(f"  - To nodes in participants: {len(to_nodes)}")
+        
+        # Verifica elementos extras
+        reporting = node.get_child("reporting")
+        device_identity = node.get_child("device-identity")
+        tctoken = node.get_child("tctoken")
+        biz = node.get_child("biz")
+        
+        logger.debug(f"  - Reporting: {reporting is not None}")
+        logger.debug(f"  - Device-identity: {device_identity is not None}")
+        logger.debug(f"  - Tctoken: {tctoken is not None}")
+        logger.debug(f"  - Biz: {biz is not None}")
     
     async def send_text(
         self,
@@ -797,9 +878,10 @@ class WhatsAppClient:
         proto_bytes = message.SerializeToString()
         
         # 3. Cria node base com <proto> (ainda não criptografado)
+        # Adiciona mediatype ao proto node
         proto_node = ProtocolNode(
             tag="proto",
-            attributes={},
+            attributes={"mediatype": "text"},
             data=proto_bytes
         )
         
@@ -871,7 +953,8 @@ class WhatsAppClient:
         self, 
         message_node: ProtocolNode, 
         proto_bytes: bytes, 
-        jids: list[str]
+        jids: list[str],
+        retry_count: int = 0
     ) -> None:
         """
         Envia mensagem para múltiplos contatos/dispositivos que têm sessão.
@@ -879,7 +962,18 @@ class WhatsAppClient:
         Baseado em AxolotlSendLayer.sendToContactsWithSessions()
         """
         
+        # Obtém mediatype do proto node
+        proto_node = message_node.get_child("proto")
+        mediatype = proto_node.get_attribute("mediatype") if proto_node else "text"
+        
+        # Obtém tctoken se necessário
+        target_jid = message_node.get_attribute("to")
+        tctoken = None
+        if hasattr(self, 'axolotl_manager') and hasattr(self.axolotl_manager, '_store'):
+            tctoken = await self.axolotl_manager._store.getTcToken(target_jid)
+        
         enc_entities = []
+        participant = jids[0] if len(jids) == 1 and retry_count > 0 else None
         
         for jid in jids:
             recipient_id = jid.split('@')[0]
@@ -889,29 +983,34 @@ class WhatsAppClient:
             
             # Identifica tipo
             if isinstance(ciphertext, PreKeyWhisperMessage):
-                enc_type = "pkmsg"
+                enc_type = EncEntity.TYPE_PKMSG
             elif isinstance(ciphertext, WhisperMessage):
-                enc_type = "msg"
+                enc_type = EncEntity.TYPE_MSG
             else:
-                enc_type = "msg"
+                enc_type = EncEntity.TYPE_MSG
             
-            # Cria node <enc>
-            enc_node = ProtocolNode(
-                tag="enc",
-                attributes={
-                    "type": enc_type,
-                    "v": "2"
-                },
-                data=ciphertext.serialize()
+            # Cria node <enc> usando EncEntity helper
+            # Para contatos individuais, não usa <to> wrapper
+            # Adiciona count se retry_count > 0
+            enc_node = EncEntity.create_enc_node(
+                enc_type=enc_type,
+                ciphertext=ciphertext.serialize(),
+                mediatype=mediatype,
+                jid=None,  # Para contatos, não usa <to> wrapper
+                count=str(retry_count) if retry_count > 0 else None
             )
             
             enc_entities.append(enc_node)
         
-        # Adiciona enc entities ao message node
-        message_node.children.extend(enc_entities)
+        # Constrói node final usando EncryptedMessageBuilder
+        message_node = EncryptedMessageBuilder.build_encrypted_message(
+            message_node=message_node,
+            enc_entities=enc_entities,
+            participant=participant
+        )
         
-        # Adiciona elementos extras (reporting, device-identity, etc.)
-        await self._add_message_extras(message_node)
+        # Adiciona elementos extras (reporting, device-identity, tctoken, etc.)
+        await self._add_message_extras(message_node, tctoken=tctoken)
         
         # Enfileira mensagem antes de enviar (para retry)
         self._enqueue_sent_message(message_node)
@@ -961,20 +1060,33 @@ class WhatsAppClient:
         await self._get_keys_for_recipient(recipient_id)
         
         try:
+            # Obtém mediatype do proto node
+            proto_node = message_node.get_child("proto")
+            mediatype = proto_node.get_attribute("mediatype") if proto_node else "text"
+            
             # Tenta criptografar (vai criar sessão se necessário)
             ciphertext = await self.axolotl_manager.encrypt(recipient_id, proto_bytes)
             
-            # Cria node <enc> como PKMSG
-            enc_node = ProtocolNode(
-                tag="enc",
-                attributes={
-                    "type": "pkmsg" if isinstance(ciphertext, PreKeyWhisperMessage) else "msg",
-                    "v": "2"
-                },
-                data=ciphertext.serialize()
+            # Identifica tipo
+            if isinstance(ciphertext, PreKeyWhisperMessage):
+                enc_type = EncEntity.TYPE_PKMSG
+            else:
+                enc_type = EncEntity.TYPE_MSG
+            
+            # Cria node <enc> usando EncEntity helper
+            enc_node = EncEntity.create_enc_node(
+                enc_type=enc_type,
+                ciphertext=ciphertext.serialize(),
+                mediatype=mediatype,
+                jid=None
             )
             
-            message_node.children.append(enc_node)
+            # Constrói node final usando EncryptedMessageBuilder
+            message_node = EncryptedMessageBuilder.build_encrypted_message(
+                message_node=message_node,
+                enc_entities=[enc_node],
+                participant=None
+            )
             
             # Adiciona elementos extras
             await self._add_message_extras(message_node)
@@ -1161,25 +1273,30 @@ class WhatsAppClient:
         Envia mensagem para grupo.
         
         Baseado em AxolotlSendLayer.sendToGroupWithSessions()
+        Por enquanto, implementa versão simplificada sem sender key distribution.
         """
         
         group_jid = message_node.get_attribute("to")
+        
+        # Obtém mediatype do proto node
+        proto_node = message_node.get_child("proto")
+        mediatype = proto_node.get_attribute("mediatype") if proto_node else "text"
+        
+        enc_entities = []
         
         try:
             # Criptografa com sender key do grupo
             ciphertext = await self.axolotl_manager.group_encrypt(group_jid, proto_bytes)
             
-            # Cria node <enc> como SKMSG
-            enc_node = ProtocolNode(
-                tag="enc",
-                attributes={
-                    "type": "skmsg",
-                    "v": "2"
-                },
-                data=ciphertext
+            # Cria node <enc> como SKMSG usando EncEntity helper
+            skmsg_node = EncEntity.create_enc_node(
+                enc_type=EncEntity.TYPE_SKMSG,
+                ciphertext=ciphertext,
+                mediatype=mediatype,
+                jid=None
             )
             
-            message_node.children.append(enc_node)
+            enc_entities.append(skmsg_node)
             
         except Exception as e:
             # Verifica se é NoSessionException
@@ -1190,18 +1307,23 @@ class WhatsAppClient:
                 # Tentar criptografar novamente
                 ciphertext = await self.axolotl_manager.group_encrypt(group_jid, proto_bytes)
                 
-                enc_node = ProtocolNode(
-                    tag="enc",
-                    attributes={
-                        "type": "skmsg",
-                        "v": "2"
-                    },
-                    data=ciphertext
+                skmsg_node = EncEntity.create_enc_node(
+                    enc_type=EncEntity.TYPE_SKMSG,
+                    ciphertext=ciphertext,
+                    mediatype=mediatype,
+                    jid=None
                 )
                 
-                message_node.children.append(enc_node)
+                enc_entities.append(skmsg_node)
             else:
                 raise
+        
+        # Constrói node final usando EncryptedMessageBuilder
+        message_node = EncryptedMessageBuilder.build_encrypted_message(
+            message_node=message_node,
+            enc_entities=enc_entities,
+            participant=None
+        )
         
         # Adiciona elementos extras
         await self._add_message_extras(message_node)
@@ -1212,16 +1334,22 @@ class WhatsAppClient:
         # Envia
         await self._send_protocol_node(message_node)
     
-    async def _add_message_extras(self, message_node: ProtocolNode) -> None:
+    async def _add_message_extras(
+        self, 
+        message_node: ProtocolNode, 
+        tctoken: Optional[bytes] = None
+    ) -> None:
         """
-        Adiciona elementos extras à mensagem (reporting, device-identity, etc.).
+        Adiciona elementos extras à mensagem (reporting, device-identity, tctoken, biz, etc.).
         
         Baseado em AxolotlSendLayer.sendEncEntities()
+        Ordem: reporting → tctoken → biz → device-identity
         """
         import os
         import base64
         
         # Adiciona reporting token (se não for peer message)
+        # Baseado em AxolotlSendLayer.sendEncEntities() linha 184-191
         category = message_node.get_attribute("category")
         if category != "peer":
             reporting = ProtocolNode(
@@ -1237,7 +1365,22 @@ class WhatsAppClient:
             reporting.children.append(reporting_token)
             message_node.children.append(reporting)
         
+        # Adiciona tctoken se fornecido (para trusted contacts)
+        # Baseado em AxolotlSendLayer.sendEncEntities() linha 193-195
+        if tctoken:
+            tctoken_node = ProtocolNode(
+                tag="tctoken",
+                attributes={},
+                data=tctoken
+            )
+            message_node.children.append(tctoken_node)
+        
+        # Adiciona biz node se presente (já foi copiado pelo EncryptedMessageBuilder)
+        # Baseado em AxolotlSendLayer.sendEncEntities() linha 197-199
+        # O biz node já está no message_node.children se existir
+        
         # Adiciona device-identity se houver
+        # Baseado em AxolotlSendLayer.sendEncEntities() linha 201-205
         if self.profile and self.config:
             if hasattr(self.config, 'device_identity') and self.config.device_identity:
                 try:
@@ -1250,10 +1393,6 @@ class WhatsAppClient:
                     message_node.children.append(device_identity)
                 except Exception as e:
                     logger.warning(f"Erro ao adicionar device-identity: {e}")
-        
-        # Adiciona tctoken se necessário (para mensagens de negócios)
-        # tctoken é usado para mensagens de negócios verificadas
-        # Por enquanto, não implementado - pode ser adicionado quando necessário
     
     def is_connected(self) -> bool:
         """Verifica se está conectado e autenticado"""
@@ -1577,7 +1716,7 @@ class WhatsAppClient:
                 # Obtém chaves para o JID específico
                 success_jids, error_jids = await self._get_keys_for_recipient(retry_jid.split('@')[0], reason="retry")
                 if success_jids:
-                    await self._send_to_contacts_with_sessions(message_node, proto_bytes, [retry_jid])
+                    await self._send_to_contacts_with_sessions(message_node, proto_bytes, [retry_jid], retry_count=retry_count)
                 else:
                     logger.error(f"Erro ao obter chaves para retry_jid {retry_jid}: {error_jids}")
             else:
