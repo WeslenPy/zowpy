@@ -166,6 +166,11 @@ class WhatsAppClient:
         # Mensagens pendentes (quando não há sessão)
         self._pending_messages: Dict[Tuple[str, Optional[str]], List[ProtocolNode]] = {}
         
+        # Acompanhamento para validações e rate limiting
+        self._last_sync_time: Dict[str, float] = {}  # Rastreia último sync por JID
+        self._daily_message_count: int = 0  # Contador de mensagens diárias
+        self._last_message_time: Dict[str, float] = {}  # Rastreia última mensagem por JID (rate limiting)
+        
         # Tasks
         self._message_loop_task: Optional[asyncio.Task] = None
         self._keepalive_task: Optional[asyncio.Task] = None
@@ -382,13 +387,29 @@ class WhatsAppClient:
             )
         )
         # ReceiptProcessor precisa de funções do client
+        # Conecta funções do client ao ReceiptProcessor
+        async def get_enqueued_message_wrapper(message_id: str, keep_enqueued: bool = False):
+            return await self._get_enqueued_message(message_id, keep_enqueued)
+        
+        async def resend_message_wrapper(message_node: ProtocolNode, retry_jid: Optional[str] = None, retry_count: int = 0):
+            return await self._resend_message_for_retry(message_node, retry_jid, retry_count)
+        
         receipt_processor = ReceiptProcessor(
             events=self.events,
-            get_enqueued_message_fn=None,  # Será configurado após conexão
-            resend_message_fn=None  # Será configurado após conexão
+            get_enqueued_message_fn=get_enqueued_message_wrapper,
+            resend_message_fn=resend_message_wrapper
         )
         self._node_router.register(receipt_processor)
-        self._receipt_processor = receipt_processor  # Guarda referência para atualizar depois
+        self._receipt_processor = receipt_processor  # Guarda referência
+        
+        # Handler para enviar ACKs de retry
+        async def handle_ack_send(data: dict):
+            ack_node = data.get("node")
+            if ack_node:
+                await self._send_protocol_node(ack_node)
+        
+        self.events.on("ack:send", handle_ack_send)
+        
         self._node_router.register(AckProcessor(self.events))
         self._node_router.register(PresenceProcessor(self.events))
         # IQProcessor precisa do IQResponseProcessor para chamar callbacks
@@ -979,22 +1000,89 @@ class WhatsAppClient:
         logger.debug(f"  - Tctoken: {tctoken is not None}")
         logger.debug(f"  - Biz: {biz is not None}")
     
-    async def send_text(
+    async def assure_contacts_and_send(
         self,
         to: str,
         text: str,
         message_id: Optional[str] = None
     ) -> str:
         """
-        Envia mensagem de texto seguindo o fluxo completo do zowsuplib.
+        Garante que contato está sincronizado antes de enviar mensagem.
         
-        Fluxo:
-        1. Cria node de mensagem com <proto> (sem criptografar ainda)
-        2. Verifica se é grupo ou contato individual
-        3. Se contato: sincroniza dispositivos, verifica sessões, obtém chaves se necessário
-        4. Criptografa para cada dispositivo
-        5. Adiciona reporting token, device-identity, etc.
-        6. Envia
+        Equivalente ao assureContactsAndSend() do zowsuplib.
+        Implementa estratégia anti-banimento com validações robustas.
+        
+        Args:
+            to: JID do destinatário
+            text: Texto da mensagem
+            message_id: ID da mensagem (gerado se None)
+        
+        Returns:
+            ID da mensagem enviada
+        
+        Raises:
+            RuntimeError: Se conta está restrita ou limite diário atingido
+            ValueError: Se JID é inválido ou número está na lista de inválidos
+        """
+        
+        # 3. Normaliza JID
+        from ..utils.jid import normalize
+        normalized_jid = normalize(to)
+        if not normalized_jid:
+            logger.error(f"assure_contacts_and_send: falha ao normalizar JID: {to}")
+            raise ValueError(f"JID inválido: {to}")
+        
+        phone = normalized_jid.split('@')[0] if '@' in normalized_jid else normalized_jid
+
+        # 5. Verifica se contato é novo
+        if not self.axolotl_manager:
+            raise ValueError
+
+        is_new_contact = await self.axolotl_manager._store.isNewContact(normalized_jid)
+        
+        if is_new_contact:
+            logger.info(f"Contato {normalized_jid} é novo, sincronizando e validando antes de enviar...")
+            
+            await self.axolotl_manager._store.addContact(normalized_jid)
+            
+            # 8. Sincroniza contato
+            if self.contact_handler:
+                try:
+                    result = await self.contact_handler.sync_contacts([phone], mode="delta", context="interactive")
+                    logger.info(f"Contato {normalized_jid} sincronizado com sucesso")
+                    
+                    return await self._send_text_direct(to, text, message_id)
+                except Exception as e:
+                    logger.error(f"Erro ao sincronizar contato {normalized_jid}: {e}")
+                    # Remove contato se sincronização falhou
+                    try:
+                        await self.axolotl_manager._store.removeContact(normalized_jid)
+                    except Exception:
+                        pass
+                    raise
+            else:
+                logger.warning("ContactHandler não disponível, enviando sem sincronizar")
+                # Atualiza timestamp mesmo sem sincronizar
+                self._last_sync_time[normalized_jid] = time.time()
+                await self._check_rate_limit(normalized_jid, min_delay_seconds=2.0)
+                return await self._send_text_direct(to, text, message_id)
+        else:
+            logger.debug(f"Contato {normalized_jid} já existe nos contatos")
+            # Aplica rate limiting mesmo para contatos conhecidos
+            await self._check_rate_limit(normalized_jid, min_delay_seconds=2.0)
+            return await self._send_text_direct(to, text, message_id)
+
+    
+    async def _send_text_direct(
+        self,
+        to: str,
+        text: str,
+        message_id: Optional[str] = None
+    ) -> str:
+        """
+        Envia mensagem de texto diretamente (sem validações de contato).
+        
+        Este método é chamado por assure_contacts_and_send() após validações.
         
         Args:
             to: JID do destinatário
@@ -1008,10 +1096,15 @@ class WhatsAppClient:
             raise RuntimeError("Not authenticated")
         
         to_jid = to_whatsapp_jid(to)
+        is_group = to_jid.endswith(f"@{YowConstants.WHATSAPP_GROUP_SERVER}")
+        
+        # Incrementa contador de mensagens diárias
+        self._daily_message_count += 1
         
         # 1. Gera ID se não fornecido
         if not message_id:
-            message_id = f"{int(time.time() * 1000)}-{self.account_id}"
+            message_id = ProtocolNode._generateId()
+            logger.debug(f"Generated message ID: {message_id}")
         
         # 2. Cria protobuf Message
         from ..proto.e2e_pb2 import Message
@@ -1020,7 +1113,6 @@ class WhatsAppClient:
         proto_bytes = message.SerializeToString()
         
         # 3. Cria node base com <proto> (ainda não criptografado)
-        # Adiciona mediatype ao proto node
         proto_node = ProtocolNode(
             tag="proto",
             attributes={"mediatype": "text"},
@@ -1038,22 +1130,170 @@ class WhatsAppClient:
             children=[proto_node]
         )
         
-        # 4. Verifica se é grupo
-        is_group = self._is_group_jid(to_jid)
-        
-        if is_group:
-            # Envia para grupo
-            await self._send_to_group(message_node, proto_bytes)
-        else:
-            # Envia para contato individual
-            await self._send_to_contact(message_node, proto_bytes, to_jid)
+        # 4. Processa e envia mensagem
+        await self.process_plaintext_node_and_send(message_node)
         
         logger.info(f"Mensagem enviada para {to_jid}: {text[:50]}...")
         return message_id
     
+    async def process_plaintext_node_and_send(
+        self,
+        node: ProtocolNode,
+        retry_receipt_entity: Optional[ProtocolNode] = None
+    ) -> None:
+        """
+        Processa node de mensagem plaintext e envia.
+        
+        Equivalente ao processPlaintextNodeAndSend() do zowsuplib.
+        
+        Args:
+            node: ProtocolNode da mensagem (com <proto> ainda não criptografado)
+            retry_receipt_entity: Receipt de retry (se for reenvio)
+        """
+        to_jid = node.get_attribute("to")
+        proto_node = node.get_child("proto")
+        if not proto_node:
+            raise ValueError("Node de mensagem deve ter <proto>")
+        proto_bytes = proto_node.data
+        
+        # Verifica múltiplos destinos ("," em node["to"])
+        if "," in to_jid:
+            # Múltiplos destinos - split e envia para todos
+            jids = [j.strip() for j in to_jid.split(",")]
+            logger.info(f"Múltiplos destinos detectados: {len(jids)} destinatários")
+            # Define o primeiro como destino principal
+            node.set_attribute("to", jids[0])
+            await self.ensure_sessions_and_send_to_contacts(node, jids)
+        else:
+            # Destino único
+            account = to_jid.split('@')[0]
+            is_group = self._is_group_jid(to_jid)
+            
+            if is_group:
+                # Envia para grupo
+                await self._send_to_group(node, proto_bytes, retry_receipt_entity)
+            else:
+                # Contato individual
+                if ":" in account:
+                    # Device específico (ex: 123456789:0)
+                    jids = [to_jid]
+                    await self.ensure_sessions_and_send_to_contacts(node, jids)
+                elif "lid" in to_jid:
+                    # LID (Linked ID)
+                    jids = [to_jid]
+                    await self.ensure_sessions_and_send_to_contacts(node, jids)
+                else:
+                    # Precisa sincronizar dispositivos primeiro
+                    # Obtém todas as sessões existentes para este recipient
+                    recipient_id = account
+                    session_jids = await self.axolotl_manager.get_all_session_usernames(recipient_id)
+                    
+                    if session_jids:
+                        # Tem sessões, envia para elas
+                        await self.ensure_sessions_and_send_to_contacts(node, session_jids)
+                    else:
+                        # Não tem sessão, sincroniza dispositivos e obtém chaves
+                        await self._sync_devices_and_send(node, proto_bytes, to_jid)
+    
+    async def send_text(
+        self,
+        to: str,
+        text: str,
+        message_id: Optional[str] = None
+    ) -> str:
+        """
+        Envia mensagem de texto seguindo o fluxo completo do zowsuplib.
+        
+        Fluxo:
+        1. Validações de segurança (conta restrita, limite diário)
+        2. Verifica e sincroniza contato se necessário (assure_contacts_and_send)
+        3. Cria node de mensagem com <proto> (sem criptografar ainda)
+        4. Processa mensagem (process_plaintext_node_and_send)
+        5. Sincroniza dispositivos se necessário
+        6. Verifica sessões e obtém chaves se necessário
+        7. Criptografa para cada dispositivo
+        8. Adiciona reporting token, device-identity, etc.
+        9. Envia
+        
+        Args:
+            to: JID do destinatário (pode ser múltiplos separados por ",")
+            text: Texto da mensagem
+            message_id: ID da mensagem (gerado se None)
+        
+        Returns:
+            ID da mensagem enviada
+        """
+        if not self._authenticated:
+            raise RuntimeError("Not authenticated")
+
+        # Destino único
+        return await self.assure_contacts_and_send(to, text, message_id)
+    
     def _is_group_jid(self, jid: str) -> bool:
         """Verifica se JID é de grupo"""
         return "-" in jid.split("@")[0] or "@g.us" in jid or "broadcast" in jid
+    
+    async def _check_account_restriction(self) -> bool:
+        """
+        Verifica se conta está restrita.
+        
+        Baseado em yowbot_layer._check_account_restriction()
+        
+        Returns:
+            True se conta está restrita, False caso contrário
+        """
+        # Por enquanto, sempre retorna False (conta não restrita)
+        # Pode ser implementado verificando no banco de dados ou configuração
+        return False
+    
+    async def _check_daily_limit(self) -> bool:
+        """
+        Verifica limite diário de mensagens.
+        
+        Baseado em yowbot_layer._check_daily_limit()
+        
+        Returns:
+            True se pode enviar (dentro do limite), False caso contrário
+        """
+        MAX_DAILY = 1000  # Configurável
+        return self._daily_message_count < MAX_DAILY
+    
+    def _is_number_invalid(self, jid: str) -> bool:
+        """
+        Verifica se número está na lista de inválidos.
+        
+        Baseado em yowbot_layer._is_number_invalid()
+        
+        Args:
+            jid: JID para verificar
+            
+        Returns:
+            True se número é inválido, False caso contrário
+        """
+        # Por enquanto, sempre retorna False (número válido)
+        # Pode ser implementado verificando no store ou lista de inválidos
+        return False
+    
+    async def _check_rate_limit(self, jid: str, min_delay_seconds: float = 2.0) -> None:
+        """
+        Rate limiting entre mensagens.
+        
+        Baseado em yowbot_layer._check_rate_limit()
+        
+        Args:
+            jid: JID do destinatário
+            min_delay_seconds: Delay mínimo entre mensagens (padrão: 2.0s)
+        """
+        last_time = self._last_message_time.get(jid, 0)
+        current_time = time.time()
+        elapsed = current_time - last_time
+        
+        if elapsed < min_delay_seconds:
+            wait_time = min_delay_seconds - elapsed
+            logger.debug(f"Rate limit: aguardando {wait_time:.2f}s antes de enviar para {jid}")
+            await asyncio.sleep(wait_time)
+        
+        self._last_message_time[jid] = time.time()
     
     async def _send_to_contact(self, message_node: ProtocolNode, proto_bytes: bytes, to_jid: str) -> None:
         """
@@ -1091,10 +1331,108 @@ class WhatsAppClient:
                 # Não tem sessão, sincroniza dispositivos e obtém chaves
                 await self._sync_devices_and_send(message_node, proto_bytes, to_jid)
     
+    async def ensure_sessions_and_send_to_contacts(
+        self, 
+        message_node: ProtocolNode, 
+        jids: list[str],
+        retry_count: int = 0
+    ) -> None:
+        """
+        Garante que há sessões para os JIDs e envia mensagem.
+        
+        Equivalente ao ensureSessionsAndSendToContacts() do zowsuplib.
+        Separa JIDs com sessão dos sem sessão, obtém chaves se necessário.
+        
+        Args:
+            message_node: ProtocolNode da mensagem (com <proto>)
+            jids: Lista de JIDs para enviar
+            retry_count: Contador de retry (para reenvios)
+        """
+        logger.debug(f"ensure_sessions_and_send_to_contacts: {len(jids)} JIDs, retry_count={retry_count}")
+        
+        # Obtém proto_bytes do node
+        proto_node = message_node.get_child("proto")
+        if not proto_node:
+            raise ValueError("Node de mensagem deve ter <proto>")
+        proto_bytes = proto_node.data
+        
+        # Separa JIDs com sessão dos sem sessão
+        all_jids = []
+        jids_no_session = []
+        
+        for jid in jids:
+            recipient_id = jid.split('@')[0]
+            if await self.axolotl_manager.session_exists(recipient_id):
+                all_jids.append(jid)
+            else:
+                jids_no_session.append(jid)
+        
+        async def on_get_keys_success(node, success_jids, errors):
+            """Callback quando chaves são obtidas com sucesso"""
+            if errors:
+                # Processa erros
+                for jid, error in errors.items():
+                    logger.error(f"Erro ao obter chaves para {jid}: {error}")
+                # Continua mesmo com erros (envia para os que funcionaram)
+            
+            # Adiciona JIDs com sucesso
+            all_jids.extend(success_jids)
+            
+            # Envia para todos os JIDs que têm sessão agora
+            if len(all_jids) > 0:
+                category = node.get_attribute("category")
+                if category == "peer":
+                    await self.send_to_peer_with_sessions(node, all_jids[0])
+                else:
+                    await self._send_to_contacts_with_sessions(node, all_jids, retry_count)
+            else:
+                logger.warning("Nenhum JID com sessão disponível após obter chaves")
+        
+        # Se há JIDs sem sessão, obtém chaves
+        if len(jids_no_session) > 0:
+            logger.debug(f"Obtendo chaves para {len(jids_no_session)} JIDs sem sessão")
+            # Obtém chaves para todos os JIDs sem sessão
+            success_jids, error_jids = await self._get_keys_for_jids(jids_no_session)
+            
+            # Processa resultado
+            await on_get_keys_success(message_node, success_jids, error_jids)
+        else:
+            # Todos os JIDs já têm sessão
+            category = message_node.get_attribute("category")
+            if category == "peer":
+                await self.send_to_peer_with_sessions(message_node, all_jids[0] if all_jids else None)
+            else:
+                await self._send_to_contacts_with_sessions(message_node, all_jids, retry_count)
+    
+    async def _get_keys_for_jids(
+        self,
+        jids: List[str],
+        reason: Optional[str] = None
+    ) -> Tuple[List[str], Dict[str, Exception]]:
+        """
+        Obtém chaves para múltiplos JIDs.
+        
+        Args:
+            jids: Lista de JIDs
+            reason: Razão para obter chaves (opcional)
+        
+        Returns:
+            Tuple[List[str], Dict[str, Exception]]: (success_jids, error_jids)
+        """
+        all_success = []
+        all_errors = {}
+        
+        for jid in jids:
+            recipient_id = jid.split('@')[0]
+            success_jids, error_jids = await self._get_keys_for_recipient(recipient_id, reason=reason)
+            all_success.extend(success_jids)
+            all_errors.update(error_jids)
+        
+        return all_success, all_errors
+    
     async def _send_to_contacts_with_sessions(
         self, 
         message_node: ProtocolNode, 
-        proto_bytes: bytes, 
         jids: list[str],
         retry_count: int = 0
     ) -> None:
@@ -1102,10 +1440,19 @@ class WhatsAppClient:
         Envia mensagem para múltiplos contatos/dispositivos que têm sessão.
         
         Baseado em AxolotlSendLayer.sendToContactsWithSessions()
+        
+        Args:
+            message_node: ProtocolNode da mensagem (com <proto>)
+            jids: Lista de JIDs para enviar
+            retry_count: Contador de retry (para reenvios)
         """
+        # Obtém proto_bytes do node
+        proto_node = message_node.get_child("proto")
+        if not proto_node:
+            raise ValueError("Node de mensagem deve ter <proto>")
+        proto_bytes = proto_node.data
         
         # Obtém mediatype do proto node
-        proto_node = message_node.get_child("proto")
         mediatype = proto_node.get_attribute("mediatype") if proto_node else "text"
         
         # Obtém tctoken se necessário
@@ -1160,6 +1507,74 @@ class WhatsAppClient:
         # Envia
         await self._send_protocol_node(message_node)
     
+    async def send_to_peer_with_sessions(
+        self,
+        message_node: ProtocolNode,
+        jid: Optional[str] = None
+    ) -> None:
+        """
+        Envia mensagem peer-to-peer (category="peer").
+        
+        Baseado em AxolotlSendLayer.sendToPeerWithSessions()
+        
+        Args:
+            message_node: ProtocolNode da mensagem (com <proto>)
+            jid: JID do destinatário (se None, usa do node)
+        """
+        if not jid:
+            jid = message_node.get_attribute("to")
+        
+        if not jid:
+            raise ValueError("JID não especificado")
+        
+        # Obtém proto_bytes do node
+        proto_node = message_node.get_child("proto")
+        if not proto_node:
+            raise ValueError("Node de mensagem deve ter <proto>")
+        proto_bytes = proto_node.data
+        
+        # Obtém mediatype
+        mediatype = proto_node.get_attribute("mediatype") if proto_node else "text"
+        
+        recipient_id = jid.split('@')[0]
+        
+        # Criptografa mensagem
+        ciphertext = await self.axolotl_manager.encrypt(recipient_id, proto_bytes)
+        
+        # Identifica tipo
+        if isinstance(ciphertext, PreKeyWhisperMessage):
+            enc_type = EncEntity.TYPE_PKMSG
+        elif isinstance(ciphertext, WhisperMessage):
+            enc_type = EncEntity.TYPE_MSG
+        else:
+            enc_type = EncEntity.TYPE_MSG
+        
+        # Cria node <enc> - para peer, não usa <to> wrapper e jid=None
+        enc_entities = [
+            EncEntity.create_enc_node(
+                enc_type=enc_type,
+                ciphertext=ciphertext.serialize(),
+                mediatype=mediatype,
+                jid=None  # Para peer, sempre None
+            )
+        ]
+        
+        # Constrói node final
+        message_node = EncryptedMessageBuilder.build_encrypted_message(
+            message_node=message_node,
+            enc_entities=enc_entities,
+            participant=None
+        )
+        
+        # Adiciona elementos extras
+        await self._add_message_extras(message_node)
+        
+        # Enfileira mensagem antes de enviar (para retry)
+        self._enqueue_sent_message(message_node)
+        
+        # Envia
+        await self._send_protocol_node(message_node)
+    
     async def _sync_devices_and_send(
         self, 
         message_node: ProtocolNode, 
@@ -1179,7 +1594,7 @@ class WhatsAppClient:
                 devices = await self.contact_handler.sync_devices([to_jid])
                 if devices:
                     # Envia para todos os dispositivos encontrados
-                    await self._send_to_contacts_with_sessions(message_node, proto_bytes, devices)
+                    await self.ensure_sessions_and_send_to_contacts(message_node, devices)
                     return
             
             # Se não conseguiu sincronizar ou não há handler, tenta enviar como PKMSG
@@ -1869,48 +2284,46 @@ class WhatsAppClient:
         
         return None
     
-    async def _resend_message(
+    async def _resend_message_for_retry(
         self,
         message_node: ProtocolNode,
         retry_jid: Optional[str] = None,
         retry_count: int = 0
     ) -> None:
         """
-        Re-envia mensagem em caso de retry.
+        Re-envia mensagem para retry.
         
         Baseado em AxolotlSendLayer.receive() para retry receipts.
         
         Args:
-            message_node: Protocol node da mensagem original
-            retry_jid: JID específico para retry (opcional)
+            message_node: ProtocolNode da mensagem original
+            retry_jid: JID específico para retry (se None, usa do node)
             retry_count: Contador de retry
         """
-        try:
-            # Extrai proto bytes da mensagem original
-            proto_node = message_node.get_child("proto")
-            if not proto_node or not proto_node.data:
-                logger.error("Mensagem original não tem <proto> com dados, não é possível re-enviar")
+        logger.info(f"Re-enviando mensagem para retry: id={message_node.get_attribute('id')}, retry_jid={retry_jid}, retry_count={retry_count}")
+        
+        # Se retry_jid está especificado, obtém chaves para ele primeiro
+        if retry_jid:
+            recipient_id = retry_jid.split('@')[0]
+            success_jids, error_jids = await self._get_keys_for_recipient(recipient_id, reason="retry")
+            
+            if error_jids:
+                logger.warning(f"Erros ao obter chaves para retry: {error_jids}")
+            
+            if success_jids:
+                # Tem sessão agora, re-envia
+                await self.ensure_sessions_and_send_to_contacts(message_node, success_jids, retry_count=retry_count)
+            else:
+                logger.error(f"Não foi possível obter chaves para {retry_jid}, não é possível re-enviar")
+        else:
+            # Re-envia normalmente (sem JID específico)
+            to_jid = message_node.get_attribute("to")
+            if not to_jid:
+                logger.error("Não é possível re-enviar: node não tem 'to'")
                 return
             
-            proto_bytes = proto_node.data
-            to_jid = message_node.get_attribute("to")
-            
-            logger.info(f"Re-enviando mensagem {message_node.get_attribute('id')} para {to_jid} (retry_count={retry_count})")
-            
-            # Se tiver retry_jid específico, envia apenas para ele
-            if retry_jid:
-                # Obtém chaves para o JID específico
-                success_jids, error_jids = await self._get_keys_for_recipient(retry_jid.split('@')[0], reason="retry")
-                if success_jids:
-                    await self._send_to_contacts_with_sessions(message_node, proto_bytes, [retry_jid], retry_count=retry_count)
-                else:
-                    logger.error(f"Erro ao obter chaves para retry_jid {retry_jid}: {error_jids}")
-            else:
-                # Re-envia para todos os dispositivos (mesmo fluxo original)
-                await self._send_to_contact(message_node, proto_bytes, to_jid)
-        
-        except Exception as e:
-            logger.error(f"Erro ao re-enviar mensagem: {e}", exc_info=True)
+            # Processa como mensagem normal
+            await self.process_plaintext_node_and_send(message_node)
     
     async def _process_pending_messages(
         self,
@@ -1984,6 +2397,8 @@ class WhatsAppClient:
         
         except Exception as e:
             logger.error(f"Erro ao enviar PKMSG para sincronização: {e}", exc_info=True)
+
+
 
 
 

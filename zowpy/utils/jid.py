@@ -3,6 +3,7 @@ JID Utilities - Utilitários para JID.
 """
 
 from typing import Optional
+from .constants import YowConstants
 
 
 def normalize(jid: str) -> Optional[str]:
@@ -19,8 +20,8 @@ def normalize(jid: str) -> Optional[str]:
         return None
     
     # Remove @s.whatsapp.net se presente
-    jid = jid.replace("@s.whatsapp.net", "")
-    jid = jid.replace("@g.us", "")
+    jid = jid.replace(f"@{YowConstants.WHATSAPP_SERVER}", "")
+    jid = jid.replace(f"@{YowConstants.WHATSAPP_GROUP_SERVER}", "")
     
     # Remove caracteres não numéricos
     jid = ''.join(filter(str.isdigit, jid))
@@ -47,9 +48,11 @@ def to_whatsapp_jid(jid: str, is_group: bool = False) -> str:
         raise ValueError("Invalid JID")
     
     if is_group:
-        return f"{jid}@g.us"
+        return f"{jid}@{YowConstants.WHATSAPP_GROUP_SERVER}"
     else:
-        return f"{jid}@s.whatsapp.net"
+        return f"{jid}@{YowConstants.WHATSAPP_SERVER}"
+
+
 
 
 

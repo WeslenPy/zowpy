@@ -130,10 +130,10 @@ class ContactBuilder:
                 attributes={},
                 children=[contact_node]
             )
-            list_node.children.append(user_node)
+            list_node.add_child(user_node)
         
-        usync_node.children.append(list_node)
-        node.children.append(usync_node)
+        usync_node.add_child(list_node)
+        node.add_child(usync_node)
         
         logger.debug(f"Contact sync IQ construído: numbers={len(numbers)}, mode={mode}, context={context}")
 

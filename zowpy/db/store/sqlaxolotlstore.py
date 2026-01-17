@@ -1384,7 +1384,7 @@ class SqlAxolotlStore(AxolotlStore):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            return self.preKeyStore.loadPreKey(preKeyId)
+            return await self.preKeyStore.loadPreKey(preKeyId)
 
     async def loadPreKeys(self):
         logger.debug("SqlAxolotlStore.loadPreKeys: starting")
@@ -1407,19 +1407,19 @@ class SqlAxolotlStore(AxolotlStore):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            return self.preKeyStore.containsPreKey(preKeyId)
+            return await self.preKeyStore.containsPreKey(preKeyId)
 
     async def removePreKey(self, preKeyId):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            self.preKeyStore.removePreKey(preKeyId)
+            await self.preKeyStore.removePreKey(preKeyId)
 
     async def removeAllPreKeys(self):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            self.preKeyStore.clear()
+            await self.preKeyStore.clear()
 
     # Session store facade
     async def loadSession(self, account, deviceId):
@@ -1435,7 +1435,7 @@ class SqlAxolotlStore(AxolotlStore):
         async with self._get_session() as db:
             account_obj = await self._get_account(db)
             await self._ensure_sub_stores(db, account_obj)
-            return self.sessionStore.getSubDeviceSessions(account)
+            return await self.sessionStore.getSubDeviceSessions(account)
 
     async def storeSession(self, account, deviceId, sessionRecord):
         logger.debug(f"SqlAxolotlStore.storeSession: account={account}, deviceId={deviceId}")
@@ -1455,13 +1455,13 @@ class SqlAxolotlStore(AxolotlStore):
         async with self._get_session() as db:
             account_obj = await self._get_account(db)
             await self._ensure_sub_stores(db, account_obj)
-            self.sessionStore.deleteSession(account, deviceId)
+            await self.sessionStore.deleteSession(account, deviceId)
 
     async def deleteAllSessions(self, account):
         async with self._get_session() as db:
             account_obj = await self._get_account(db)
             await self._ensure_sub_stores(db, account_obj)
-            self.sessionStore.deleteAllSessions(account)
+            await self.sessionStore.deleteAllSessions(account)
 
     async def getAllAccounts(self, account):
         async with self._get_session() as db:
@@ -1509,13 +1509,13 @@ class SqlAxolotlStore(AxolotlStore):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            return self.signedPreKeyStore.containsSignedPreKey(signedPreKeyId)
+            return await self.signedPreKeyStore.containsSignedPreKey(signedPreKeyId)
 
     async def removeSignedPreKey(self, signedPreKeyId):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            self.signedPreKeyStore.removeSignedPreKey(signedPreKeyId)
+            await self.signedPreKeyStore.removeSignedPreKey(signedPreKeyId)
 
     # Sender key facade
     async def loadSenderKey(self, senderKeyName):
@@ -1544,132 +1544,132 @@ class SqlAxolotlStore(AxolotlStore):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            return self.appStateStore.addAppStateKeys(keys)
+            return await self.appStateStore.addAppStateKeys(keys)
 
     async def getOneAppStateKey(self):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            return self.appStateStore.getOneAppStateKey()
+            return await self.appStateStore.getOneAppStateKey()
 
     async def getAppStateKey(self, key_id):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            return self.appStateStore.getAppStateKey(key_id)
+            return await self.appStateStore.getAppStateKey(key_id)
 
     async def removeAppStateKey(self, key_id):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            return self.appStateStore.deleteAppStateKey(key_id)
+            return await self.appStateStore.deleteAppStateKey(key_id)
 
     # Contacts
     async def addContact(self, jid):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            return self.contactStore.addContact(jid, "")
+            return await self.contactStore.addContact(jid, "")
 
     async def removeContact(self, jid):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            return self.contactStore.removeContact(jid)
+            return await self.contactStore.removeContact(jid)
 
     async def getAllContact(self):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            return self.contactStore.getAllContact()
+            return await self.contactStore.getAllContact()
 
     async def findContact(self, jid):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            return self.contactStore.findContact(jid)
+            return await self.contactStore.findContact(jid)
 
     async def isNewContact(self, jid):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            return self.contactStore.isNewContact(jid)
+            return await self.contactStore.isNewContact(jid)
 
     # Broadcasts
     async def addBroadcast(self, jids, senderJid, name=None):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            return self.broadcastStore.addBroadcast(jids, senderJid, name)
+            return await self.broadcastStore.addBroadcast(jids, senderJid, name)
 
     async def findParticipantsByBcid(self, bcid):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            return self.broadcastStore.findParticipantsByBcid(bcid)
+            return await self.broadcastStore.findParticipantsByBcid(bcid)
 
     # Trusted contacts
     async def updateTrustedContact(self, jid, tctoken):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            return self.trustedContactStore.updateTrustedContact(jid, tctoken)
+            return await self.trustedContactStore.updateTrustedContact(jid, tctoken)
 
     async def getTcToken(self, jid):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            return self.trustedContactStore.getTcToken(jid)
+            return await self.trustedContactStore.getTcToken(jid)
 
     # Poll store facade
     async def deletePoll(self, poll_msg_id):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            return self.pollStore.deletePoll(poll_msg_id)
+            return await self.pollStore.deletePoll(poll_msg_id)
 
     async def storePoll(self, poll_msg_id, name, enc_key, options):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            return self.pollStore.storePoll(poll_msg_id, name, enc_key, options)
+            return await self.pollStore.storePoll(poll_msg_id, name, enc_key, options)
 
     async def decryptOptions(self, poll_msg_id, option_sha256_list):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            return self.pollStore.decryptOptions(poll_msg_id, option_sha256_list)
+            return await self.pollStore.decryptOptions(poll_msg_id, option_sha256_list)
 
     async def getPollEncKey(self, poll_msg_id):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            return self.pollStore.getPollEncKey(poll_msg_id)
+            return await self.pollStore.getPollEncKey(poll_msg_id)
 
     # TaskMsg store facade
     async def setTaskMsg(self, msg_id, task_id, src, dst):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            return self.taskMsgStore.setTaskMsg(msg_id, task_id, src, dst)
+            return await self.taskMsgStore.setTaskMsg(msg_id, task_id, src, dst)
 
     async def getTaskMsg(self, msg_id):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            return self.taskMsgStore.getTaskMsg(msg_id)
+            return await self.taskMsgStore.getTaskMsg(msg_id)
 
     async def getMsgTaskByResponseMsg(self, sender, receive):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            return self.taskMsgStore.getMsgTaskByResponseMsg(sender, receive)
+            return await self.taskMsgStore.getMsgTaskByResponseMsg(sender, receive)
 
     async def delExpiredTaskMsg(self):
         async with self._get_session() as db:
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
-            return self.taskMsgStore.delExpiredTaskMsg()
+            return await self.taskMsgStore.delExpiredTaskMsg()
 
 
 

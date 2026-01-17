@@ -226,8 +226,23 @@ class ZowPyClient:
         """Sincroniza contatos."""
         if not self._client or not self._client.contact_handler:
             raise ConnectionError("Cliente não conectado")
-        return await self._client.contact_handler.sync_contacts(numbers, mode, context)
-    
+
+        new_sync = []
+
+        for number in numbers:
+            is_new_contact =  await self._client.axolotl_manager._store.isNewContact(number)
+            if is_new_contact:
+                new_sync.append(number)
+
+        if len(new_sync) > 0:
+            result = await self._client.contact_handler.sync_contacts(new_sync, mode, context)
+            for valid_number in result["in_numbers"]:
+                await self._client.axolotl_manager._store.addContact(valid_number)
+            return result
+
+        return {}
+
+
     async def sync_devices(self, jids: list, mode: str = "full", context: str = "interactive") -> list:
         """Sincroniza dispositivos de contatos."""
         if not self._client or not self._client.contact_handler:
@@ -377,6 +392,8 @@ class ZowPyClient:
     def on_disconnected(self, handler: Callable) -> None:
         """Registra handler de desconexão"""
         self._events.on("disconnected", handler)
+
+
 
 
 

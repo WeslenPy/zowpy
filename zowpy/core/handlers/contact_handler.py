@@ -93,6 +93,8 @@ class ContactHandler:
         async def on_response(node: ProtocolNode):
             """Processa resposta de sync de contatos"""
             try:
+
+                logger.info(f"Resposta de sync de contatos: {node}")
                 if node.get_attribute("type") != "result":
                     future.set_exception(Exception(f"Erro ao sincronizar contatos: tipo={node.get_attribute('type')}"))
                     return
@@ -102,14 +104,75 @@ class ContactHandler:
                 if not usync_node:
                     future.set_exception(Exception("Resposta sem node <usync>"))
                     return
-                
+
+
+                """
+                <iq from="201208868278@s.whatsapp.net" type="result" id="FE04618F50CD591EA67273248ABBC9D3">
+                    <usync sid="134131020710000000" index="0" last="true" mode="delta" context="interactive">
+                        <result>
+                        <lid />
+                        <status />
+                        <contact integrity="pass" version="1768623975512747" />
+                        </result>
+                        <list>
+                        <user jid="559885700260@s.whatsapp.net">
+                            <lid val="5356260450362:0@lid" />
+                            <status t="1762827573">
+                            0x536f66747761726520446576656c6f706572
+                            </status>
+                            <contact type="in">
+                            0x2b353539383835373030323630
+                            </contact>
+                        </user>
+                        </list>
+                    </usync>
+                </iq>
+                """
+
+                # result_node = usync_node.get_child("result")
+                list_node =  usync_node.get_child("list")
+
+                in_users = {} #lista de usuarios validos
+                out_numbers = {} #lista de numeros invalidos
+                in_numbers = [] #lista de numeros validos
+
+                        
+                users = list_node.get_all_children() if list_node else []
+                for user in users:
+                    contact = user.get_child("contact")
+                    if contact is None:
+                        continue
+                    type_value = contact.get_attribute("type")
+
+                    # Decodifica os dados do contact (já vem como bytes)
+                    contact_data = ""
+                    if contact.data:
+                        try:
+                            contact_data = contact.data.decode('utf-8')
+                        except (UnicodeDecodeError, AttributeError):
+                            try:
+                                contact_data = contact.data.decode('latin-1')
+                            except:
+                                contact_data = str(contact.data)
+                    
+                    if type_value == "in":                                
+                        in_users[contact_data] = user.get_attribute("jid")     
+                        in_numbers.append(contact_data)
+                    elif type_value == "out":
+                        out_numbers[contact_data] = user.get_attribute("jid")
+                        # in_numbers.append(contact_data)
+                            
+
                 result = {
                     "version": usync_node.get_attribute("version") or "",
                     "mode": usync_node.get_attribute("mode") or mode,
-                    "in_numbers": [],
-                    "out_numbers": [],
+                    "numbers": in_users,
+                    "in_numbers": in_numbers,
+                    "out_numbers": out_numbers,
                     "wait": usync_node.get_attribute("wait") or None
                 }
+
+                logger.info(f"On Contact Handler: {result}")
                 
                 # Extrai números in e out
                 # A estrutura pode variar, mas geralmente está em nodes filhos

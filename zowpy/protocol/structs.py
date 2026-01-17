@@ -4,9 +4,12 @@ Protocol Structures - Estruturas simples para protocolo WhatsApp.
 Estrutura moderna e simples, sem dependências complexas.
 """
 
+import binascii
 from dataclasses import dataclass, field
 import random
 from typing import Optional, Dict, List, Any, Union
+
+from loguru import logger
 
 
 @dataclass
@@ -15,15 +18,52 @@ class ProtocolNode:
     Node de protocolo simples e moderno.
     Substitui ProtocolTreeNode com estrutura mais limpa.
     """
-
+    _STR_MAX_LEN_DATA = 500
+    _STR_INDENT = '  '
     __ID_GEN = 0
     ID_TYPE_ANDROID = 0
     ID_TYPE_IOS = 1
+    _truncate_str_data = True
 
     tag: str
     attributes: Dict[str, str] = field(default_factory=dict)
     children: List['ProtocolNode'] = field(default_factory=list)
     data: Optional[bytes] = None
+
+   
+    def __str__(self):
+        try:
+            out = "<%s" % self.tag
+            attrs = " ".join((map(lambda item: "%s=\"%s\"" % item, self.attributes.items())))
+            children = "\n".join(map(str, self.children))
+            data = self.data or b""
+            len_data = len(data)
+
+            if attrs:
+                out = "%s %s" % (out, attrs)
+
+            if children or data:
+                out = "%s>" % out
+                if children:
+                    out = "%s\n%s%s" % (out, self._STR_INDENT, children.replace('\n', '\n' + self._STR_INDENT))
+                if len_data:
+                    if self._truncate_str_data and len_data > self._STR_MAX_LEN_DATA:
+                        data = data[:self._STR_MAX_LEN_DATA]
+                        postfix = "...[truncated %s bytes]" % (len_data - self._STR_MAX_LEN_DATA)
+                    else:
+                        postfix = ""
+                    data = "0x%s" % binascii.hexlify(data).decode()
+                    out = "%s\n%s%s%s" % (out, self._STR_INDENT, data, postfix)
+
+                out = "%s\n</%s>" % (out, self.tag)
+            else:
+                out = "%s />" % out
+
+            return out
+
+        except Exception as e:
+            logger.error(f"Error in ProtocolNode.__str__: {e}")
+            return f"<{self.tag} />"
 
     @staticmethod
     def _generateId(short: bool = False, type: int = ID_TYPE_ANDROID) -> str:
@@ -56,6 +96,19 @@ class ProtocolNode:
     def get_attribute(self, key: str) -> Optional[str]:
         """Obtém atributo do node."""
         return self.attributes.get(key)
+
+
+    def get_all_children(self,tag = None):
+        ret = []
+        if tag is None:
+            return self.children
+
+        for c in self.children:
+            if tag == c.tag:
+                ret.append(c)
+
+        return ret
+
     
     def get_child(self, index_or_tag: Union[int, str]) -> Optional['ProtocolNode']:
         """Obtém filho do node por índice ou tag."""

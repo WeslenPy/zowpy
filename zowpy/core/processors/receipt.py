@@ -97,16 +97,50 @@ class ReceiptProcessor(BaseProcessor):
         logger.info(f"Recebido retry receipt: id={receipt_id}, from={from_jid}, participant={participant}")
         
         # Extrai informações de retry
-        retry_count_node = node.get_child("count")
-        retry_count = int(retry_count_node.data.decode()) if retry_count_node and retry_count_node.data else 0
+        # O formato do retry receipt é:
+        # <receipt type="retry" ...>
+        #   <retry count="1" t="..." id="..." v="1"/>
+        #   <jid>...</jid> (opcional)
+        # </receipt>
+        retry_node = node.get_child("retry")
+        retry_count = 0
+        retry_jid = None
         
-        retry_jid_node = node.get_child("jid")
-        retry_jid = retry_jid_node.data.decode() if retry_jid_node and retry_jid_node.data else None
+        if retry_node:
+            count_attr = retry_node.get_attribute("count")
+            if count_attr:
+                try:
+                    retry_count = int(count_attr)
+                except (ValueError, TypeError):
+                    retry_count = 0
+        
+        # Extrai JID do retry (pode estar em <jid> child ou usar participant/from)
+        jid_node = node.get_child("jid")
+        if jid_node and jid_node.data:
+            retry_jid = jid_node.data.decode() if isinstance(jid_node.data, bytes) else str(jid_node.data)
+        else:
+            # Usa participant se disponível, senão usa from
+            retry_jid = participant or from_jid
         
         logger.debug(f"Retry info: count={retry_count}, jid={retry_jid}")
         
-        # Envia ACK do retry (se tiver função)
-        # Por enquanto, apenas loga
+        # Envia ACK do retry
+        # Baseado em RetryIncomingReceiptProtocolEntity.ack()
+        # O ACK é um receipt normal com type="ack"
+        try:
+            from ...core.builders.receipt_builder import ReceiptBuilder
+            ack_node = ReceiptBuilder.build_ack(
+                message_id=receipt_id,
+                to=from_jid,
+                receipt_type="ack",
+                participant=participant
+            )
+            
+            # Emite evento para que o client envie o ACK
+            await self._events.emit("ack:send", {"node": ack_node})
+            logger.debug(f"ACK do retry emitido para {receipt_id}")
+        except Exception as e:
+            logger.warning(f"Erro ao criar ACK do retry: {e}")
         
         # Busca mensagem original na fila
         if self._get_enqueued_message:

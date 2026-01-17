@@ -3,6 +3,8 @@ import binascii
 import sys
 import zlib
 
+from loguru import logger
+
 from zowpy.protocol.nodes import ProtocolTreeNode
 
 from ..protocol.structs import ProtocolNode
@@ -130,8 +132,6 @@ class ReadDecoder:
         return ret
 
     def readInt8(self, data):
-        if len(data) == 0:
-            raise IndexError("Cannot read from empty bytearray")
         return data.pop(0)
 
     def readInt16(self, data):
@@ -241,11 +241,10 @@ class ReadDecoder:
         raise Exception("readString couldn't match token "+str(token))
 
     def readArray(self, length, data):
-        if len(data) < length:
-            raise IndexError(f"Cannot read {length} bytes from bytearray of length {len(data)}")
-        out = list(data[:length])
+        out = data[:length]
         del data[:length]
         return out
+
 
     def nextTreeInternal(self, data):
         size = self.readListSize(self.readInt8(data), data)
@@ -263,6 +262,7 @@ class ReadDecoder:
 
         attribCount = (size - 2 + size % 2)/2
         attribs = self.readAttributes(attribCount, data)
+
         if size % 2 ==1:
             return ProtocolNode(tag=tag, attributes=attribs)
 
@@ -285,6 +285,10 @@ class ReadDecoder:
             nodeData = self.readPacked8(read2, data)
         else:
             nodeData = self.readString(read2, data)
+
+        if nodeChildren is None:
+            nodeChildren = []
+
         return ProtocolNode(tag=tag, attributes=attribs, children=nodeChildren, data=nodeData)
 
     def readList(self,token, data):

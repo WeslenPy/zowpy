@@ -144,6 +144,50 @@ class ReceiptBuilder:
         return node
     
     @staticmethod
+    def build_ack(
+        message_id: str,
+        to: str,
+        receipt_type: str = "ack",
+        participant: Optional[str] = None,
+        ack_class: str = "receipt"
+    ) -> ProtocolNode:
+        """
+        Constrói ACK para receipt.
+        
+        Baseado em OutgoingAckProtocolEntity.toProtocolTreeNode()
+        
+        Args:
+            message_id: ID da mensagem
+            to: JID de destino
+            receipt_type: Tipo do ACK (geralmente "ack")
+            participant: Participante (para grupos)
+            ack_class: Classe do ACK (geralmente "receipt")
+        
+        Returns:
+            ProtocolNode: Node ACK
+        """
+        attributes = {
+            "id": message_id,
+            "to": to,
+            "class": ack_class
+        }
+        
+        if receipt_type:
+            attributes["type"] = receipt_type
+        
+        if participant:
+            attributes["participant"] = participant
+        
+        node = ProtocolNode(
+            tag="ack",
+            attributes=attributes,
+            children=[]
+        )
+        
+        logger.debug(f"ACK construído: id={message_id}, type={receipt_type}, to={to}")
+        return node
+    
+    @staticmethod
     def _generate_id() -> str:
         """
         Gera ID único para receipt seguindo padrão do zowsuplib.
