@@ -69,8 +69,7 @@ class ZowPyClient:
             await init_db(db_pool=self.db_pool)
             
             # Cria cliente completo
-            # Endpoint TCP para WhatsApp (não WebSocket)
-            endpoint = ("e8.whatsapp.net", 5222)
+            endpoint = ("e15.whatsapp.net", 5222)
             self._client = WhatsAppClient(
                 self.account_id,
                 endpoint,
@@ -248,6 +247,30 @@ class ZowPyClient:
         if not self._client or not self._client.contact_handler:
             raise ConnectionError("Cliente não conectado")
         return await self._client.contact_handler.sync_devices(jids, mode, context)
+    
+    # ========== Typing Indicators ==========
+    
+    async def start_typing(self, to: str) -> None:
+        """
+        Envia indicador de "digitando" para um contato.
+        
+        Args:
+            to: JID do destinatário
+        """
+        if not self._client:
+            raise ConnectionError("Cliente não conectado")
+        await self._client.start_typing(to)
+    
+    async def stop_typing(self, to: str) -> None:
+        """
+        Para o indicador de "digitando" para um contato.
+        
+        Args:
+            to: JID do destinatário
+        """
+        if not self._client:
+            raise ConnectionError("Cliente não conectado")
+        await self._client.stop_typing(to)
     
     async def get_contact_info(self, jid: str) -> dict:
         """Obtém informações de um contato."""

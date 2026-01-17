@@ -87,13 +87,13 @@ class MessageBuilder:
         )
         
         # 7. Cria node de mensagem completo
+        # CORREÇÃO: zowsuplib não adiciona atributo "t"
         message_node = ProtocolNode(
             tag="message",
             attributes={
                 "to": to,
                 "type": "text",
-                "id": message_id,
-                "t": str(int(time.time()))
+                "id": message_id
             },
             children=[enc_node, proto_node]
         )
@@ -154,13 +154,13 @@ class MessageBuilder:
         )
         
         # 5. Cria node de mensagem
+        # CORREÇÃO: zowsuplib não adiciona atributo "t"
         message_node = ProtocolNode(
             tag="message",
             attributes={
                 "to": to,
                 "type": media_type,
-                "id": message_id,
-                "t": str(int(time.time()))
+                "id": message_id
             },
             children=[enc_node, proto_node]
         )

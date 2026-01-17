@@ -50,6 +50,8 @@ class EncryptionReceiver:
         self._get_keys = get_keys_fn
         self._process_pending = process_pending_fn
         self._send_pkmsg_for_invalid_message = None  # Será configurado pelo client
+        self._send_retry_receipt_fn = None  # Será configurado pelo client
+        self._get_registration_id_fn = None  # Será configurado pelo client
     
     async def decrypt_message(self, node: ProtocolNode) -> Optional[bytes]:
         """
@@ -88,28 +90,32 @@ class EncryptionReceiver:
         # Identifica se é grupo
         is_group = node.get_attribute("participant") is not None
         sender_jid = node.get_attribute("participant") if is_group else node.get_attribute("from")
+        sender_pn = node.get_attribute("sender_pn")
         
         if not sender_jid:
             logger.error("Não foi possível identificar sender_jid")
             return None
+
+
+        target_jid = sender_pn if sender_pn else sender_jid
         
         try:
             # Descriptografa baseado no tipo
             if enc_type == self.TYPE_SKMSG:
                 # Mensagem de grupo
-                return await self._decrypt_skmsg(node, enc_data, sender_jid)
+                return await self._decrypt_skmsg(node, enc_data, target_jid)
             elif enc_type == self.TYPE_PKMSG:
                 # Mensagem PreKey
-                return await self._decrypt_pkmsg(node, enc_data, sender_jid, enc_version)
+                return await self._decrypt_pkmsg(node, enc_data, target_jid, enc_version)
             elif enc_type == self.TYPE_MSG:
                 # Mensagem normal (WhisperMessage)
-                return await self._decrypt_msg(node, enc_data, sender_jid, enc_version)
+                return await self._decrypt_msg(node, enc_data, target_jid, enc_version)
             else:
                 logger.warning(f"Tipo de mensagem criptografada não suportado: {enc_type}")
                 return None
         
         except exceptions.InvalidKeyIdException:
-            logger.warning(f"Invalid KeyId para {sender_jid}, ignorando")
+            logger.warning(f"Invalid KeyId para {target_jid}, ignorando")
             return None
         
         except exceptions.InvalidMessageException as e:
@@ -121,16 +127,36 @@ class EncryptionReceiver:
             message_id = node.get_attribute("id")
             retry_count = self._retries.get(message_id, 0)
             
-            if retry_count >= 2:
-                logger.warning(f"InvalidMessage após 2 tentativas para {message_id}, não tentando mais")
-                # TODO: Enviar PKMSG para sincronização (implementar depois)
+            logger.warning(f"InvalidMessage após 2 tentativas para {message_id}, enviando PKMSG para sincronização")
+            # Envia PKMSG para sincronização
+            # Prioriza sender_pn quando disponível (mais confiável que from_jid)
+            from_jid = node.get_attribute("from")
+            sender_pn = node.get_attribute("sender_pn")
+            participant = node.get_attribute("participant")
+            
+            # Prioriza sender_pn sobre from_jid
+            target_jid = sender_pn if sender_pn else from_jid
+            if not target_jid:
+                logger.error(f"Não foi possível determinar target_jid para PKMSG: sender_pn={sender_pn}, from_jid={from_jid}")
                 return None
+            
+            if sender_pn:
+                logger.debug(f"Usando sender_pn={sender_pn} para PKMSG (priorizado sobre from_jid={from_jid})")
             else:
-                self._retries[message_id] = retry_count + 1
-                logger.debug(f"Tentativa {retry_count + 1}/2 para mensagem {message_id}")
-                # Re-tenta descriptografar (pode ter sido sincronizado)
-                # Por enquanto, retorna None - retry será tratado em nível superior
-                raise
+                logger.debug(f"Usando from_jid={from_jid} para PKMSG (sender_pn não disponível)")
+            
+            if self._send_pkmsg_for_invalid_message:
+                try:
+                    await self._send_pkmsg_for_invalid_message(target_jid, message_id, participant)
+                except Exception as e:
+                    logger.error(f"Erro ao enviar PKMSG para sincronização: {e}", exc_info=True)
+            else:
+                logger.warning("_send_pkmsg_for_invalid_message não configurada")
+
+
+            return None
+          
+
         
         except exceptions.NoSessionException:
             logger.warning(f"No session para {sender_jid}, armazenando mensagem pendente")
@@ -145,16 +171,18 @@ class EncryptionReceiver:
             
             # Obtém chaves se tiver função configurada
             if self._get_keys:
+
+                target_jid = sender_pn if sender_pn else sender_jid
                 try:
-                    success_jids, error_jids = await self._get_keys(sender_jid, reason="message")
+                    success_jids, error_jids = await self._get_keys(target_jid, reason=None)
                     if success_jids:
                         # Processa mensagens pendentes após obter sessão
                         if self._process_pending:
                             await self._process_pending(conversation_id[0], conversation_id[1])
                     else:
-                        logger.warning(f"Erro ao obter chaves para {sender_jid}: {error_jids}")
+                        logger.warning(f"Erro ao obter chaves para {sender_pn}: {error_jids}")
                 except Exception as e:
-                    logger.error(f"Erro ao obter chaves para {sender_jid}: {e}", exc_info=True)
+                    logger.error(f"Erro ao obter chaves para {sender_pn}: {e}", exc_info=True)
             else:
                 logger.warning("get_keys_fn não configurada, não é possível obter chaves automaticamente")
             
@@ -198,7 +226,8 @@ class EncryptionReceiver:
         
         except exceptions.NoSessionException:
             logger.warning(f"No session de grupo para {group_id}/{participant_id}")
-            # TODO: Enviar retry
+            # Para grupos com NoSession, também pode ser necessário sincronizar
+            # Por enquanto, apenas loga - o NoSessionException será tratado no decrypt_message
             raise
     
     async def _decrypt_pkmsg(
@@ -258,4 +287,55 @@ class EncryptionReceiver:
         """
         if message_id in self._retries:
             del self._retries[message_id]
+    
+    def create_retry_receipt(
+        self,
+        message_id: str,
+        to: str,
+        retry_count: int = 1,
+        from_jid: Optional[str] = None,
+        timestamp: Optional[int] = None,
+        retry_jid: Optional[str] = None,
+        registration_id: Optional[int] = None
+    ) -> ProtocolNode:
+        """
+        Cria RetryOutgoingReceiptProtocolEntity para solicitar reenvio de mensagem.
+        
+        Usado quando uma mensagem não pôde ser descriptografada após múltiplas tentativas
+        e precisa solicitar ao remetente que reenvie a mensagem.
+        
+        Args:
+            message_id: ID da mensagem original que precisa ser reenviada
+            to: JID de destino do receipt (geralmente o remetente original)
+            retry_count: Contador de retry (1, 2, 3, etc.)
+            from_jid: JID de origem (opcional)
+            timestamp: Timestamp da mensagem original (gerado se None)
+            retry_jid: JID específico para retry (opcional, usado quando precisa enviar para device específico)
+            registration_id: Registration ID do cliente (opcional, formato hex 0x...)
+        
+        Returns:
+            RetryOutgoingReceiptProtocolEntity: Entidade de retry receipt pronta para envio
+        
+        Example:
+            ```python
+            retry_receipt = receiver.create_retry_receipt(
+                message_id="MSG_ID",
+                to="1234567890@s.whatsapp.net",
+                retry_count=1,
+                registration_id=1234567890
+            )
+            await client._send_protocol_node(retry_receipt)
+            ```
+        """
+        from ...protocol.entities.receipt import RetryOutgoingReceiptProtocolEntity
+        
+        return RetryOutgoingReceiptProtocolEntity(
+            message_id=message_id,
+            to=to,
+            retry_count=retry_count,
+            from_jid=from_jid,
+            timestamp=timestamp,
+            retry_jid=retry_jid,
+            registration_id=registration_id
+        )
 

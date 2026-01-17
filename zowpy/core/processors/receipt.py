@@ -86,13 +86,14 @@ class ReceiptProcessor(BaseProcessor):
         Baseado em AxolotlSendLayer.receive() para retry receipts.
         
         Quando recebe um retry receipt:
-        1. Envia ACK do retry
+        1. Envia ACK do retry (resposta automática) - igual zowsup
         2. Busca mensagem original na fila
         3. Se encontrar, re-envia mensagem (pode precisar obter chaves novamente)
         """
         receipt_id = node.get_attribute("id")
         from_jid = node.get_attribute("from")
         participant = node.get_attribute("participant")
+        receipt_type = node.get_attribute("type")  # "retry" para retry receipts
         
         logger.info(f"Recebido retry receipt: id={receipt_id}, from={from_jid}, participant={participant}")
         
@@ -124,23 +125,26 @@ class ReceiptProcessor(BaseProcessor):
         
         logger.debug(f"Retry info: count={retry_count}, jid={retry_jid}")
         
-        # Envia ACK do retry
-        # Baseado em RetryIncomingReceiptProtocolEntity.ack()
-        # O ACK é um receipt normal com type="ack"
+        # Envia ACK do retry (resposta automática - igual zowsup)
+        # Baseado em RetryIncomingReceiptProtocolEntity.ack() do zowsuplib:
+        #   OutgoingAckProtocolEntity(self.getId(), "receipt", self.getType(), self.getFrom(), participant)
+        # Onde self.getType() = "retry" para retry receipts
+        # Portanto: <ack class="receipt" type="retry" id="..." to="..."/>
         try:
             from ...core.builders.receipt_builder import ReceiptBuilder
             ack_node = ReceiptBuilder.build_ack(
                 message_id=receipt_id,
                 to=from_jid,
-                receipt_type="ack",
+                receipt_type=receipt_type,  # Usa "retry" (mesmo tipo do receipt recebido), não "ack"
                 participant=participant
             )
             
+            # Envia ACK automaticamente (igual zowsup: self.toLower(retryReceiptEntity.ack().toProtocolTreeNode()))
             # Emite evento para que o client envie o ACK
             await self._events.emit("ack:send", {"node": ack_node})
-            logger.debug(f"ACK do retry emitido para {receipt_id}")
+            logger.info(f"ACK automático do retry enviado: id={receipt_id}, type={receipt_type}, to={from_jid}")
         except Exception as e:
-            logger.warning(f"Erro ao criar ACK do retry: {e}")
+            logger.error(f"Erro ao criar/enviar ACK do retry: {e}", exc_info=True)
         
         # Busca mensagem original na fila
         if self._get_enqueued_message:

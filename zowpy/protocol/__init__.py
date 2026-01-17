@@ -23,6 +23,25 @@ from .historysync import HistorySync
 # Alias para compatibilidade com código antigo
 ProtocolTreeNode = ProtocolNode
 
+# Export protocol entities
+from .entities import (
+    ProtocolEntity,
+    AuthProtocolEntity,
+    ChallengeProtocolEntity,
+    ResponseProtocolEntity,
+    MessageProtocolEntity,
+    TextMessageProtocolEntity,
+    ExtendedTextMessageProtocolEntity,
+    MessageMetaAttributes,
+    IqProtocolEntity,
+    GetKeysIqProtocolEntity,
+    SetKeysIqProtocolEntity,
+    PresenceProtocolEntity,
+    ReceiptProtocolEntity,
+    AckProtocolEntity,
+    EncProtocolEntity,
+)
+
 __all__ = [
     "AsyncMessageHandler",
     "AsyncIQHandler",
@@ -46,4 +65,20 @@ __all__ = [
     "ProtocolNode",
     "ProtocolTreeNode",  # Alias para compatibilidade
     "HistorySync",
+    # Protocol Entities
+    "ProtocolEntity",
+    "AuthProtocolEntity",
+    "ChallengeProtocolEntity",
+    "ResponseProtocolEntity",
+    "MessageProtocolEntity",
+    "TextMessageProtocolEntity",
+    "ExtendedTextMessageProtocolEntity",
+    "MessageMetaAttributes",
+    "IqProtocolEntity",
+    "GetKeysIqProtocolEntity",
+    "SetKeysIqProtocolEntity",
+    "PresenceProtocolEntity",
+    "ReceiptProtocolEntity",
+    "AckProtocolEntity",
+    "EncProtocolEntity",
 ]

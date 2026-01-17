@@ -50,9 +50,10 @@ class EncEntity:
             "v": "2"
         }
         
-        # Adiciona mediatype se fornecido
-        if mediatype:
-            attribs["mediatype"] = mediatype
+        # CORREÇÃO: zowsuplib não adiciona mediatype no node <enc>
+        # O mediatype é mantido apenas no <proto> node, não no <enc>
+        # if mediatype:
+        #     attribs["mediatype"] = mediatype
         
         # Adiciona count se fornecido e não for "0"
         if count and count != "0":

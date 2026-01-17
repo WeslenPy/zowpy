@@ -74,7 +74,7 @@ async def main():
         # Nota: send_text() agora sincroniza contatos automaticamente se necessário
         # seguindo o fluxo completo do zowsuplib (assure_contacts_and_send)
         # to = "559885700260"  # Substitua pelo número de destino
-        to = "120363404389347069"
+        to = "559885700260"
         text = "Hello! Esta é uma mensagem de teste do ZowPy."
         print(f"📤 Enviando mensagem para {to}...")
         # send_text() agora:

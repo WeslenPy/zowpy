@@ -75,6 +75,24 @@ class HexTools:
 class WATools:
 
     @staticmethod
+    def normalizeJid(tos):
+
+        numbers = tos.split(",")
+        ret = []
+        for number in numbers:
+            if '@' in number:
+                ret.append(number)                
+                continue
+            elif "-" in number or ("." not in number and ":" not in number and len(number) >= 15):
+                ret.append("%s@%s" % (number, YowConstants.WHATSAPP_GROUP_SERVER))            
+                continue
+                        
+            ret.append("%s@%s" % (number, YowConstants.WHATSAPP_SERVER))
+
+        return ','.join(ret)
+        
+
+    @staticmethod
     def fullJid(jid):
        jid = Jid.normalize(jid) 
        s = jid.split("@")[1]

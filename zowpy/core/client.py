@@ -863,6 +863,8 @@ class WhatsAppClient:
             self._encryption_receiver._get_keys = self._get_keys_for_recipient
             self._encryption_receiver._process_pending = self._process_pending_messages
             self._encryption_receiver._send_pkmsg_for_invalid_message = self._send_pkmsg_for_invalid_message
+            self._encryption_receiver._send_retry_receipt_fn = self._send_retry_receipt
+            self._encryption_receiver._get_registration_id_fn = self._get_registration_id
     
     async def _handle_iq(self, node: ProtocolNode) -> None:
         """Processa IQ recebido."""
@@ -1106,31 +1108,44 @@ class WhatsAppClient:
             message_id = ProtocolNode._generateId()
             logger.debug(f"Generated message ID: {message_id}")
         
-        # 2. Cria protobuf Message
-        from ..proto.e2e_pb2 import Message
-        message = Message()
-        message.conversation = text
-        proto_bytes = message.SerializeToString()
+        # 2. Cria ExtendedTextMessageProtocolEntity
+        from ..protocol.entities import ExtendedTextMessageProtocolEntity
+        from ..proto.e2e_pb2 import Message as MessagePb
         
-        # 3. Cria node base com <proto> (ainda não criptografado)
-        proto_node = ProtocolNode(
+        # Cria entidade de mensagem estendida
+        message_entity = ExtendedTextMessageProtocolEntity(
+            to=to_jid,
+            text=text,
+            message_id=message_id
+        )
+        
+        # 3. Gera protobuf usando o método to_protobuf() da entidade
+        # Cria Message protobuf completo
+        message_pb = MessagePb()
+        
+        # Adiciona ExtendedTextMessage ao protobuf
+        ext_text = message_entity.to_protobuf()
+        message_pb.extended_text_message.CopyFrom(ext_text)
+        
+        # Serializa protobuf
+        proto_bytes = message_pb.SerializeToString()
+        logger.debug(f"Protobuf serializado: {len(proto_bytes)} bytes")
+        
+        # 4. Adiciona node <proto> à entidade (ExtendedTextMessageProtocolEntity cria automaticamente se proto_data for fornecido)
+        # Mas como já criamos a entidade, adicionamos manualmente
+        from ..protocol.entities import ProtocolEntity
+        proto_node = ProtocolEntity(
             tag="proto",
             attributes={"mediatype": "text"},
             data=proto_bytes
         )
+        message_entity.children.append(proto_node)
         
-        message_node = ProtocolNode(
-            tag="message",
-            attributes={
-                "to": to_jid,
-                "type": "text",
-                "id": message_id,
-                "t": str(int(time.time()))
-            },
-            children=[proto_node]
-        )
+        # 5. Usa a entidade diretamente (herda de ProtocolNode)
+        # ExtendedTextMessageProtocolEntity herda de ProtocolEntity que herda de ProtocolNode
+        message_node = message_entity
         
-        # 4. Processa e envia mensagem
+        # 6. Processa e envia mensagem
         await self.process_plaintext_node_and_send(message_node)
         
         logger.info(f"Mensagem enviada para {to_jid}: {text[:50]}...")
@@ -1465,9 +1480,24 @@ class WhatsAppClient:
         participant = jids[0] if len(jids) == 1 and retry_count > 0 else None
         
         for jid in jids:
-            recipient_id = jid.split('@')[0]
+            # CORREÇÃO: Converte JID para formato do zowsuplib
+            # get_all_session_usernames() retorna formato "recipient_id.recipient_type:device_id"
+            # mas zowsuplib espera JID completo "recipient_id@s.whatsapp.net" no node <to>
+            if "@" in jid:
+                # JID completo: extrai apenas o recipient_id para encrypt()
+                recipient_id = jid.split('@')[0]
+                # Remove device_id se existir (ex: "559885700260:0" -> "559885700260")
+                recipient_id = recipient_id.split(':')[0] if ':' in recipient_id else recipient_id
+                # JID para o node <to> (zowsuplib usa JID completo)
+                to_jid_for_node = jid
+            else:
+                # Formato interno "recipient_id.recipient_type:device_id"
+                # Extrai apenas o recipient_id (parte antes do primeiro ponto)
+                recipient_id = jid.split('.')[0]
+                # Converte para JID completo no formato do zowsuplib
+                to_jid_for_node = f"{recipient_id}@s.whatsapp.net"
             
-            # Criptografa para este dispositivo
+            # Criptografa para este dispositivo (usa recipient_id interno)
             ciphertext = await self.axolotl_manager.encrypt(recipient_id, proto_bytes)
             
             # Identifica tipo
@@ -1479,13 +1509,13 @@ class WhatsAppClient:
                 enc_type = EncEntity.TYPE_MSG
             
             # Cria node <enc> usando EncEntity helper
-            # Para contatos individuais, não usa <to> wrapper
-            # Adiciona count se retry_count > 0
+            # Para contatos individuais, usa <to> wrapper dentro de <participants>
+            # CORREÇÃO: usa to_jid_for_node (JID completo) no formato do zowsuplib
             enc_node = EncEntity.create_enc_node(
                 enc_type=enc_type,
                 ciphertext=ciphertext.serialize(),
                 mediatype=mediatype,
-                jid=None,  # Para contatos, não usa <to> wrapper
+                jid=to_jid_for_node,  # JID completo no formato do zowsuplib
                 count=str(retry_count) if retry_count > 0 else None
             )
             
@@ -1951,6 +1981,56 @@ class WhatsAppClient:
                 except Exception as e:
                     logger.warning(f"Erro ao adicionar device-identity: {e}")
     
+
+    
+    async def start_typing(self, to: str) -> None:
+        """
+        Envia indicador de "digitando" para um contato.
+        
+        Args:
+            to: JID do destinatário
+        """
+        if not self._authenticated:
+            raise RuntimeError("Not authenticated")
+        
+        from ..protocol.entities import PresenceProtocolEntity
+        
+        # Normaliza JID
+        to_jid = to_whatsapp_jid(to)
+        
+        # Cria presence de typing
+        presence = PresenceProtocolEntity(
+            presence_type=PresenceProtocolEntity.TYPE_COMPOSING,
+            to=to_jid
+        )
+        
+        logger.debug(f"Enviando indicador de typing para {to_jid}")
+        await self._send_protocol_node(presence)
+    
+    async def stop_typing(self, to: str) -> None:
+        """
+        Para o indicador de "digitando" para um contato.
+        
+        Args:
+            to: JID do destinatário
+        """
+        if not self._authenticated:
+            raise RuntimeError("Not authenticated")
+        
+        from ..protocol.entities import PresenceProtocolEntity
+        
+        # Normaliza JID
+        to_jid = to_whatsapp_jid(to)
+        
+        # Cria presence de paused
+        presence = PresenceProtocolEntity(
+            presence_type=PresenceProtocolEntity.TYPE_PAUSED,
+            to=to_jid
+        )
+        
+        logger.debug(f"Parando indicador de typing para {to_jid}")
+        await self._send_protocol_node(presence)
+    
     def is_connected(self) -> bool:
         """Verifica se está conectado e autenticado"""
         return self._connected and self._authenticated
@@ -2372,31 +2452,208 @@ class WhatsAppClient:
         """
         Envia PKMSG para sincronização quando InvalidMessage após múltiplas tentativas.
         
-        Baseado em AxolotlReceiveLayer.send_pkmsg_for_invalid_message()
+        Baseado em AxolotlReceiveLayer.send_pkmsg_for_invalid_message() e 
+        AxolotlSendLayer.sendToContactAsPkmsg() do zowsuplib.
+        
+        Envia uma mensagem vazia/minimal como PKMSG para forçar a criação de uma nova sessão
+        e re-sincronização com o remetente. Deleta temporariamente a sessão existente para 
+        forçar envio como PKMSG.
         
         Args:
-            from_jid: JID do remetente
+            from_jid: JID do remetente (pode ser grupo ou contato)
             message_id: ID da mensagem que falhou
             participant: Participante (para grupos, opcional)
         """
         try:
+            from ..utils.tools import WATools
+
             sender_jid = participant if participant else from_jid
             
-            logger.info(f"Enviando PKMSG para sincronização com {sender_jid}")
+            # Normaliza JID se necessário (baseado em zowsuplib)
+            normalized_sender_jid = WATools.normalizeJid(from_jid)
             
-            # Obtém chaves do remetente
-            success_jids, error_jids = await self._get_keys_for_recipient(sender_jid.split('@')[0], reason="invalid_message")
+            logger.info(f"Enviando PKMSG para sincronização com {normalized_sender_jid} (mensagem {message_id})")
             
-            if not success_jids:
-                logger.error(f"Erro ao obter chaves para sincronização: {error_jids}")
-                return
+            # Para grupos, envia para o grupo com participant
+            to_jid = from_jid if participant else normalized_sender_jid
             
-            # Cria mensagem PKMSG vazia para forçar re-sincronização
-            # Por enquanto, apenas loga - a implementação completa requer criar mensagem de sincronização
-            logger.info(f"PKMSG de sincronização seria enviado para {sender_jid} (implementação completa requer mensagem de sincronização)")
+            # Cria mensagem de texto vazia
+            # Baseado em zowsuplib: TextMessageProtocolEntity("", message_attrs)
+            from ..proto.e2e_pb2 import Message as MessagePb
+            message_pb = MessagePb()
+            message_pb.conversation = ""  # Mensagem vazia
+            
+            # Serializa protobuf
+            proto_bytes = message_pb.SerializeToString()
+            
+            # Gera ID para a mensagem de sincronização
+            # Baseado em zowsuplib: f"sync_{message_id}_{int(time.time())}"
+            sync_message_id = f"sync_{message_id}_{int(time.time())}"
+            
+            # Cria node de mensagem
+            # Baseado em zowsuplib: TextMessageProtocolEntity.toProtocolTreeNode()
+            message_node = ProtocolNode(
+                tag="message",
+                attributes={
+                    "to": to_jid,
+                    "type": "text",
+                    "id": sync_message_id,
+                    "t": str(int(time.time()))
+                },
+                children=[]
+            )
+            
+            # Adiciona node <proto>
+            proto_node = ProtocolNode(
+                tag="proto",
+                attributes={},
+                data=proto_bytes
+            )
+            message_node.children.append(proto_node)
+            
+            # Para grupos, adiciona participant
+            if participant:
+                message_node.attributes["participant"] = normalized_sender_jid
+            
+            # Baseado em zowsuplib sendToContactAsPkmsg():
+            # 1. Deleta temporariamente a sessão existente para forçar PKMSG
+            # 2. Obtém chaves (PreKeys)
+            # 3. Encripta como PreKeyWhisperMessage
+            # 4. Restaura sessão se houver erro
+            
+            recipient_id = normalized_sender_jid.split('@')[0]
+            
+            # Backup e deleta sessão temporariamente (se existir) para forçar PKMSG
+            # Baseado em zowsuplib: session_backup e deleteSession()
+            session_backup = None
+            had_session = False
+            recipient_id_split = None
+            deviceid = None
+            
+            if hasattr(self, 'axolotl_manager') and self.axolotl_manager:
+                if await self.axolotl_manager.session_exists(normalized_sender_jid):
+                    try:
+                        # Decodifica JID para obter recipient_id e device_id
+                        from ..utils.tools import WATools
+                        recipient_id_split, _, deviceid = WATools.jidDecode(normalized_sender_jid)
+                        
+                        # Carrega sessão para backup
+                        if hasattr(self.axolotl_manager, '_store'):
+                            session_record = await self.axolotl_manager._store.loadSession(
+                                recipient_id_split, 
+                                deviceid
+                            )
+                            session_backup = session_record
+                            had_session = True
+                            logger.debug(f"Sessão existente encontrada para {normalized_sender_jid}, será deletada temporariamente")
+                            
+                            # Deleta sessão temporariamente para forçar PKMSG
+                            await self.axolotl_manager._store.deleteSession(recipient_id_split, deviceid)
+                            logger.debug(f"Sessão deletada temporariamente para {normalized_sender_jid}")
+                    except Exception as e:
+                        logger.warning(f"Erro ao fazer backup/deletar sessão: {e}")
+            
+            try:
+                # Obtém chaves do remetente para atualizar sessão
+                to_jid = normalized_sender_jid
+                if "@" not in to_jid:
+                    to_jid = f"{to_jid}@{YowConstants.WHATSAPP_SERVER}"
+
+                success_jids, error_jids = await self._get_keys_for_recipient(to_jid, reason=None)
+                
+                if not success_jids:
+                    logger.error(f"Erro ao obter chaves para sincronização: {error_jids}")
+                    # Restaura sessão se houver backup
+                    if had_session and session_backup and recipient_id_split is not None and deviceid is not None:
+                        try:
+                            await self.axolotl_manager._store.storeSession(recipient_id_split, deviceid, session_backup)
+                            logger.debug(f"Sessão restaurada após erro ao obter chaves para {normalized_sender_jid}")
+                        except Exception as e:
+                            logger.warning(f"Erro ao restaurar sessão: {e}")
+                    return
+                
+                # Obtém mediatype do proto node
+                mediatype = "text"  # Mensagem de texto vazia
+                
+                # Encripta como PreKeyWhisperMessage (PKMSG)
+                # Como deletamos a sessão, isso deve forçar PKMSG
+                ciphertext = await self.axolotl_manager.encrypt(recipient_id, proto_bytes)
+                
+                # Verifica se é PreKeyWhisperMessage (deve ser, já que deletamos a sessão)
+                # Baseado em zowsuplib: if ciphertext.__class__ != PreKeyWhisperMessage
+                if not isinstance(ciphertext, PreKeyWhisperMessage):
+                    logger.warning(f"Esperado PreKeyWhisperMessage, mas obteve {ciphertext.__class__.__name__}")
+                
+                # Cria node <enc> com TYPE_PKMSG
+                # Baseado em zowsuplib: EncProtocolEntity(TYPE_PKMSG, 2, ciphertext.serialize(), mediaType)
+                enc_node = EncEntity.create_enc_node(
+                    enc_type=EncEntity.TYPE_PKMSG,  # Força PKMSG
+                    ciphertext=ciphertext.serialize(),
+                    mediatype=mediatype,
+                    jid=None
+                )
+                
+                # Constrói node final usando EncryptedMessageBuilder
+                message_node = EncryptedMessageBuilder.build_encrypted_message(
+                    message_node=message_node,
+                    enc_entities=[enc_node],
+                    participant=participant if participant else None
+                )
+                
+                # Adiciona elementos extras
+                await self._add_message_extras(message_node)
+                
+                # Enfileira mensagem antes de enviar (para retry)
+                self._enqueue_sent_message(message_node)
+                
+                # Envia
+                await self._send_protocol_node(message_node)
+                
+                logger.info(f"PKMSG de sincronização enviado para {normalized_sender_jid} (sync_message_id={sync_message_id})")
+            
+            except Exception as e:
+                logger.error(f"Erro ao enviar PKMSG para sincronização: {e}", exc_info=True)
+                # Restaura sessão se houver backup e erro
+                if had_session and session_backup and recipient_id_split is not None and deviceid is not None:
+                    try:
+                        await self.axolotl_manager._store.storeSession(recipient_id_split, deviceid, session_backup)
+                        logger.debug(f"Sessão restaurada após erro para {normalized_sender_jid}")
+                    except Exception as restore_error:
+                        logger.warning(f"Erro ao restaurar sessão: {restore_error}")
         
         except Exception as e:
             logger.error(f"Erro ao enviar PKMSG para sincronização: {e}", exc_info=True)
+    
+    async def _send_retry_receipt(self, retry_receipt: ProtocolNode) -> None:
+        """
+        Envia retry receipt para solicitar reenvio de mensagem.
+        
+        Baseado em AxolotlReceiveLayer.send_retry() do zowsuplib.
+        
+        Args:
+            retry_receipt: RetryOutgoingReceiptProtocolEntity a ser enviado
+        """
+        try:
+            logger.debug(f"Enviando retry receipt: {retry_receipt}")
+            await self._send_protocol_node(retry_receipt)
+        except Exception as e:
+            logger.error(f"Erro ao enviar retry receipt: {e}", exc_info=True)
+    
+    async def _get_registration_id(self) -> Optional[int]:
+        """
+        Obtém registration ID do cliente.
+        
+        Returns:
+            int: Registration ID ou None se não disponível
+        """
+        try:
+            if hasattr(self, 'axolotl_manager') and self.axolotl_manager:
+                registration_id = self.axolotl_manager.registration_id
+                return registration_id
+            return None
+        except Exception as e:
+            logger.error(f"Erro ao obter registration_id: {e}", exc_info=True)
+            return None
 
 
 
