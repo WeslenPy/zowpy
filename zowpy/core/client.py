@@ -7,8 +7,9 @@ Fluxo direto: conexão → handshake → autenticação.
 
 import asyncio
 import base64
+import random
 import time
-from typing import Optional, Dict, Any, Tuple, List
+from typing import Optional, Dict, Any, Tuple, List, Union
 from loguru import logger
 
 # from zowpy.axolotl.state.prekeyrecord import PreKeyRecord
@@ -92,7 +93,7 @@ class WhatsAppClient:
     def __init__(
         self,
         account_id: str,
-        endpoint: Tuple[str, int] = ("e15.whatsapp.net", 5222),
+        endpoint: Tuple[str, int] = None,
         db_pool=None,
         device_config=None,
         proxy: Optional[Dict[str, any]] = None,
@@ -108,7 +109,7 @@ class WhatsAppClient:
             proxy: Configuração de proxy (opcional)
         """
         self.account_id = normalize(account_id)
-        self.endpoint = endpoint
+        self.endpoint = endpoint or (f"e{random.randint(1, 16)}.whatsapp.net", 5222)
         self.proxy = proxy
         self.db_pool = db_pool
         self.device_config = device_config
@@ -2654,6 +2655,76 @@ class WhatsAppClient:
         except Exception as e:
             logger.error(f"Erro ao obter registration_id: {e}", exc_info=True)
             return None
+    
+    async def mark_as_read(
+        self,
+        message_ids: Union[str, List[str]],
+        from_jid: str,
+        participant: Optional[str] = None
+    ) -> None:
+        """
+        Marca mensagem(s) como lida(s) enviando receipt de leitura.
+        
+        Baseado em OutgoingReceiptProtocolEntity do zowsuplib.
+        
+        Args:
+            message_ids: ID da mensagem ou lista de IDs de mensagens
+            from_jid: JID do remetente (destinatário do receipt)
+            participant: Participante (para grupos, opcional)
+        
+        Raises:
+            RuntimeError: Se cliente não estiver autenticado
+        
+        Exemplo:
+            # Marcar uma mensagem como lida
+            await client.mark_as_read(
+                message_ids="MESSAGE_ID",
+                from_jid="5511999999999@s.whatsapp.net"
+            )
+            
+            # Marcar múltiplas mensagens como lidas
+            await client.mark_as_read(
+                message_ids=["ID1", "ID2", "ID3"],
+                from_jid="5511999999999@s.whatsapp.net"
+            )
+            
+            # Marcar mensagem de grupo como lida
+            await client.mark_as_read(
+                message_ids="MESSAGE_ID",
+                from_jid="GROUP_ID@g.us",
+                participant="5511999999999@s.whatsapp.net"
+            )
+        """
+        if not self._authenticated:
+            raise RuntimeError("Cliente não está autenticado. Conecte-se primeiro.")
+        
+        try:
+            from .builders.receipt_builder import ReceiptBuilder
+            
+            # Constrói receipt de leitura
+            receipt_node = ReceiptBuilder.build_receipt(
+                message_id=message_ids,
+                from_jid=from_jid,
+                receipt_type=ReceiptBuilder.TYPE_READ,
+                participant=participant
+            )
+            
+            logger.debug(
+                f"Enviando receipt de leitura: "
+                f"message_ids={message_ids}, from_jid={from_jid}, participant={participant}"
+            )
+            
+            # Envia receipt
+            await self._send_protocol_node(receipt_node)
+            
+            logger.info(
+                f"Receipt de leitura enviado com sucesso: "
+                f"message_ids={message_ids}, to={from_jid}"
+            )
+            
+        except Exception as e:
+            logger.error(f"Erro ao enviar receipt de leitura: {e}", exc_info=True)
+            raise
 
 
 

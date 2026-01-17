@@ -69,11 +69,11 @@ class ZowPyClient:
             await init_db(db_pool=self.db_pool)
             
             # Cria cliente completo
-            endpoint = ("e15.whatsapp.net", 5222)
+            # CORREÇÃO: Endpoint None = seleção aleatória (igual ao zowsuplib)
             self._client = WhatsAppClient(
                 self.account_id,
-                endpoint,
-                self.db_pool,
+                # endpoint=None,  # Seleciona aleatoriamente da lista do zowsuplib
+                db_pool=self.db_pool,
                 device_config=self.device_env,
             )
             
@@ -132,6 +132,13 @@ class ZowPyClient:
         message_id = await self._client.send_text(to, text)
         
         return message_id
+    
+
+    async def mark_as_read(self, message_id: str,from_jid: str, participant: str = None) -> None:
+        """Marca mensagem como lida."""
+        if not self._client or not self._client.is_connected():
+            raise ConnectionError("Cliente não conectado")
+        await self._client.mark_as_read(message_id, from_jid, participant)
     
     # ========== Grupos ==========
     

@@ -12,10 +12,13 @@ from zowpy.protocol.structs import ProtocolNode
 @pytest.mark.asyncio
 async def test_whatsapp_client_init():
     """Testa inicialização do cliente"""
+    from zowpy.utils.constants import YowConstants
+    
     client = WhatsAppClient("5511999999999")
     
     assert client.account_id == "5511999999999"
-    assert client.endpoint == ("e15.whatsapp.net", 5222)
+    # CORREÇÃO: Endpoint agora é selecionado aleatoriamente, verifica se está na lista válida
+    assert client.endpoint in YowConstants.ENDPOINTS
     assert not client._connected
     assert not client._authenticated
 

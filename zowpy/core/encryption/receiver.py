@@ -135,7 +135,6 @@ class EncryptionReceiver:
             participant = node.get_attribute("participant")
             
             # Prioriza sender_pn sobre from_jid
-            target_jid = sender_pn if sender_pn else from_jid
             if not target_jid:
                 logger.error(f"Não foi possível determinar target_jid para PKMSG: sender_pn={sender_pn}, from_jid={from_jid}")
                 return None
@@ -172,7 +171,6 @@ class EncryptionReceiver:
             # Obtém chaves se tiver função configurada
             if self._get_keys:
 
-                target_jid = sender_pn if sender_pn else sender_jid
                 try:
                     success_jids, error_jids = await self._get_keys(target_jid, reason=None)
                     if success_jids:

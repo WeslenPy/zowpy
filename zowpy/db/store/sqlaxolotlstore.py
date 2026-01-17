@@ -127,9 +127,9 @@ class SqlIdentityKeyStore:
             priv_key = identityKeyPair.getPrivateKey().serialize()
             row.public_key = pub_key
             row.private_key = priv_key
-            # REMOVIDO: await self.db.commit() - O context manager em _get_session já faz commit automaticamente
+            await self.db.commit()
         except Exception as e:
-            # Re-raise para que o context manager faça o rollback
+            await self.db.rollback()
             logger.error(f"Erro ao armazenar dados locais de identidade: {e}", exc_info=True)
             raise
 
@@ -155,10 +155,10 @@ class SqlIdentityKeyStore:
                 public_key=pub_key,
             )
             self.db.add(row)
-            # REMOVIDO: await self.db.commit() - O context manager em _get_session já faz commit automaticamente
+            await self.db.commit()
             logger.debug(f"saveIdentity: successfully saved identity for recipientId={recipientId}, deviceId={deviceId}")
         except Exception as e:
-            # Re-raise para que o context manager faça o rollback
+            await self.db.rollback()
             logger.error(
                 f"saveIdentity: error saving identity for recipientId={recipientId}, deviceId={deviceId}: {e}",
                 exc_info=True
@@ -233,9 +233,9 @@ class SqlPreKeyStore:
                 )
                 .values(sent_to_server=True)
             )
-            # REMOVIDO: await self.db.commit() - O context manager em _get_session já faz commit automaticamente
+            await self.db.commit()
         except Exception as e:
-            # Re-raise para que o context manager faça o rollback
+            await self.db.rollback()
             logger.error(f"Erro ao marcar PreKeys como enviados: {e}", exc_info=True)
             raise
 
@@ -261,10 +261,10 @@ class SqlPreKeyStore:
                 record=record_data,
             )
             self.db.add(row)
-            # REMOVIDO: await self.db.commit() - O context manager em _get_session já faz commit automaticamente
+            await self.db.commit()
             logger.debug(f"storePreKey: successfully stored prekey {preKeyId}")
         except Exception as e:
-            # Re-raise para que o context manager faça o rollback
+            await self.db.rollback()
             logger.error(f"storePreKey: error storing prekey {preKeyId}: {e}", exc_info=True)
             raise
 
@@ -369,10 +369,10 @@ class SqlSignedPreKeyStore:
                 record=record_data,
             )
             self.db.add(row)
-            # REMOVIDO: await self.db.commit() - O context manager em _get_session já faz commit automaticamente
+            await self.db.commit()
             logger.debug(f"storeSignedPreKey: successfully stored signed prekey {signedPreKeyId}")
         except Exception as e:
-            # Re-raise para que o context manager faça o rollback
+            await self.db.rollback()
             logger.error(f"storeSignedPreKey: error storing signed prekey {signedPreKeyId}: {e}", exc_info=True)
             raise
 
@@ -466,11 +466,10 @@ class SqlSessionStore:
                 record=record_data,
             )
             self.db.add(row)
-            # REMOVIDO: await self.db.commit() - O context manager em _get_session já faz commit automaticamente
-            # REMOVIDO: await self.db.rollback() - O context manager em _get_session já faz rollback em caso de erro
+            await self.db.commit()
             logger.debug(f"storeSession: successfully stored session for recipient={recipient}, deviceId={deviceId}")
         except Exception as e:
-            # Re-raise para que o context manager faça o rollback
+            await self.db.rollback()
             logger.error(
                 f"storeSession: error storing session for recipient={recipient}, deviceId={deviceId}: {e}",
                 exc_info=True
@@ -1105,9 +1104,6 @@ class SqlAxolotlStore(AxolotlStore):
         """
         Obtém sessão assíncrona.
         Usa o db_pool para obter uma sessão async.
-        
-        Garante que a sessão seja sempre fechada corretamente e que commits/rollbacks
-        sejam feitos de forma adequada, evitando conexões não fechadas.
 
         Returns:
             AsyncSession: Sessão assíncrona
@@ -1118,25 +1114,11 @@ class SqlAxolotlStore(AxolotlStore):
         async with self._db_pool.get_session() as session:
             try:
                 yield session
-            except Exception as e:
-                # Garante rollback em caso de erro
-                try:
-                    await session.rollback()
-                except Exception as rollback_error:
-                    logger.error(f"Erro ao fazer rollback da sessão: {rollback_error}", exc_info=True)
+            except Exception:
+                await session.rollback()
                 raise
             else:
-                # Commit apenas se não houve exceção
-                try:
-                    await session.commit()
-                except Exception as commit_error:
-                    logger.error(f"Erro ao fazer commit da sessão: {commit_error}", exc_info=True)
-                    # Tenta rollback se commit falhar
-                    try:
-                        await session.rollback()
-                    except Exception as rollback_error:
-                        logger.error(f"Erro ao fazer rollback após falha no commit: {rollback_error}", exc_info=True)
-                    raise
+                await session.commit()
 
 
     async def _get_account(self, db: AsyncSession) -> models.Account:
@@ -1688,7 +1670,6 @@ class SqlAxolotlStore(AxolotlStore):
             account = await self._get_account(db)
             await self._ensure_sub_stores(db, account)
             return await self.taskMsgStore.delExpiredTaskMsg()
-
 
 
 
