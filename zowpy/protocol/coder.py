@@ -42,12 +42,11 @@ class AsyncEncoder:
             # Fallback básico
             return b""
 
-        # Operação de codificação pode ser pesada, executa em thread pool
+        # Operação de codificação executada de forma assíncrona
 
         # logger.debug(f"Encoding node: {node}")
-        return await asyncio.to_thread(
-            self._writer.protocolNodeToBytes, node
-        )
+        return await self._writer.protocolNodeToBytes(node)
+       
 
 
 class AsyncDecoder:
@@ -74,10 +73,8 @@ class AsyncDecoder:
             # Fallback básico
             return None
 
-        # Operação de decodificação pode ser pesada, executa em thread pool
-        return await asyncio.to_thread(
-            self._reader.getProtocolNode, bytearray(data)
-        )
+        # Operação de decodificação executada de forma assíncrona
+        return await self._reader.getProtocolNode(bytearray(data))
 
 
 class AsyncCoder:

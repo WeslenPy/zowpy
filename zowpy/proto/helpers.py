@@ -24,10 +24,10 @@ async def serialize_async(message: Any) -> bytes:
     """
     if hasattr(message, "SerializeToString"):
         # Google protobuf
-        return await asyncio.to_thread(message.SerializeToString)
+        return message.SerializeToString()
     elif hasattr(message, "serialize"):
         # Betterproto
-        return await asyncio.to_thread(message.serialize)
+        return message.serialize()
     else:
         raise ValueError(f"Message type {type(message)} does not support serialization")
 
@@ -49,10 +49,10 @@ async def deserialize_async(data: bytes, message_class: Type[T]) -> T:
     
     if hasattr(message, "ParseFromString"):
         # Google protobuf
-        await asyncio.to_thread(message.ParseFromString, data)
+        message.ParseFromString(data)
     elif hasattr(message, "deserialize"):
         # Betterproto
-        await asyncio.to_thread(message.deserialize, data)
+        message.deserialize(data)
     else:
         raise ValueError(
             f"Message class {message_class} does not support deserialization"

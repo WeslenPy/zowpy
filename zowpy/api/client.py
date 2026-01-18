@@ -140,6 +140,144 @@ class ZowPyClient:
             raise ConnectionError("Cliente não conectado")
         await self._client.mark_as_read(message_id, from_jid, participant)
     
+    # ========== Mídia ==========
+    
+    async def send_image(
+        self,
+        to: str,
+        file_path_or_url: str,
+        caption: Optional[str] = None,
+        progress_callback: Optional[Callable] = None
+    ) -> str:
+        """
+        Envia imagem de forma totalmente assíncrona.
+        
+        Args:
+            to: JID do destinatário (número de telefone ou JID completo)
+            file_path_or_url: Caminho do arquivo de imagem ou URL
+            caption: Legenda da imagem (opcional)
+            progress_callback: Callback para progresso de upload (opcional)
+        
+        Returns:
+            ID da mensagem enviada
+        """
+        if not self._client or not self._client.is_connected():
+            raise ConnectionError("Not connected")
+        
+        message_id = await self._client.send_image(
+            to=to,
+            file_path_or_url=file_path_or_url,
+            caption=caption,
+            progress_callback=progress_callback
+        )
+        
+        return message_id
+    
+    async def send_audio(
+        self,
+        to: str,
+        file_path_or_url: str,
+        ptt: bool = False,
+        progress_callback: Optional[Callable] = None
+    ) -> str:
+        """
+        Envia áudio de forma totalmente assíncrona.
+        
+        Args:
+            to: JID do destinatário (número de telefone ou JID completo)
+            file_path_or_url: Caminho do arquivo de áudio ou URL
+            ptt: Se True, envia como push-to-talk (voice message)
+            progress_callback: Callback para progresso de upload (opcional)
+        
+        Returns:
+            ID da mensagem enviada
+        """
+        if not self._client or not self._client.is_connected():
+            raise ConnectionError("Not connected")
+        
+        message_id = await self._client.send_audio(
+            to=to,
+            file_path_or_url=file_path_or_url,
+            ptt=ptt,
+            progress_callback=progress_callback
+        )
+        
+        return message_id
+    
+    async def send_document(
+        self,
+        to: str,
+        file_path_or_url: str,
+        filename: Optional[str] = None,
+        caption: Optional[str] = None,
+        progress_callback: Optional[Callable] = None
+    ) -> str:
+        """
+        Envia documento de forma totalmente assíncrona.
+        
+        Args:
+            to: JID do destinatário (número de telefone ou JID completo)
+            file_path_or_url: Caminho do arquivo do documento ou URL
+            filename: Nome do arquivo (opcional, usa basename se None)
+            caption: Legenda do documento (opcional)
+            progress_callback: Callback para progresso de upload (opcional)
+        
+        Returns:
+            ID da mensagem enviada
+        """
+        if not self._client or not self._client.is_connected():
+            raise ConnectionError("Not connected")
+        
+        message_id = await self._client.send_document(
+            to=to,
+            file_path_or_url=file_path_or_url,
+            filename=filename,
+            caption=caption,
+            progress_callback=progress_callback
+        )
+        
+        return message_id
+    
+    async def send_sticker(
+        self,
+        to: str,
+        file_path_or_url: str,
+        is_animated: bool = False,
+        is_avatar: bool = False,
+        is_ai_sticker: bool = False,
+        is_lottie: bool = False,
+        progress_callback: Optional[Callable] = None
+    ) -> str:
+        """
+        Envia sticker de forma totalmente assíncrona.
+        
+        Args:
+            to: JID do destinatário (número de telefone ou JID completo)
+            file_path_or_url: Caminho do arquivo de sticker ou URL
+            is_animated: Se é sticker animado
+            is_avatar: Se é avatar sticker
+            is_ai_sticker: Se é AI sticker
+            is_lottie: Se é Lottie sticker
+            progress_callback: Callback para progresso de upload (opcional)
+        
+        Returns:
+            ID da mensagem enviada
+        """
+        if not self._client or not self._client.is_connected():
+            raise ConnectionError("Not connected")
+        
+        message_id = await self._client.send_sticker(
+            to=to,
+            file_path_or_url=file_path_or_url,
+            is_animated=is_animated,
+            is_avatar=is_avatar,
+            is_ai_sticker=is_ai_sticker,
+            is_lottie=is_lottie,
+            progress_callback=progress_callback
+        )
+        
+        return message_id
+    
     # ========== Grupos ==========
     
     async def create_group(self, subject: str, participants: list) -> str:
@@ -422,6 +560,9 @@ class ZowPyClient:
     def on_disconnected(self, handler: Callable) -> None:
         """Registra handler de desconexão"""
         self._events.on("disconnected", handler)
+
+
+
 
 
 

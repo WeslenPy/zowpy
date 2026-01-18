@@ -7,6 +7,7 @@ Async Event Emitter - Sistema de eventos totalmente não-bloqueante.
 """
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Callable, Optional, Any, Tuple
 from loguru import logger
 
@@ -21,6 +22,13 @@ class AsyncEventEmitter:
         self._handlers: Dict[str, List[Callable]] = {}
         self._once_handlers: Dict[str, List[Callable]] = {}
         self._lock = asyncio.Lock()
+
+        self.executor = ThreadPoolExecutor(
+            max_workers=4,
+            thread_name_prefix="async-event-emitter"
+        )
+
+        self.loop = asyncio.get_running_loop()
 
     def on(self, event: str, handler: Callable) -> None:
         if event not in self._handlers:
@@ -70,7 +78,7 @@ class AsyncEventEmitter:
                         self._run_async_handler(handler, event, *args, **kwargs)
                     )
                 else:
-                    asyncio.create_task(
+                    self.loop.run_in_executor(
                         self._run_sync_handler(handler, event, *args, **kwargs)
                     )
             except Exception:
@@ -86,7 +94,7 @@ class AsyncEventEmitter:
 
     async def _run_sync_handler(self, handler, event, *args, **kwargs):
         try:
-            await asyncio.to_thread(handler, *args, **kwargs)
+            await asyncio.exec(handler, *args, **kwargs)
         except Exception:
             logger.exception(f"Erro no handler sync do evento '{event}'")
 

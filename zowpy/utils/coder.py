@@ -14,7 +14,7 @@ class ReadDecoder:
     def __init__(self, tokenDictionary):
         self.tokenDictionary = tokenDictionary
 
-    def getProtocolNode(self, data):
+    async def getProtocolNode(self, data):
 
         if type(data) is list:
             data = bytearray(data)
@@ -309,18 +309,18 @@ class WriteEncoder:
     def __init__(self, tokenDictionary):
         self.tokenDictionary = tokenDictionary
 
-    def protocolNodeToBytes(self, node):
-        """Codifica ProtocolNode para bytes."""
+    async def protocolNodeToBytes(self, node):
+        """Codifica ProtocolNode para bytes de forma assíncrona."""
         outBytes = [0] # flags
-        self.writeInternal(node, outBytes)                                
+        await self.writeInternal(node, outBytes)                                
         return outBytes
     
     # Alias para compatibilidade
-    def protocolTreeNodeToBytes(self, node):
+    async def protocolTreeNodeToBytes(self, node):
         """Alias para compatibilidade com código antigo."""
-        return self.protocolNodeToBytes(node)
+        return await self.protocolNodeToBytes(node)
 
-    def writeInternal(self, node:ProtocolTreeNode, data):
+    async def writeInternal(self, node:ProtocolTreeNode, data):
         # Support both hasChildren() and has_children() for compatibility
         has_children = node.has_children()
         
@@ -341,7 +341,7 @@ class WriteEncoder:
 
             self.writeListStart(len(node.children), data);    
             for c in node.children:
-                self.writeInternal(c, data)         
+                await self.writeInternal(c, data)         
 
     def writeAttributes(self, attributes, data):
         if attributes is not None:

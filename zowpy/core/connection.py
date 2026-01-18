@@ -82,6 +82,25 @@ class AsyncConnection:
     
     async def _connect_via_proxy(self, timeout: float) -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]:
         """
+        Conecta via proxy SOCKS5 ou HTTP CONNECT de forma assíncrona.
+        
+        Args:
+            timeout: Timeout de conexão
+        
+        Returns:
+            Tuple[StreamReader, StreamWriter]: Reader e writer da conexão
+        """
+        proxy_type = self.proxy.get("type", "socks5")
+        
+        if proxy_type == "socks5":
+            return await self._connect_via_socks5(timeout)
+        elif proxy_type == "http":
+            return await self._connect_via_http_proxy(timeout)
+        else:
+            raise ConnectionError(f"Tipo de proxy não suportado: {proxy_type}")
+    
+    async def _connect_via_socks5(self, timeout: float) -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+        """
         Conecta via proxy SOCKS5 de forma assíncrona.
         
         Args:
@@ -134,7 +153,116 @@ class AsyncConnection:
                 "Instale com: pip install socksio ou pip install PySocks"
             )
         except Exception as e:
-            raise ConnectionError(f"Erro ao conectar via proxy: {e}") from e
+            raise ConnectionError(f"Erro ao conectar via proxy SOCKS5: {e}") from e
+    
+    async def _connect_via_http_proxy(self, timeout: float) -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+        """
+        Conecta via HTTP proxy CONNECT de forma assíncrona.
+        
+        Implementa HTTP CONNECT method para tunneling TCP através de proxy HTTP.
+        
+        Args:
+            timeout: Timeout de conexão
+        
+        Returns:
+            Tuple[StreamReader, StreamWriter]: Reader e writer da conexão
+            
+        Raises:
+            ConnectionError: Se conexão ou CONNECT falhar
+        """
+        import base64
+        
+        proxy_host = self.proxy.get("host")
+        proxy_port = self.proxy.get("port")
+        proxy_username = self.proxy.get("username")
+        proxy_password = self.proxy.get("password")
+        
+        try:
+            # Conecta ao proxy HTTP
+            logger.debug(f"Conectando ao proxy HTTP {proxy_host}:{proxy_port}...")
+            proxy_reader, proxy_writer = await asyncio.wait_for(
+                asyncio.open_connection(proxy_host, proxy_port),
+                timeout=timeout
+            )
+            
+            # Monta requisição CONNECT
+            connect_request = f"CONNECT {self.host}:{self.port} HTTP/1.1\r\n"
+            connect_request += f"Host: {self.host}:{self.port}\r\n"
+            
+            # Adiciona autenticação Basic se disponível
+            if proxy_username and proxy_password:
+                auth_string = f"{proxy_username}:{proxy_password}"
+                auth_bytes = auth_string.encode('ascii')
+                auth_b64 = base64.b64encode(auth_bytes).decode('ascii')
+                connect_request += f"Proxy-Authorization: Basic {auth_b64}\r\n"
+            
+            connect_request += "\r\n"
+            
+            # Envia requisição CONNECT
+            proxy_writer.write(connect_request.encode('ascii'))
+            await proxy_writer.drain()
+            
+            # Lê linha de status da resposta
+            response_line_bytes = await asyncio.wait_for(
+                proxy_reader.readline(),
+                timeout=timeout
+            )
+            
+            if not response_line_bytes:
+                raise ConnectionError("Proxy não respondeu à requisição CONNECT")
+            
+            response_line = response_line_bytes.decode('ascii', errors='ignore').strip()
+            logger.debug(f"Resposta do proxy: {response_line}")
+            
+            # Parse status code
+            parts = response_line.split(' ', 2)
+            if len(parts) < 2:
+                raise ConnectionError(f"Resposta de proxy inválida: {response_line}")
+            
+            try:
+                status_code = int(parts[1])
+            except (ValueError, IndexError):
+                raise ConnectionError(f"Status code inválido na resposta: {response_line}")
+            
+            # Lê headers restantes (até linha vazia)
+            while True:
+                header_line = await asyncio.wait_for(
+                    proxy_reader.readline(),
+                    timeout=timeout
+                )
+                if header_line == b"\r\n" or header_line == b"\n":
+                    break
+                # Log header para debug se necessário
+                logger.debug(f"Proxy header: {header_line.decode('ascii', errors='ignore').strip()}")
+            
+            # Verifica status code
+            if status_code != 200:
+                # Lê body da resposta se houver (para log de erro)
+                error_body = b""
+                while proxy_reader.at_eof() == False:
+                    try:
+                        chunk = await asyncio.wait_for(
+                            proxy_reader.read(1024),
+                            timeout=2.0
+                        )
+                        if not chunk:
+                            break
+                        error_body += chunk
+                    except asyncio.TimeoutError:
+                        break
+                
+                error_msg = error_body.decode('ascii', errors='ignore')[:200] if error_body else ""
+                raise ConnectionError(
+                    f"Proxy CONNECT falhou com status {status_code}: {response_line}. {error_msg}"
+                )
+            
+            logger.info(f"Conectado via proxy HTTP CONNECT {proxy_host}:{proxy_port} -> {self.host}:{self.port}")
+            return proxy_reader, proxy_writer
+            
+        except asyncio.TimeoutError as e:
+            raise ConnectionError(f"Timeout ao conectar via proxy HTTP: {e}") from e
+        except Exception as e:
+            raise ConnectionError(f"Erro ao conectar via proxy HTTP: {e}") from e
     
     async def _connect_via_proxy_pysocks(self, timeout: float) -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]:
         """

@@ -181,6 +181,31 @@ class GroupHandler:
             self._iq_processor.unregister_callback(iq_id)
             raise Exception("Timeout aguardando informações do grupo")
     
+    async def get_group_participants(self, group_jid: str, own_jid: Optional[str] = None) -> List[str]:
+        """
+        Obtém lista de participantes do grupo (apenas JIDs).
+        
+        Método auxiliar para sender key distribution.
+        
+        Args:
+            group_jid: JID do grupo
+            own_jid: JID próprio para remover da lista (opcional)
+        
+        Returns:
+            Lista de JIDs dos participantes (sem o próprio JID)
+        
+        Raises:
+            Exception: Se obtenção falhar
+        """
+        info = await self.get_group_info(group_jid)
+        participants = info.get("participants", [])
+        
+        # Remove próprio JID se estiver na lista
+        if own_jid and own_jid in participants:
+            participants.remove(own_jid)
+        
+        return participants
+    
     async def list_groups(self, include_participants: bool = True) -> List[Dict[str, Any]]:
         """
         Lista todos os grupos.

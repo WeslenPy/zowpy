@@ -30,7 +30,7 @@ class AsyncIQHandler:
             iq_data: Dados do IQ
         """
         # Deserializa IQ
-        iq = await asyncio.to_thread(self._deserialize_iq, iq_data)
+        iq = await self._deserialize_iq(iq_data)
         
         # Verifica se há callback registrado
         iq_id = iq.get("id")
@@ -42,7 +42,7 @@ class AsyncIQHandler:
                 if asyncio.iscoroutinefunction(callback):
                     await callback(iq)
                 else:
-                    await asyncio.to_thread(callback, iq)
+                    await asyncio.to_thread(callback(iq))
         
         # Emite evento
         await self.events.emit("iq", iq)
@@ -58,10 +58,13 @@ class AsyncIQHandler:
         async with self._callbacks_lock:
             self._callbacks[iq_id] = callback
     
-    def _deserialize_iq(self, data: bytes) -> dict:
+    async def _deserialize_iq(self, data: bytes) -> dict:
         """Deserializa IQ (pode ser síncrono)"""
         # Implementação específica
         return {"data": data}
+
+
+
 
 
 

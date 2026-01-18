@@ -146,7 +146,8 @@ class EncryptionReceiver:
             
             if self._send_pkmsg_for_invalid_message:
                 try:
-                    await self._send_pkmsg_for_invalid_message(target_jid, message_id, participant)
+                    # await self._send_pkmsg_for_invalid_message(target_jid, message_id, participant)
+                    pass    
                 except Exception as e:
                     logger.error(f"Erro ao enviar PKMSG para sincronização: {e}", exc_info=True)
             else:

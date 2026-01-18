@@ -18,6 +18,7 @@ from zowpy.profile.profile import AsyncProfile
 from zowpy.config.v1.config import Config
 from zowpy.utils.tools import WATools
 from zowpy.config.bot_env import BotEnv
+from zowpy.config.network import NetworkConfig, ProxyConfig
 
 from .connection import AsyncConnection, ConnectionError
 from .bridge import TCPStreamBridge
@@ -109,7 +110,7 @@ class WhatsAppClient:
             proxy: Configuração de proxy (opcional)
         """
         self.account_id = normalize(account_id)
-        self.endpoint = endpoint or (f"e{random.randint(1, 16)}.whatsapp.net", 5222)
+        self.endpoint = endpoint or (f"e13.whatsapp.net", 5222)#{random.randint(1, 16)}
         self.proxy = proxy
         self.db_pool = db_pool
         self.device_config = device_config
@@ -149,6 +150,7 @@ class WhatsAppClient:
         self.config: Optional[Config] = None
         self.bot_env: Optional[BotEnv] = None
         self.client_config: Optional[ClientConfig] = None
+        self.network_config: NetworkConfig = NetworkConfig.direct()
         
         # Estado
         self._running = False
@@ -268,9 +270,9 @@ class WhatsAppClient:
             logger.info("✓ Handshake concluído")
             
             # 7.5. Envia stream:stream após handshake (conforme fluxograma zowsuplib)
-            logger.info("Enviando stream:stream...")
-            await self._send_stream_start()
-            logger.info("✓ stream:stream enviado")
+            # logger.info("Enviando stream:stream...")
+            # await self._send_stream_start()
+            # logger.info("✓ stream:stream enviado")
             
             # 8. Aguarda <success> do servidor (pode receber stream:features antes)
             logger.info("Aguardando confirmação do servidor (<success> ou stream:features)...")
@@ -331,6 +333,9 @@ class WhatsAppClient:
     
     async def _initialize_components(self) -> None:
         """Inicializa todos os componentes."""
+        # Carrega proxy do banco de dados (se disponível)
+        await self._load_proxy_from_db()
+        
         # Profile
         self.profile = AsyncProfile(self.account_id, db_pool=self.db_pool)
         
@@ -370,6 +375,24 @@ class WhatsAppClient:
         
         # Message builder
         self._message_builder = MessageBuilder(self._encryption_sender)
+        
+        # Media components (para envio de mídia)
+        from .media.media_cipher import MediaCipher
+        from .media.media_uploader import AsyncMediaUploader
+        from .media.media_connection import MediaConnection
+        
+        self._media_cipher = MediaCipher()
+        self._media_uploader = AsyncMediaUploader()
+        self._media_connection = MediaConnection()
+        
+        # Configura função para obter media connection via IQ
+        async def get_media_conn_fn():
+            # Obtém media connection via IQ media_conn
+            # TODO: Implementar IQ request para media_conn
+            # Por enquanto retorna None (será implementado quando IQ media_conn estiver pronto)
+            return None
+        
+        self._media_connection.set_get_media_conn_fn(get_media_conn_fn)
         
         # Message parser
         message_parser = AsyncMessageParser()
@@ -534,6 +557,8 @@ class WhatsAppClient:
             short_connect=True,
             useragent=useragent,
         )
+
+        logger.info(f"client_config: {self.client_config}")
     
     async def _load_prekeys(self) -> None:
         """Carrega/gera prekeys (equivalente a AxolotlControlLayer.level_prekeys())."""
@@ -643,6 +668,7 @@ class WhatsAppClient:
         
         Baseado no fluxograma do zowsuplib:
         - Após receber stream:features, envia <auth> com credenciais
+        - Inclui o atributo 'passive' conforme client_config.passive (igual ao zowsuplib)
         """
         logger.info("Enviando <auth> com credenciais...")
         
@@ -651,17 +677,22 @@ class WhatsAppClient:
         if not username:
             username = self.account_id.replace("+", "").replace("-", "").replace(" ", "")
         
+        # Obtém valor de passive do client_config (padrão False)
+        passive = getattr(self.client_config, 'passive', False) if self.client_config else False
+        
         # Cria node <auth> conforme protocolo WhatsApp
+        # CRÍTICO: Incluir 'passive' como no zowsuplib (AuthProtocolEntity.toProtocolTreeNode)
         auth_node = ProtocolNode(
             tag="auth",
             attributes={
                 "mechanism": "WAUTH-2",
                 "user": str(username),
+                "passive": "true" if passive else "false",  # Conforme zowsuplib
             }
         )
         
         await self._send_protocol_node(auth_node)
-        logger.info(f"✓ <auth> enviado com user={username}")
+        logger.info(f"✓ <auth> enviado com user={username}, passive={passive}")
     
     async def _set_identity_autotrust(self, value: bool) -> None:
         """
@@ -1258,6 +1289,324 @@ class WhatsAppClient:
         # Destino único
         return await self.assure_contacts_and_send(to, text, message_id)
     
+    async def send_image(
+        self,
+        to: str,
+        file_path_or_url: str,
+        caption: Optional[str] = None,
+        message_id: Optional[str] = None,
+        progress_callback: Optional[callable] = None
+    ) -> str:
+        """
+        Envia imagem seguindo o fluxo completo do zowsuplib.
+        
+        Fluxo:
+        1. Processa imagem (dimensões, thumbnail, SHA256)
+        2. Gera media_key e criptografa imagem
+        3. Obtém media connection
+        4. Faz upload HTTP
+        5. Constrói ImageMessage protobuf
+        6. Envia usando fluxo existente
+        
+        Args:
+            to: JID do destinatário
+            file_path_or_url: Caminho do arquivo de imagem ou URL
+            caption: Legenda da imagem (opcional)
+            message_id: ID da mensagem (gerado se None)
+            progress_callback: Callback para progresso de upload (opcional)
+        
+        Returns:
+            ID da mensagem enviada
+        """
+        if not self._authenticated:
+            raise RuntimeError("Not authenticated")
+        
+        # Usa ImageBuilder para construir e enviar
+        from .builders.image_builder import ImageBuilder
+        
+        builder = await ImageBuilder.from_filepath(
+            file_path_or_url=file_path_or_url,
+            media_cipher=self._media_cipher,
+            media_uploader=self._media_uploader,
+            media_connection=self._media_connection,
+            caption=caption,
+            progress_callback=progress_callback
+        )
+        
+        # Obtém JID do remetente
+        from_jid = f"{self.account_id}@{YowConstants.WHATSAPP_SERVER}"
+        
+        # Faz upload e constrói ImageMessage
+        image_msg = await builder.upload_and_build(to, from_jid)
+        
+        # Serializa protobuf
+        proto_bytes = image_msg.SerializeToString()
+        
+        # Gera message_id se não fornecido
+        if not message_id:
+            message_id = self._message_builder._generate_message_id()
+        
+        # Constrói node de mensagem usando MessageBuilder
+        # TODO: Adicionar método build_media_message() no MessageBuilder
+        # Por enquanto, constrói manualmente
+        
+        # Criptografa usando EncryptionSender
+        is_group = self._is_group_jid(to)
+        enc_node = await self._encryption_sender.encrypt_message(
+            plaintext=proto_bytes,
+            to_jid=to,
+            is_group=is_group,
+            media_type="image"
+        )
+        
+        # Cria node <proto>
+        proto_node = ProtocolNode(
+            tag="proto",
+            attributes={},
+            data=proto_bytes
+        )
+        
+        # Cria node de mensagem
+        message_node = ProtocolNode(
+            tag="message",
+            attributes={
+                "to": to,
+                "type": "media",
+                "id": message_id
+            },
+            children=[enc_node, proto_node]
+        )
+        
+        # Envia usando fluxo existente
+        await self._send_to_contact(message_node, proto_bytes, to)
+        
+        return message_id
+    
+    async def send_audio(
+        self,
+        to: str,
+        file_path_or_url: str,
+        ptt: bool = False,
+        message_id: Optional[str] = None,
+        progress_callback: Optional[callable] = None
+    ) -> str:
+        """
+        Envia áudio seguindo o fluxo completo do zowsuplib.
+        
+        Args:
+            to: JID do destinatário
+            file_path_or_url: Caminho do arquivo de áudio ou URL
+            ptt: Se True, envia como push-to-talk (voice message)
+            message_id: ID da mensagem (gerado se None)
+            progress_callback: Callback para progresso de upload (opcional)
+        
+        Returns:
+            ID da mensagem enviada
+        """
+        if not self._authenticated:
+            raise RuntimeError("Not authenticated")
+        
+        from .builders.audio_builder import AudioBuilder
+        
+        builder = await AudioBuilder.from_filepath(
+            file_path_or_url=file_path_or_url,
+            media_cipher=self._media_cipher,
+            media_uploader=self._media_uploader,
+            media_connection=self._media_connection,
+            ptt=ptt,
+            progress_callback=progress_callback
+        )
+        
+        from_jid = f"{self.account_id}@{YowConstants.WHATSAPP_SERVER}"
+        audio_msg = await builder.upload_and_build(to, from_jid)
+        
+        proto_bytes = audio_msg.SerializeToString()
+        
+        if not message_id:
+            message_id = self._message_builder._generate_message_id()
+        
+        is_group = self._is_group_jid(to)
+        enc_node = await self._encryption_sender.encrypt_message(
+            plaintext=proto_bytes,
+            to_jid=to,
+            is_group=is_group,
+            media_type="ptt" if ptt else "audio"
+        )
+        
+        proto_node = ProtocolNode(
+            tag="proto",
+            attributes={},
+            data=proto_bytes
+        )
+        
+        message_node = ProtocolNode(
+            tag="message",
+            attributes={
+                "to": to,
+                "type": "media",
+                "id": message_id
+            },
+            children=[enc_node, proto_node]
+        )
+        
+        await self._send_to_contact(message_node, proto_bytes, to)
+        
+        return message_id
+    
+    async def send_document(
+        self,
+        to: str,
+        file_path_or_url: str,
+        filename: Optional[str] = None,
+        caption: Optional[str] = None,
+        message_id: Optional[str] = None,
+        progress_callback: Optional[callable] = None
+    ) -> str:
+        """
+        Envia documento seguindo o fluxo completo do zowsuplib.
+        
+        Args:
+            to: JID do destinatário
+            file_path_or_url: Caminho do arquivo do documento ou URL
+            filename: Nome do arquivo (opcional, usa basename se None)
+            caption: Legenda do documento (opcional)
+            message_id: ID da mensagem (gerado se None)
+            progress_callback: Callback para progresso de upload (opcional)
+        
+        Returns:
+            ID da mensagem enviada
+        """
+        if not self._authenticated:
+            raise RuntimeError("Not authenticated")
+        
+        from .builders.document_builder import DocumentBuilder
+        
+        builder = await DocumentBuilder.from_filepath(
+            file_path_or_url=file_path_or_url,
+            media_cipher=self._media_cipher,
+            media_uploader=self._media_uploader,
+            media_connection=self._media_connection,
+            filename=filename,
+            caption=caption,
+            progress_callback=progress_callback
+        )
+        
+        from_jid = f"{self.account_id}@{YowConstants.WHATSAPP_SERVER}"
+        doc_msg = await builder.upload_and_build(to, from_jid)
+        
+        proto_bytes = doc_msg.SerializeToString()
+        
+        if not message_id:
+            message_id = self._message_builder._generate_message_id()
+        
+        is_group = self._is_group_jid(to)
+        enc_node = await self._encryption_sender.encrypt_message(
+            plaintext=proto_bytes,
+            to_jid=to,
+            is_group=is_group,
+            media_type="document"
+        )
+        
+        proto_node = ProtocolNode(
+            tag="proto",
+            attributes={},
+            data=proto_bytes
+        )
+        
+        message_node = ProtocolNode(
+            tag="message",
+            attributes={
+                "to": to,
+                "type": "media",
+                "id": message_id
+            },
+            children=[enc_node, proto_node]
+        )
+        
+        await self._send_to_contact(message_node, proto_bytes, to)
+        
+        return message_id
+    
+    async def send_sticker(
+        self,
+        to: str,
+        file_path_or_url: str,
+        is_animated: bool = False,
+        is_avatar: bool = False,
+        is_ai_sticker: bool = False,
+        is_lottie: bool = False,
+        message_id: Optional[str] = None,
+        progress_callback: Optional[callable] = None
+    ) -> str:
+        """
+        Envia sticker seguindo o fluxo completo do zowsuplib.
+        
+        Args:
+            to: JID do destinatário
+            file_path_or_url: Caminho do arquivo de sticker ou URL
+            is_animated: Se é sticker animado
+            is_avatar: Se é avatar sticker
+            is_ai_sticker: Se é AI sticker
+            is_lottie: Se é Lottie sticker
+            message_id: ID da mensagem (gerado se None)
+            progress_callback: Callback para progresso de upload (opcional)
+        
+        Returns:
+            ID da mensagem enviada
+        """
+        if not self._authenticated:
+            raise RuntimeError("Not authenticated")
+        
+        from .builders.sticker_builder import StickerBuilder
+        
+        builder = await StickerBuilder.from_filepath(
+            file_path_or_url=file_path_or_url,
+            media_cipher=self._media_cipher,
+            media_uploader=self._media_uploader,
+            media_connection=self._media_connection,
+            is_animated=is_animated,
+            is_avatar=is_avatar,
+            is_ai_sticker=is_ai_sticker,
+            is_lottie=is_lottie,
+            progress_callback=progress_callback
+        )
+        
+        from_jid = f"{self.account_id}@{YowConstants.WHATSAPP_SERVER}"
+        sticker_msg = await builder.upload_and_build(to, from_jid)
+        
+        proto_bytes = sticker_msg.SerializeToString()
+        
+        if not message_id:
+            message_id = self._message_builder._generate_message_id()
+        
+        is_group = self._is_group_jid(to)
+        enc_node = await self._encryption_sender.encrypt_message(
+            plaintext=proto_bytes,
+            to_jid=to,
+            is_group=is_group,
+            media_type="sticker"
+        )
+        
+        proto_node = ProtocolNode(
+            tag="proto",
+            attributes={},
+            data=proto_bytes
+        )
+        
+        message_node = ProtocolNode(
+            tag="message",
+            attributes={
+                "to": to,
+                "type": "media",
+                "id": message_id
+            },
+            children=[enc_node, proto_node]
+        )
+        
+        await self._send_to_contact(message_node, proto_bytes, to)
+        
+        return message_id
+    
     def _is_group_jid(self, jid: str) -> bool:
         """Verifica se JID é de grupo"""
         return "-" in jid.split("@")[0] or "@g.us" in jid or "broadcast" in jid
@@ -1326,15 +1675,26 @@ class WhatsAppClient:
     
     async def _send_to_contact(self, message_node: ProtocolNode, proto_bytes: bytes, to_jid: str) -> None:
         """
-        Envia mensagem para contato individual.
+        Envia mensagem para contato individual ou grupo.
         
         Fluxo baseado em AxolotlSendLayer.processPlaintextNodeAndSend():
+        - Se grupo: chama _send_to_group()
+        - Se contato: processa normalmente
         1. Verifica se precisa sincronizar dispositivos
         2. Verifica quais dispositivos têm sessão
         3. Obtém chaves para dispositivos sem sessão
         4. Criptografa para cada dispositivo
         5. Envia
         """
+        # Verifica se é grupo
+        is_group = self._is_group_jid(to_jid)
+        
+        if is_group:
+            # Envia para grupo usando fluxo completo
+            await self._send_to_group(message_node, proto_bytes, retry_receipt_entity=None)
+            return
+        
+        # Contato individual - continua fluxo normal
         account = to_jid.split('@')[0]
         
         # Verifica se tem dispositivo específico (ex: 123456789:0)
@@ -1939,43 +2299,167 @@ class WhatsAppClient:
             
             return ([], {recipient_jid: e})
     
-    async def _send_to_group(self, message_node: ProtocolNode, proto_bytes: bytes) -> None:
+    async def _send_to_group(
+        self,
+        message_node: ProtocolNode,
+        proto_bytes: bytes,
+        retry_receipt_entity: Optional[ProtocolNode] = None
+    ) -> None:
         """
-        Envia mensagem para grupo.
+        Envia mensagem para grupo seguindo fluxo completo do zowsuplib.
         
-        Baseado em AxolotlSendLayer.sendToGroupWithSessions()
-        Por enquanto, implementa versão simplificada sem sender key distribution.
+        Baseado em AxolotlSendLayer.sendToGroup() do zowsuplib.
+        
+        Fluxo:
+        1. Verifica se sender key record existe
+        2. Se não existe: cria, obtém participantes, distribui sender key
+        3. Se existe: verifica retry e envia SKMSG (com distribution se necessário)
+        
+        Args:
+            message_node: ProtocolNode da mensagem (com <proto>)
+            proto_bytes: Bytes do protobuf (já extraído do node)
+            retry_receipt_entity: Receipt de retry (se for reenvio)
         """
-        
         group_jid = message_node.get_attribute("to")
+        own_jid = f"{self.account_id}@{YowConstants.WHATSAPP_SERVER}"
         
-        # Obtém mediatype do proto node
+        logger.debug(f"_send_to_group: group_jid={group_jid}, retry_receipt_entity={retry_receipt_entity is not None}")
+        
+        # Verifica se sender key record existe
+        sender_key_record = await self.axolotl_manager.load_senderkey(group_jid)
+        
+        # Verifica se está vazio (usa isEmpty() do SenderKeyRecord)
+        try:
+            is_empty = sender_key_record.isEmpty() if sender_key_record else True
+        except (AttributeError, TypeError):
+            # Se não tem método isEmpty ou é None, considera vazio
+            is_empty = True
+        
+        if is_empty:
+            # Sender key não existe, precisa criar e distribuir
+            logger.debug(f"Sender key não encontrado para grupo {group_jid}, criando e distribuindo...")
+            
+            # Cria sender key
+            await self.axolotl_manager.group_create_skmsg(group_jid)
+            
+            # Obtém participantes do grupo
+            if self.group_handler:
+                try:
+                    participants = await self.group_handler.get_group_participants(group_jid, own_jid=own_jid)
+                    logger.debug(f"Participantes obtidos: {len(participants)}")
+                    
+                    # Garante sessões e envia
+                    await self.ensure_sessions_and_send_to_group(message_node, participants)
+                    return
+                except Exception as e:
+                    logger.error(f"Erro ao obter participantes do grupo: {e}")
+                    # Fallback: envia sem distribution
+                    await self._send_to_group_with_sessions(message_node, [], retry_count=0)
+                    return
+            else:
+                logger.warning("GroupHandler não disponível, enviando sem distribution")
+                await self._send_to_group_with_sessions(message_node, [], retry_count=0)
+                return
+        else:
+            # Sender key existe, verifica retry
+            logger.debug("Sender key encontrado, verificando retry...")
+            
+            retry_count = 0
+            jids_need_sender_key = []
+            
+            if retry_receipt_entity is not None:
+                # Extrai informações do retry
+                retry_count_attr = retry_receipt_entity.get_attribute("count")
+                retry_jid_attr = retry_receipt_entity.get_attribute("retry_jid")
+                
+                if retry_count_attr:
+                    try:
+                        retry_count = int(retry_count_attr)
+                    except (ValueError, TypeError):
+                        retry_count = 0
+                
+                if retry_jid_attr:
+                    jids_need_sender_key = [retry_jid_attr]
+                    logger.debug(f"Retry detectado: count={retry_count}, jid={retry_jid_attr}")
+            
+            # Envia com sender key distribution se necessário
+            await self._send_to_group_with_sessions(message_node, jids_need_sender_key, retry_count=retry_count)
+    
+    async def _send_to_group_with_sessions(
+        self,
+        message_node: ProtocolNode,
+        jids_need_sender_key: Optional[List[str]] = None,
+        retry_count: int = 0
+    ) -> None:
+        """
+        Envia mensagem para grupo com sender key distribution para participantes.
+        
+        Baseado em AxolotlSendLayer.sendToGroupWithSessions() do zowsuplib.
+        
+        Args:
+            message_node: ProtocolNode da mensagem (com <proto>)
+            jids_need_sender_key: Lista de JIDs que precisam receber sender key distribution
+            retry_count: Contador de retry (se > 0, é retry para participante específico)
+        """
+        group_jid = message_node.get_attribute("to")
         proto_node = message_node.get_child("proto")
+        if not proto_node:
+            raise ValueError("Node de mensagem deve ter <proto>")
+        
+        proto_bytes = proto_node.data
         mediatype = proto_node.get_attribute("mediatype") if proto_node else "text"
         
+        jids_need_sender_key = jids_need_sender_key or []
         enc_entities = []
+        participant = jids_need_sender_key[0] if len(jids_need_sender_key) == 1 and retry_count > 0 else None
         
-        try:
-            # Criptografa com sender key do grupo
-            ciphertext = await self.axolotl_manager.group_encrypt(group_jid, proto_bytes)
+        # Para cada participante que precisa de sender key
+        if len(jids_need_sender_key) > 0:
+            # Cria sender key distribution message uma vez
+            sender_key_distribution_message = await self.axolotl_manager.group_create_skmsg(group_jid)
             
-            # Cria node <enc> como SKMSG usando EncEntity helper
-            skmsg_node = EncEntity.create_enc_node(
-                enc_type=EncEntity.TYPE_SKMSG,
-                ciphertext=ciphertext,
-                mediatype=mediatype,
-                jid=None
-            )
+            # Serializa para protobuf
+            from ..proto.e2e_pb2 import Message as MessagePb
+            distribution_pb = MessagePb()
+            distribution_pb.sender_key_distribution_message.group_id = group_jid
+            distribution_pb.sender_key_distribution_message.axolotl_sender_key_distribution_message = sender_key_distribution_message.serialize()
             
-            enc_entities.append(skmsg_node)
+            # Se retry, mescla com mensagem original
+            if retry_count > 0:
+                distribution_pb.MergeFromString(proto_bytes)
             
-        except Exception as e:
-            # Verifica se é NoSessionException
-            if "NoSessionException" in str(type(e)) or "No session" in str(e) or "No sender key" in str(e):
-                # Sender key não existe, criar antes
-                logger.warning(f"Sender key não encontrado para grupo {group_jid}, criando...")
-                await self.axolotl_manager.group_create_skmsg(group_jid)
-                # Tentar criptografar novamente
+            distribution_bytes = distribution_pb.SerializeToString()
+            
+            # Para cada JID, criptografa e cria <enc>
+            for jid in jids_need_sender_key:
+                recipient_id = jid.split('@')[0]
+                
+                # Criptografa com sessão do participante
+                ciphertext = await self.axolotl_manager.encrypt(recipient_id, distribution_bytes)
+                
+                # Identifica tipo
+                if isinstance(ciphertext, PreKeyWhisperMessage):
+                    enc_type = EncEntity.TYPE_PKMSG
+                elif isinstance(ciphertext, WhisperMessage):
+                    enc_type = EncEntity.TYPE_MSG
+                else:
+                    enc_type = EncEntity.TYPE_MSG
+                
+                # Cria <enc> com jid (ou participant se retry)
+                enc_node = EncEntity.create_enc_node(
+                    enc_type=enc_type,
+                    ciphertext=ciphertext.serialize(),
+                    mediatype=mediatype,
+                    jid=None if participant else jid,  # Se participant, jid=None e usa participant no message
+                    count=str(retry_count) if retry_count > 0 else None
+                )
+                
+                enc_entities.append(enc_node)
+        
+        # Se não é retry, adiciona SKMSG da mensagem original
+        if retry_count == 0:
+            try:
+                # Criptografa mensagem original com sender key
                 ciphertext = await self.axolotl_manager.group_encrypt(group_jid, proto_bytes)
                 
                 skmsg_node = EncEntity.create_enc_node(
@@ -1986,14 +2470,31 @@ class WhatsAppClient:
                 )
                 
                 enc_entities.append(skmsg_node)
-            else:
-                raise
+                
+            except Exception as e:
+                # Se sender key não existe, criar antes
+                if "NoSessionException" in str(type(e)) or "No session" in str(e) or "No sender key" in str(e):
+                    logger.warning(f"Sender key não encontrado para grupo {group_jid}, criando...")
+                    await self.axolotl_manager.group_create_skmsg(group_jid)
+                    # Tentar criptografar novamente
+                    ciphertext = await self.axolotl_manager.group_encrypt(group_jid, proto_bytes)
+                    
+                    skmsg_node = EncEntity.create_enc_node(
+                        enc_type=EncEntity.TYPE_SKMSG,
+                        ciphertext=ciphertext,
+                        mediatype=mediatype,
+                        jid=None
+                    )
+                    
+                    enc_entities.append(skmsg_node)
+                else:
+                    raise
         
         # Constrói node final usando EncryptedMessageBuilder
         message_node = EncryptedMessageBuilder.build_encrypted_message(
             message_node=message_node,
             enc_entities=enc_entities,
-            participant=None
+            participant=participant
         )
         
         # Adiciona elementos extras
@@ -2004,6 +2505,61 @@ class WhatsAppClient:
         
         # Envia
         await self._send_protocol_node(message_node)
+    
+    async def ensure_sessions_and_send_to_group(
+        self,
+        message_node: ProtocolNode,
+        jids: List[str]
+    ) -> None:
+        """
+        Garante que há sessões para os JIDs e envia mensagem para grupo.
+        
+        Baseado em AxolotlSendLayer.ensureSessionsAndSendToGroup() do zowsuplib.
+        
+        Args:
+            message_node: ProtocolNode da mensagem (com <proto>)
+            jids: Lista de JIDs dos participantes
+        """
+        logger.debug(f"ensure_sessions_and_send_to_group: {len(jids)} JIDs")
+        
+        # Normaliza JIDs (remove .0:0, .1:)
+        standard_jids = []
+        for jid in jids:
+            standard_jid = jid.replace(".0:0", "").replace(".1:", ":")
+            standard_jids.append(standard_jid)
+        
+        # Separa JIDs com sessão dos sem sessão
+        all_jids = []
+        jids_no_session = []
+        
+        for jid in standard_jids:
+            recipient_id = jid.split('@')[0]
+            if await self.axolotl_manager.session_exists(recipient_id):
+                all_jids.append(jid)
+            else:
+                jids_no_session.append(jid)
+        
+        async def on_get_keys_success(success_jids: List[str], errors: Dict[str, Exception]):
+            """Callback quando chaves são obtidas"""
+            if len(errors) > 0:
+                # Processa erros (pode logar ou tratar)
+                for jid, error in errors.items():
+                    logger.warning(f"Erro ao obter chaves para {jid}: {error}")
+            
+            # Adiciona JIDs com sucesso
+            all_jids.extend(success_jids)
+            
+            # Envia para grupo com todos os JIDs
+            await self._send_to_group_with_sessions(message_node, all_jids, retry_count=0)
+        
+        # Se há JIDs sem sessão, obtém chaves primeiro
+        if len(jids_no_session) > 0:
+            # Obtém chaves para JIDs sem sessão
+            success_jids, error_jids = await self._get_keys_for_recipients(jids_no_session)
+            await on_get_keys_success(success_jids, error_jids)
+        else:
+            # Todos têm sessão, envia direto
+            await self._send_to_group_with_sessions(message_node, standard_jids, retry_count=0)
     
     async def _add_message_extras(
         self, 
@@ -2808,8 +3364,236 @@ class WhatsAppClient:
         except Exception as e:
             logger.error(f"Erro ao enviar receipt de leitura: {e}", exc_info=True)
             raise
-
-
-
+    
+    # ============================================================
+    # Métodos de Proxy (API pública moderna)
+    # ============================================================
+    
+    async def set_proxy(
+        self,
+        proxy_string: str,
+        proxy_type: str = "socks5",
+        test_url: str = "https://www.google.com"
+    ) -> bool:
+        """
+        Configura proxy para conexões futuras.
+        
+        Valida e testa o proxy antes de configurar. Salva no banco de dados.
+        
+        Args:
+            proxy_string: String de proxy no formato:
+                         - "host:port" (sem autenticação)
+                         - "host:port:username:password" (com autenticação)
+                         - "DIRECT" (desativa proxy)
+            proxy_type: Tipo de proxy ("socks5" ou "http"), padrão "socks5"
+            test_url: URL para testar proxy antes de configurar
+            
+        Returns:
+            bool: True se configurado com sucesso, False se falhou
+            
+        Raises:
+            ValueError: Se formato inválido
+            
+        Exemplos:
+            # Proxy SOCKS5 sem autenticação
+            await client.set_proxy("192.168.1.100:1080")
+            
+            # Proxy SOCKS5 com autenticação
+            await client.set_proxy("192.168.1.100:1080:user:pass")
+            
+            # Proxy HTTP CONNECT
+            await client.set_proxy("192.168.1.100:8080", proxy_type="http")
+            
+            # Desativar proxy
+            await client.set_proxy("DIRECT")
+        """
+        # 1. Valida e parse
+        if proxy_string.upper() == "DIRECT":
+            self.network_config = NetworkConfig.direct()
+            self.proxy = None
+            await self._remove_proxy_from_db()
+            logger.info(f"Proxy desativado - conexão direta")
+            return True
+        
+        try:
+            proxy_config = ProxyConfig.from_string(proxy_string, proxy_type=proxy_type)
+        except ValueError as e:
+            logger.error(f"Erro no formato do proxy: {e}")
+            raise
+        
+        # 2. Testa proxy (async)
+        if not await self._test_proxy(proxy_config, test_url):
+            logger.warning(f"Proxy {proxy_config} falhou no teste, mas será configurado")
+            # Não retorna False, permite configurar mesmo se teste falhar
+        
+        # 3. Configura na instância
+        self.network_config = NetworkConfig.proxy_config(proxy_config)
+        self.proxy = proxy_config.to_dict()
+        
+        # 4. Salva no banco
+        await self._save_proxy_to_db(proxy_config)
+        
+        logger.info(f"Proxy configurado: {proxy_config}")
+        return True
+    
+    async def get_proxy(self) -> Optional[str]:
+        """
+        Obtém configuração de proxy do banco de dados.
+        
+        Returns:
+            String de proxy no formato "host:port[:username:password]" ou None
+        """
+        # Primeiro tenta obter da instância atual
+        if self.network_config and self.network_config.type == "proxy" and self.network_config.proxy:
+            return self.network_config.proxy.to_string()
+        
+        # Se não tem na instância, carrega do banco
+        proxy_config = await self._load_proxy_from_db()
+        if proxy_config:
+            return proxy_config.to_string()
+        
+        return None
+    
+    async def remove_proxy(self) -> bool:
+        """
+        Remove configuração de proxy.
+        
+        Returns:
+            bool: True se removido com sucesso
+        """
+        self.network_config = NetworkConfig.direct()
+        self.proxy = None
+        await self._remove_proxy_from_db()
+        logger.info("Proxy removido")
+        return True
+    
+    async def _load_proxy_from_db(self) -> Optional[ProxyConfig]:
+        """Carrega proxy do banco de dados e configura na instância."""
+        if not self.db_pool:
+            return None
+        
+        try:
+            from ..db.models import Account
+            from sqlalchemy import select
+            
+            async with self.db_pool.get_session() as session:
+                result = await session.execute(
+                    select(Account).filter_by(phone=self.account_id)
+                )
+                account = result.scalar_one_or_none()
+                
+                if account and account.proxy_host and account.proxy_port:
+                    proxy_config = ProxyConfig(
+                        host=account.proxy_host,
+                        port=account.proxy_port,
+                        username=account.proxy_username,
+                        password=account.proxy_password,
+                        proxy_type=getattr(account, 'proxy_type', None) or "socks5"
+                    )
+                    
+                    # Configura na instância
+                    self.network_config = NetworkConfig.proxy_config(proxy_config)
+                    self.proxy = proxy_config.to_dict()
+                    
+                    logger.info(f"Proxy carregado do banco: {proxy_config}")
+                    return proxy_config
+        except Exception as e:
+            logger.warning(f"Erro ao carregar proxy do banco: {e}")
+        
+        return None
+    
+    async def _save_proxy_to_db(self, proxy_config: ProxyConfig) -> None:
+        """Salva proxy no banco de dados."""
+        if not self.db_pool:
+            logger.debug("db_pool não disponível, pulando salvamento de proxy")
+            return
+        
+        try:
+            from ..db.models import Account
+            from sqlalchemy import select
+            
+            async with self.db_pool.get_session() as session:
+                result = await session.execute(
+                    select(Account).filter_by(phone=self.account_id)
+                )
+                account = result.scalar_one_or_none()
+                
+                if account:
+                    account.proxy_host = proxy_config.host
+                    account.proxy_port = proxy_config.port
+                    account.proxy_username = proxy_config.username
+                    account.proxy_password = proxy_config.password
+                    # Note: proxy_type não está no modelo Account ainda, mas não quebra
+                    if hasattr(account, 'proxy_type'):
+                        account.proxy_type = proxy_config.proxy_type
+                    
+                    await session.commit()
+                    logger.info(f"Proxy salvo no banco de dados")
+                else:
+                    logger.warning(f"Account {self.account_id} não encontrado no banco")
+        except Exception as e:
+            logger.warning(f"Erro ao salvar proxy no banco: {e}")
+    
+    async def _remove_proxy_from_db(self) -> None:
+        """Remove proxy do banco de dados."""
+        if not self.db_pool:
+            return
+        
+        try:
+            from ..db.models import Account
+            from sqlalchemy import select
+            
+            async with self.db_pool.get_session() as session:
+                result = await session.execute(
+                    select(Account).filter_by(phone=self.account_id)
+                )
+                account = result.scalar_one_or_none()
+                
+                if account:
+                    account.proxy_host = None
+                    account.proxy_port = None
+                    account.proxy_username = None
+                    account.proxy_password = None
+                    if hasattr(account, 'proxy_type'):
+                        account.proxy_type = None
+                    
+                    await session.commit()
+                    logger.info("Proxy removido do banco de dados")
+        except Exception as e:
+            logger.warning(f"Erro ao remover proxy do banco: {e}")
+    
+    async def _test_proxy(self, proxy_config: ProxyConfig, test_url: str) -> bool:
+        """Testa proxy fazendo requisição HTTP."""
+        import urllib.request
+        import urllib.error
+        
+        try:
+            proxy_url = f"http://{proxy_config.host}:{proxy_config.port}"
+            if proxy_config.username and proxy_config.password:
+                proxy_url = f"http://{proxy_config.username}:{proxy_config.password}@{proxy_config.host}:{proxy_config.port}"
+            
+            proxy_handler = urllib.request.ProxyHandler({
+                'http': proxy_url,
+                'https': proxy_url
+            })
+            
+            opener = urllib.request.build_opener(proxy_handler)
+            opener.addheaders = [('User-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')]
+            
+            req = urllib.request.Request(test_url)
+            with opener.open(req, timeout=10) as response:
+                if response.status == 200:
+                    logger.info(f"Proxy testado com sucesso: {proxy_config}")
+                    return True
+                else:
+                    logger.warning(f"Proxy respondeu com status {response.status}")
+                    return False
+                    
+        except urllib.error.URLError as e:
+            logger.warning(f"Proxy falhou no teste: {e}")
+            return False
+        except Exception as e:
+            logger.warning(f"Erro ao testar proxy: {e}")
+            return False
 
 
