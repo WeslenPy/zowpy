@@ -14,16 +14,23 @@ from ...core.processors.iq_response import IQResponseProcessor
 class IQProcessor(BaseProcessor):
     """Processa IQs recebidos"""
     
-    def __init__(self, events: AsyncEventEmitter, iq_response_processor: Optional[IQResponseProcessor] = None):
+    def __init__(
+        self, 
+        events: AsyncEventEmitter, 
+        iq_response_processor: Optional[IQResponseProcessor] = None,
+        send_node_fn: Optional[callable] = None
+    ):
         """
         Inicializa processor.
         
         Args:
             events: Event emitter para emitir eventos
             iq_response_processor: Processor para processar respostas de IQ e chamar callbacks
+            send_node_fn: Função async para enviar protocol nodes (usado para responder pong)
         """
         self._events = events
         self._iq_response_processor = iq_response_processor
+        self._send_node_fn = send_node_fn
         self._iq_handlers: Dict[str, callable] = {}
     
     def get_priority(self) -> int:
@@ -56,6 +63,39 @@ class IQProcessor(BaseProcessor):
         to_jid = node.get_attribute("to")
         
         logger.debug(f"Processando IQ: id={iq_id}, type={iq_type}, xmlns={iq_xmlns}, from={from_jid}")
+        
+        # CORREÇÃO: Responde pong quando recebe ping (xmlns="urn:xmpp:ping")
+        # Baseado em zowsuplib: YowIqProtocolLayer.recvIq()
+        # if node["xmlns"] == "urn:xmpp:ping":
+        #     entity = PongResultIqProtocolEntity(YowConstants.DOMAIN, node["id"])
+        #     self.toLower(entity.toProtocolTreeNode())
+        if iq_xmlns == "urn:xmpp:ping" and iq_id and self._send_node_fn:
+            # Responde com pong (IQ result com mesmo ID)
+            from ...utils.constants import YowConstants
+            
+            pong_node = ProtocolNode(
+                tag="iq",
+                attributes={
+                    "id": iq_id,
+                    "type": "result",
+                    "to": YowConstants.DOMAIN
+                }
+            )
+            try:
+                await self._send_node_fn(pong_node)
+                logger.debug(f"Pong enviado em resposta ao ping {iq_id} ")
+            except Exception as e:
+                logger.error(f"Erro ao enviar pong para ping {iq_id}: {e}", exc_info=True)
+            # Retorna dados mesmo após responder pong
+            iq_data: Dict[str, Any] = {
+                "id": iq_id,
+                "type": iq_type,
+                "xmlns": iq_xmlns,
+                "from": from_jid,
+                "to": to_jid,
+                "pong_sent": True
+            }
+            return iq_data
         
         iq_data: Dict[str, Any] = {
             "id": iq_id,

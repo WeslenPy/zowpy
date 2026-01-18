@@ -80,6 +80,8 @@ class MessageProcessor(BaseProcessor):
         message_type = node.get_attribute("type")
         
         logger.debug(f"Processando mensagem: id={message_id}, from={from_jid}, type={message_type}")
+
+        logger.debug(f"Node: {node}")
         
         try:
             # 1. Verifica se está criptografada

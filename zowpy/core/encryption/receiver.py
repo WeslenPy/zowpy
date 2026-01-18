@@ -103,13 +103,13 @@ class EncryptionReceiver:
             # Descriptografa baseado no tipo
             if enc_type == self.TYPE_SKMSG:
                 # Mensagem de grupo
-                return await self._decrypt_skmsg(node, enc_data, target_jid)
+                return await self._decrypt_skmsg(node, enc_data, sender_jid)
             elif enc_type == self.TYPE_PKMSG:
                 # Mensagem PreKey
-                return await self._decrypt_pkmsg(node, enc_data, target_jid, enc_version)
+                return await self._decrypt_pkmsg(node, enc_data, sender_jid, enc_version)
             elif enc_type == self.TYPE_MSG:
                 # Mensagem normal (WhisperMessage)
-                return await self._decrypt_msg(node, enc_data, target_jid, enc_version)
+                return await self._decrypt_msg(node, enc_data, sender_jid, enc_version)
             else:
                 logger.warning(f"Tipo de mensagem criptografada não suportado: {enc_type}")
                 return None

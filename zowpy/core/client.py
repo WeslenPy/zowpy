@@ -160,6 +160,11 @@ class WhatsAppClient:
         self._pending_keys_retry: Optional[Tuple] = None
         self._keys_retry_lock = asyncio.Lock()
         
+        # Fila de PKMSG pendentes (para evitar múltiplos pedidos simultâneos)
+        # recipient_jid -> asyncio.Future (agrega múltiplos pedidos para o mesmo recipient)
+        self._pending_keys_requests: Dict[str, asyncio.Future] = {}
+        self._pending_keys_lock = asyncio.Lock()
+        
         # Fila de mensagens enviadas (para retry)
         self._sent_messages_queue: List[ProtocolNode] = []
         self._MAX_SENT_QUEUE = 256
@@ -414,7 +419,15 @@ class WhatsAppClient:
         self._node_router.register(AckProcessor(self.events))
         self._node_router.register(PresenceProcessor(self.events))
         # IQProcessor precisa do IQResponseProcessor para chamar callbacks
-        self._node_router.register(IQProcessor(self.events, self._iq_response_processor))
+        # CORREÇÃO: Passa função de envio para IQProcessor responder pong quando recebe ping
+        async def send_node_fn(node: ProtocolNode):
+            await self._send_protocol_node(node)
+        
+        self._node_router.register(IQProcessor(
+            self.events, 
+            self._iq_response_processor,
+            send_node_fn=send_node_fn
+        ))
         
         # NotificationProcessor precisa de funções do client
         # Será configurado após conexão quando _send_ack estiver disponível
@@ -888,7 +901,7 @@ class WhatsAppClient:
         """Loop de keepalive."""
         while self._running:
             try:
-                await asyncio.sleep(30)
+                await asyncio.sleep(20)
                 if self._connected and self._authenticated:
                     await self._send_keepalive()
             except Exception as e:
@@ -899,7 +912,7 @@ class WhatsAppClient:
         keepalive_node = ProtocolNode(
             tag="iq",
             attributes={
-                "id": f"keepalive_{int(time.time())}",
+                "id":ProtocolNode._generateId(),
                 "type": "get",
                 "xmlns": "w:p",
             }
@@ -1708,6 +1721,7 @@ class WhatsAppClient:
         """
         Obtém chaves para um recipient (prekeys, identity keys, etc.).
         
+        CORREÇÃO: Verifica se já existe PKMSG pendente antes de solicitar.
         Baseado em AxolotlBaseLayer.getKeysFor()
         
         Args:
@@ -1725,6 +1739,34 @@ class WhatsAppClient:
         jids = [recipient_jid]
         
         logger.debug(f"Obtendo chaves para {recipient_jid}, reason={reason}")
+        
+        # CORREÇÃO: Verifica se já existe PKMSG pendente para este recipient
+        async with self._pending_keys_lock:
+            if recipient_jid in self._pending_keys_requests:
+                pending_future = self._pending_keys_requests[recipient_jid]
+                if not pending_future.done():
+                    logger.debug(
+                        f"PKMSG já pendente para {recipient_jid}, "
+                        "aguardando resultado existente"
+                    )
+                    try:
+                        # Aguarda resultado do PKMSG pendente
+                        result = await pending_future
+                        logger.debug(
+                            f"Resultado do PKMSG pendente para {recipient_jid}: "
+                            f"success={len(result[0])}, errors={len(result[1])}"
+                        )
+                        return result
+                    except Exception as e:
+                        logger.error(
+                            f"Erro ao aguardar PKMSG pendente para {recipient_jid}: {e}",
+                            exc_info=True
+                        )
+                        # Remove future com erro e continua para criar novo
+                        del self._pending_keys_requests[recipient_jid]
+                else:
+                    # Future já completou, remove da fila
+                    del self._pending_keys_requests[recipient_jid]
         
         # Cria IQ para obter chaves
         iq_node = PrekeyBuilder.build_get_keys_iq(
@@ -1828,32 +1870,73 @@ class WhatsAppClient:
                         error_jids[jid] = e
                         logger.error(f"Erro ao criar sessão para {jid}: {e}")
                 
-                future.set_result((success_jids, error_jids))
+                if not future.done():
+                    future.set_result((success_jids, error_jids))
+                else:
+                    logger.debug(f"Future já resolvida para IQ {iq_id}, ignorando set_result")
             
             except Exception as e:
                 logger.error(f"Erro ao processar resposta de get keys: {e}", exc_info=True)
-                future.set_exception(e)
+                if not future.done():
+                    future.set_exception(e)
+                else:
+                    logger.debug(f"Future já resolvida para IQ {iq_id}, ignorando set_exception")
+   
+        async with self._pending_keys_lock:
+            # Cria e registra future na fila
+            self._pending_keys_requests[recipient_jid] = future
         
-        async def on_error(error_node: ProtocolNode):
-            """Callback de erro"""
-            error_jids[recipient_jid] = Exception(f"Erro ao obter chaves: {error_node.get_attribute('type')}")
-            future.set_result(([], error_jids))
-        
-        # Registra callbacks e envia
-        self._iq_response_processor.register_callback(iq_id, on_success, timeout=30.0)
-        await self._send_protocol_node(iq_node)
+        timeout = 120
         
         try:
-            # Aguarda resposta
-            result = await asyncio.wait_for(future, timeout=30.0)
+            # Registra callbacks e envia
+            self._iq_response_processor.register_callback(iq_id, on_success, timeout=timeout)
+            await self._send_protocol_node(iq_node)
+            
+            result = await asyncio.wait_for(future, timeout=timeout)
+            
+            # CORREÇÃO: Remove da fila após sucesso
+            async with self._pending_keys_lock:
+                if recipient_jid in self._pending_keys_requests:
+                    # Verifica se é o mesmo future (pode ter sido substituído)
+                    if self._pending_keys_requests[recipient_jid] == future:
+                        del self._pending_keys_requests[recipient_jid]
+                        logger.debug(f"PKMSG concluído para {recipient_jid}, removido da fila")
+            
             return result
+            
         except asyncio.TimeoutError:
             self._iq_response_processor.unregister_callback(iq_id)
+            
+            async with self._pending_keys_lock:
+                if recipient_jid in self._pending_keys_requests:
+                    if self._pending_keys_requests[recipient_jid] == future:
+                        del self._pending_keys_requests[recipient_jid]
+                        logger.debug(f"PKMSG timeout para {recipient_jid}, removido da fila")
+            
             logger.error(f"Timeout ao obter chaves para {recipient_jid}")
+            
+            if not future.done():
+                error_result = ([], {recipient_jid: Exception("Timeout ao obter chaves")})
+                future.set_result(error_result)
+            
             return ([], {recipient_jid: Exception("Timeout ao obter chaves")})
+            
         except Exception as e:
             self._iq_response_processor.unregister_callback(iq_id)
+            
+            async with self._pending_keys_lock:
+                if recipient_jid in self._pending_keys_requests:
+                    if self._pending_keys_requests[recipient_jid] == future:
+                        del self._pending_keys_requests[recipient_jid]
+                        logger.debug(f"PKMSG erro para {recipient_jid}, removido da fila")
+            
             logger.error(f"Erro ao obter chaves para {recipient_jid}: {e}")
+            
+            if not future.done():
+                error_result = ([], {recipient_jid: e})
+                future.set_result(error_result)
+            
             return ([], {recipient_jid: e})
     
     async def _send_to_group(self, message_node: ProtocolNode, proto_bytes: bytes) -> None:
