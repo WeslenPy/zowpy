@@ -59,7 +59,7 @@ class ProtocolTreeNode:
         """
         # Por enquanto serialização síncrona
         # Pode ser movida para thread pool se necessário
-        return await asyncio.to_thread(self._serialize_sync)
+        return self._serialize_sync()
     
     def _serialize_sync(self) -> bytes:
         """Serialização síncrona (pode ser pesada)"""
@@ -75,7 +75,7 @@ class ProtocolTreeNode:
         """
         # Por enquanto deserialização síncrona
         # Pode ser movida para thread pool se necessário
-        return await asyncio.to_thread(cls._deserialize_sync, data)
+        return cls._deserialize_sync(data)
     
     @classmethod
     def _deserialize_sync(cls, data: bytes) -> 'ProtocolTreeNode':

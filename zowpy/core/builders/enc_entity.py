@@ -50,10 +50,10 @@ class EncEntity:
             "v": "2"
         }
         
-        # CORREÇÃO: zowsuplib não adiciona mediatype no node <enc>
-        # O mediatype é mantido apenas no <proto> node, não no <enc>
-        # if mediatype:
-        #     attribs["mediatype"] = mediatype
+        # Adiciona mediatype se fornecido (zowsuplib adiciona mediatype no <enc> node)
+        # Baseado no log do zowsuplib: <enc type="pkmsg" v="2" mediatype="image">
+        if mediatype and mediatype != "text":
+            attribs["mediatype"] = mediatype
         
         # Adiciona count se fornecido e não for "0"
         if count and count != "0":

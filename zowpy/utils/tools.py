@@ -168,7 +168,28 @@ class WATools:
         sha1 = hashlib.sha256()
         sha1.update(data)
         b64Hash = base64.b64encode(sha1.digest())
-        return b64Hash if type(b64Hash) is str else b64Hash.decode()        
+        return b64Hash if type(b64Hash) is str else b64Hash.decode()
+    
+    @staticmethod
+    def generate_media_key():
+        """
+        Gera media_key no formato correto para compatibilidade com zowsuplib.
+        
+        Baseado em zowsuplib/yowsup/layers/protocol_messages/protocolentities/attributes/attributes_downloadablemedia.py:
+        - Gera string de 32 caracteres aleatórios usando alfabeto alfanumérico
+        - Codifica em GBK (ou UTF-8 como fallback)
+        
+        Returns:
+            bytes: media_key de 32 bytes
+        """
+        alp = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
+        media_key_str = ''.join(random.sample(alp, 32))
+        try:
+            # Tenta codificar em GBK (como zowsuplib faz)
+            return media_key_str.encode("GBK")
+        except (LookupError, UnicodeEncodeError):
+            # Fallback para UTF-8 se GBK não disponível
+            return media_key_str.encode("utf-8")        
 
 class StorageTools:
     NAME_CONFIG = "config.json"

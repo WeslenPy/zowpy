@@ -486,14 +486,15 @@ class GroupBuilder:
             to=group_jid
         )
         
-        # Adiciona node <group> vazio (servidor retorna informações)
-        group_node = ProtocolNode(
-            tag="group",
-            attributes={},
+        # Adiciona node <query request="interactive" /> (como zowsuplib)
+        # Baseado em InfoGroupsIqProtocolEntity.toProtocolTreeNode()
+        query_node = ProtocolNode(
+            tag="query",
+            attributes={"request": "interactive"},
             children=[]
         )
         
-        node.children.append(group_node)
+        node.children.append(query_node)
         logger.debug(f"Group get info IQ construído: group={group_jid}")
         return node
     

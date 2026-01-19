@@ -7,7 +7,7 @@ name = "zowpy"
 version = "0.1.0"
 description = "Modern async WhatsApp client library - Zero threads, zero sleeps, just await"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<4"
 license = { text = "GPL-3.0-or-later" }
 authors = [
     { name = "ZowPy maintainers" }
@@ -43,6 +43,12 @@ dependencies = [
     "sqlalchemy>=2.0.0",
     "alembic>=1.13.0",
     "PySocks>=1.7.1",
+    "pydub (>=0.25.1,<0.26.0)",
+    "mutagen (>=1.47.0,<2.0.0)",
+    "opencv-python (>=4.12.0.88,<5.0.0.0)",
+    "pillow (>=12.1.0,<13.0.0)",
+    "names (>=0.3.0,<0.4.0)",
+    "socksio (>=1.0.0,<2.0.0)",
 ]
 
 [project.optional-dependencies]
