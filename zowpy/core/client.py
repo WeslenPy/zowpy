@@ -109,7 +109,7 @@ class WhatsAppClient:
             proxy: Configuração de proxy (opcional)
         """
         self.account_id = normalize(account_id)
-        self.endpoint = endpoint or (f"e{random.randint(1, 16)}.whatsapp.net", 5222)
+        self.endpoint = endpoint or (f"g.whatsapp.net", 443)
         self.proxy = proxy
         self.db_pool = db_pool
         self.device_config = device_config

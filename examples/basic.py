@@ -36,7 +36,7 @@ async def main():
     - Criptografa e envia mensagem
     """
     # Importa conta (se necessário)
-    # six_parts= "201208868278,+PfRJy8TA13JI8rZiQYLnWZ+X0sEYDmB08ZzxiSsWxo=,aL74nYQzRkb3OGioDiAbeCMBadegkXBPO3TE5xf3nFM=,MbuNxcpVZuFg6C4IC2+knQeyvdd+R2icsOSh1vD57Xk=,qCPWUX3807N+/KU4hkogYh9REvvGOxpugFj2CQWIynM=,MjAxMjA4ODY4Mjc4I2nimRzHQYZasFIhLa1u1gEQrfAm"
+    # six_parts= "5522920188182,9rMr8/vVoodZO1q6VpzqFkm/w70vF7VI4gA6TTG86zw=,QHtKi9G5PcT9mPVjRqQMCus7gnLydY6NGrcMyBC+k2k=,G75IVPKbMOzvTj9zzwuczdkHrwsCqjnayjj9/BIddxQ=,oCZqpxyuOEm13ox7BCwkeJKYl29D/k/K5hh3rekgUl8=,no rc"
     six_parts= "201288305948,gehExdJAhPTAkqd5LDQ0zsBmUuuvP837jAQHNgndgnk=,+I0r7c+ZSZl6HmmY9uUI8E3ki4+ZRQ3trbYGISvLem0=,HiqT5eRDdur33fCRLW/UmUi8Sm/c+mEL+ajC/pIE/nk=,AAOlZ9VKgYuEvIetCouS+BS2DXCLd5XS2PispXKClkw=,MjAxMjg4MzA1OTQ4I6EaQHqQklbEQ2Klo9w0kEh1yPOB"
     await import_account_from_six_parts(six_parts, env="smb_android")
     

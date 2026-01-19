@@ -23,7 +23,6 @@ class Config(config.Config):
             device=None,
             device_identity=None,
             device_list=None,        
-
             platform=None,
             os_name = None,
             os_version=None,

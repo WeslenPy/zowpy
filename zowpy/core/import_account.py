@@ -8,6 +8,7 @@ Baseado na implementação do zowsuplib.
 
 import base64
 import json
+import os
 from dataclasses import dataclass, asdict
 from typing import Optional
 from loguru import logger
@@ -101,10 +102,30 @@ async def import_account_from_six_parts(
     kp = KeyPair.from_bytes(base64.b64decode(client_static_keypair_str))
     
     # Decodifica o sexto campo e extrai o id (últimos 20 bytes)
-    if len(sixth) % 4 != 0:
-        sixth = sixth + "=" * (4 - len(sixth) % 4)
-    sixth_bytes = base64.b64decode(sixth)
-    account_id_bytes = sixth_bytes[-20:]
+    # Se não houver dados suficientes, gera um id aleatório
+    account_id_bytes = None
+    
+    if sixth and sixth.strip():
+        try:
+            # Normaliza padding base64 se necessário
+            if len(sixth) % 4 != 0:
+                sixth = sixth + "=" * (4 - len(sixth) % 4)
+            
+            sixth_bytes = base64.b64decode(sixth)
+            
+            # Verifica se tem pelo menos 20 bytes para extrair o id
+            if len(sixth_bytes) >= 20:
+                account_id_bytes = sixth_bytes[-20:]
+                logger.debug(f"Account ID extraído do campo sixth: {len(account_id_bytes)} bytes")
+            else:
+                logger.warning(f"Campo sixth tem apenas {len(sixth_bytes)} bytes (esperado >= 20), gerando ID aleatório")
+        except Exception as e:
+            logger.warning(f"Erro ao decodificar campo sixth: {e}, gerando ID aleatório")
+    
+    # Gera account_id_bytes aleatório se não foi extraído do sixth
+    if account_id_bytes is None or len(account_id_bytes) != 20:
+        account_id_bytes = os.urandom(20)
+        logger.info(f"Account ID aleatório gerado: {len(account_id_bytes)} bytes (hex: {account_id_bytes.hex()[:40]}...)")
     
     # Cria um ambiente mínimo apenas para gerar fdid de forma consistente
     device_env = DeviceEnv(env, random=True)
