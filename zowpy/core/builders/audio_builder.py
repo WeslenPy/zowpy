@@ -8,11 +8,11 @@ import os
 import time
 import hashlib
 import secrets
-import random
 from typing import Optional, Dict, Any
 from loguru import logger
 
 from ...utils.media_tools import AudioTools, AudioMetadata, normalize_file_path_or_url
+from ...utils.tools import WATools
 from ...core.media.media_cipher import MediaCipher
 from ...core.media.media_uploader import AsyncMediaUploader
 from ...core.media.media_connection import MediaConnection
@@ -56,6 +56,9 @@ class AudioBuilder:
         
         # Processa áudio
         mimetype = AudioTools.get_mimetype(filepath)
+        # Aplica conversão custom do zowsup: todos os áudios são "audio/ogg; codecs=opus"
+        if "audio" in mimetype:
+            mimetype = "audio/ogg; codecs=opus"
         duration = AudioTools.get_duration(filepath)
         
         with open(filepath, 'rb') as f:
@@ -117,15 +120,17 @@ class AudioBuilder:
         hosts = media_conn["hosts"]
         auth = media_conn["auth"]
         
-        import random
-        host = random.choice(hosts) if hosts else None
+        # Seleciona primeiro host (como zowsup: getHosts()[0])
+        host = hosts[0] if hosts else None
         if not host:
             raise RuntimeError("Nenhum host disponível na media connection")
         
         # Constrói upload URL
-        file_hash_base64 = hashlib.sha256(file_data).hexdigest()[:32]
+        # IMPORTANTE: usa hash dos DADOS CRIPTOGRAFADOS, não dos originais (como zowsup)
+        b64Hash = WATools.getDataHashForUpload(encrypted_data)
+        b64Hash_urlsafe = b64Hash.replace('+', '-').replace('/', '_').replace('=', '')
         media_type = "ptt" if self._ptt else "audio"
-        upload_url = f"https://{host}/mms/{media_type}/{file_hash_base64}?auth={auth}&token={file_hash_base64}"
+        upload_url = f"https://{host}/mms/{media_type}/{b64Hash_urlsafe}?auth={auth}&token={b64Hash_urlsafe}"
         
         # 5. Faz upload
         import tempfile
@@ -137,8 +142,6 @@ class AudioBuilder:
             upload_result = await self._media_uploader.upload(
                 filepath=tmp_encrypted_path,
                 upload_url=upload_url,
-                to_jid=to_jid,
-                from_jid=from_jid,
                 progress_callback=self._progress_callback
             )
             self._upload_result = upload_result
@@ -150,9 +153,9 @@ class AudioBuilder:
                 logger.warning(f"Erro ao remover arquivo temporário: {e}")
         
         # 6. Constrói AudioMessage
-        from ...proto.e2e_pb2 import AudioMessage
+        from ...proto.e2e_pb2 import Message
         
-        audio_msg = AudioMessage()
+        audio_msg = Message.AudioMessage()
         audio_msg.url = self._upload_result["url"]
         audio_msg.mimetype = self._mimetype
         audio_msg.file_sha256 = self._file_sha256

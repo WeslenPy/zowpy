@@ -5,6 +5,7 @@ Baseado em EncryptedMessageProtocolEntity.toProtocolTreeNode() do zowsuplib.
 """
 
 from typing import List, Optional
+from loguru import logger
 from ...protocol.structs import ProtocolNode
 from .enc_entity import EncEntity
 
@@ -44,9 +45,11 @@ class EncryptedMessageBuilder:
         biz_node = message_node.get_child("biz")
         
         # Remove <proto> node se existir (não deve estar no node final)
+        # CORREÇÃO: Também remove qualquer <enc> direto que possa ter sido adicionado antes
+        # (não deveria ter, mas remove para garantir estrutura correta)
         message_node.children = [
             child for child in message_node.children 
-            if child.tag != "proto"
+            if child.tag not in ["proto", "enc"]
         ]
         
         # Adiciona biz node de volta se existir (será processado em _add_message_extras)
@@ -83,8 +86,11 @@ class EncryptedMessageBuilder:
                 if enc_entity.tag == "to":
                     participants_node.children.append(enc_entity)
                 else:
-                    # Se é <enc> direto, adiciona ao message node
-                    message_node.children.append(enc_entity)
+                    # CORREÇÃO: Para mensagens normais, todos os <enc> devem estar em <participants>
+                    # Se recebemos <enc> direto (sem <to>), não devemos adicionar ao message_node
+                    # Isso só acontece em peer messages
+                    logger.warning(f"Enc entity sem <to> wrapper em mensagem normal: {enc_entity.tag}. Ignorando.")
+                    # Não adiciona ao message_node - apenas ignora
             
             # Adiciona participants node se tiver children
             if participants_node.children:

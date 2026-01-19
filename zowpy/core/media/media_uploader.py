@@ -6,7 +6,6 @@ Baseado em MediaUploader do zowsuplib, mas totalmente assíncrono usando aiohttp
 
 import hashlib
 import os
-import random
 from typing import Optional, Callable, Dict, Any
 from loguru import logger
 
@@ -22,13 +21,11 @@ class AsyncMediaUploader:
     """
     Upload HTTP assíncrono de mídia criptografada.
     
-    Baseado em MediaUploader do zowsuplib:
-    - Upload via POST multipart/form-data
-    - Campos: "to", "from", "file"
-    - Progress callback opcional
+    Baseado em DownloadableMediaMessageAttributes.from_buffer() do zowsuplib:
+    - Upload via POST direto com dados criptografados no body
+    - Content-Type: application/octet-stream no header HTTP
+    - Não usa multipart/form-data
     - Retorna URL e direct_path da resposta JSON
-    
-    Compatível com formato antigo (URL direta) e novo formato (media_conn).
     """
     
     def __init__(self):
@@ -40,26 +37,22 @@ class AsyncMediaUploader:
         self,
         filepath: str,
         upload_url: str,
-        to_jid: str,
-        from_jid: str,
         progress_callback: Optional[Callable[[str, str, str, int], None]] = None,
         chunk_size: int = 8192
     ) -> Dict[str, str]:
         """
-        Faz upload de arquivo via HTTP POST multipart/form-data.
+        Faz upload de arquivo via HTTP POST direto (dados criptografados no body).
         
-        Baseado em MediaUploader.run() do zowsuplib:
-        1. Lê arquivo do filesystem
-        2. Constrói multipart/form-data com "to", "from", "file"
-        3. Faz POST HTTP/HTTPS
+        Baseado em DownloadableMediaMessageAttributes.from_buffer() do zowsuplib:
+        1. Lê arquivo do filesystem (dados já criptografados)
+        2. Faz POST direto com dados no body
+        3. Content-Type: application/octet-stream no header
         4. Parseia resposta JSON e retorna url/direct_path
         
         Args:
-            filepath: Caminho do arquivo a fazer upload
+            filepath: Caminho do arquivo criptografado a fazer upload
             upload_url: URL completa de upload (inclui auth e token)
-            to_jid: JID do destinatário
-            from_jid: JID do remetente (account JID)
-            progress_callback: Callback(opcional): (filepath, to_jid, upload_url, percentage) -> None
+            progress_callback: Callback(opcional): (filepath, url, upload_url, percentage) -> None
             chunk_size: Tamanho do chunk para leitura/envio (padrão: 8192)
         
         Returns:
@@ -80,60 +73,29 @@ class AsyncMediaUploader:
         filename = os.path.basename(filepath)
         filesize = os.path.getsize(filepath)
         
-        # Gera nome criptográfico para o arquivo (baseado em MediaUploader)
-        m = hashlib.md5()
-        m.update(filename.encode())
-        crypto = m.hexdigest() + os.path.splitext(filename)[1]
-        
-        # Prepara from_jid (remove @whatsapp.net)
-        from_jid_clean = from_jid.replace("@whatsapp.net", "")
-        
         logger.debug(
             f"Iniciando upload: file={filename} ({filesize} bytes), "
-            f"to={to_jid}, url={upload_url[:50]}..."
+            f"url={upload_url[:50]}..."
         )
         
-        # Abre arquivo e prepara multipart/form-data
+        # Abre arquivo e lê dados criptografados
         try:
             with open(filepath, 'rb') as f:
                 file_data = f.read()
         except Exception as e:
             raise RuntimeError(f"Erro ao ler arquivo {filepath}: {e}")
         
-        # Prepara dados do formulário
-        data = aiohttp.FormData()
-        data.add_field('to', to_jid)
-        data.add_field('from', from_jid_clean)
-        data.add_field(
-            'file',
-            file_data,
-            filename=crypto,
-            content_type='application/octet-stream'  # Tipo genérico, servidor detecta
-        )
-        
-        # Faz upload usando aiohttp
+        # Faz upload usando aiohttp com POST direto
         try:
+            # Headers conforme zowsup: Content-Type: application/octet-stream
+            headers = {"Content-Type": "application/octet-stream"}
+            
             async with aiohttp.ClientSession() as session:
-                # Calcula progresso durante upload (aproximado via Content-Length)
-                total_sent = 0
-                last_progress = 0
-                
-                async def track_progress(chunk):
-                    nonlocal total_sent, last_progress
-                    total_sent += len(chunk)
-                    if filesize > 0:
-                        progress_pct = min(int((total_sent / filesize) * 100), 99)
-                        # Emite progresso apenas se mudou significativamente
-                        if progress_pct != last_progress and progress_pct % 5 == 0:
-                            if progress_callback:
-                                progress_callback(filepath, to_jid, upload_url, progress_pct)
-                            last_progress = progress_pct
-                    return chunk
-                
-                # Faz POST (aiohttp gerencia multipart/form-data automaticamente)
+                # Faz POST direto com dados criptografados no body
                 async with session.post(
                     upload_url,
-                    data=data,
+                    data=file_data,
+                    headers=headers,
                     timeout=aiohttp.ClientTimeout(total=300)  # 5 minutos timeout
                 ) as response:
                     response.raise_for_status()
@@ -143,7 +105,9 @@ class AsyncMediaUploader:
                     
                     # Emite progresso 100%
                     if progress_callback:
-                        progress_callback(filepath, to_jid, upload_url, 100)
+                        # Assinatura: (filepath, to_jid, upload_url, percentage)
+                        # Como não temos mais to_jid no POST direto, passamos string vazia
+                        progress_callback(filepath, "", upload_url, 100)
                     
                     # Parseia resposta (baseado em JSONResponseParser)
                     # Formato esperado: {"url": "...", "direct_path": "..."}
@@ -177,9 +141,6 @@ class AsyncMediaUploader:
         self,
         data: bytes,
         upload_url: str,
-        to_jid: str,
-        from_jid: str,
-        filename: str = "file",
         progress_callback: Optional[Callable[[str, str, str, int], None]] = None
     ) -> Dict[str, str]:
         """
@@ -188,11 +149,8 @@ class AsyncMediaUploader:
         Útil para upload de dados gerados em memória.
         
         Args:
-            data: Bytes a fazer upload
+            data: Bytes criptografados a fazer upload
             upload_url: URL completa de upload
-            to_jid: JID do destinatário
-            from_jid: JID do remetente
-            filename: Nome do arquivo (padrão: "file")
             progress_callback: Callback opcional para progresso
         
         Returns:
@@ -203,43 +161,28 @@ class AsyncMediaUploader:
         
         filesize = len(data)
         
-        # Gera nome criptográfico
-        m = hashlib.md5()
-        m.update(filename.encode())
-        crypto = m.hexdigest() + os.path.splitext(filename)[1]
-        
-        # Prepara from_jid
-        from_jid_clean = from_jid.replace("@whatsapp.net", "")
-        
         logger.debug(
-            f"Iniciando upload de bytes: filename={filename} ({filesize} bytes), "
-            f"to={to_jid}, url={upload_url[:50]}..."
+            f"Iniciando upload de bytes: ({filesize} bytes), "
+            f"url={upload_url[:50]}..."
         )
         
-        # Prepara dados do formulário
-        form_data = aiohttp.FormData()
-        form_data.add_field('to', to_jid)
-        form_data.add_field('from', from_jid_clean)
-        form_data.add_field(
-            'file',
-            data,
-            filename=crypto,
-            content_type='application/octet-stream'
-        )
-        
-        # Faz upload
+        # Faz upload usando POST direto (como zowsup)
         try:
+            # Headers conforme zowsup: Content-Type: application/octet-stream
+            headers = {"Content-Type": "application/octet-stream"}
+            
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     upload_url,
-                    data=form_data,
+                    data=data,
+                    headers=headers,
                     timeout=aiohttp.ClientTimeout(total=300)
                 ) as response:
                     response.raise_for_status()
                     result = await response.json()
                     
                     if progress_callback:
-                        progress_callback(filename, to_jid, upload_url, 100)
+                        progress_callback("", upload_url, upload_url, 100)
                     
                     url = result.get("url")
                     direct_path = result.get("direct_path")
@@ -251,7 +194,7 @@ class AsyncMediaUploader:
                         )
                     
                     logger.info(
-                        f"Upload de bytes concluído: filename={filename}, "
+                        f"Upload de bytes concluído: "
                         f"url={url[:50]}..."
                     )
                     
@@ -261,6 +204,6 @@ class AsyncMediaUploader:
                     }
                     
         except Exception as e:
-            logger.error(f"Erro ao fazer upload de bytes {filename}: {e}", exc_info=True)
+            logger.error(f"Erro ao fazer upload de bytes: {e}", exc_info=True)
             raise
 

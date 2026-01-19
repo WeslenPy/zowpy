@@ -353,6 +353,8 @@ class WhatsAppClient:
         self.coder = AsyncCoder(events)
         
         # Handlers (legacy - mantidos para compatibilidade)
+        # Configura send_ack_fn para o message_handler enviar acks de delivery
+        
         self.message_handler = AsyncMessageHandler(events)
         self.acks_handler = AsyncAcksHandler(events)
         self.receipts_handler = AsyncReceiptHandler(events)
@@ -944,37 +946,115 @@ class WhatsAppClient:
                 continue
     
     async def _message_loop(self) -> None:
-        """Loop de processamento de mensagens."""
-        logger.info("Message loop iniciado")
+        """
+        Loop de processamento de mensagens com processamento paralelo.
         
-        while self._running:
-            try:
-                if not self.transport:
-                    await asyncio.sleep(0.5)
+        Separa recepção de nodes do processamento, permitindo que múltiplos nodes
+        sejam processados simultaneamente sem que um bloqueie o outro.
+        """
+        logger.info("Message loop iniciado (com processamento paralelo)")
+        
+        # Fila assíncrona para nodes recebidos
+        # maxsize=100 para evitar acúmulo excessivo (nodes serão descartados se fila cheia)
+        node_queue = asyncio.Queue(maxsize=100)
+        
+        # Número de workers para processar nodes em paralelo
+        # 3 workers permite processar até 3 nodes simultaneamente
+        num_workers = 3
+        
+        # Task para receber nodes (não bloqueia processamento)
+        async def receive_loop():
+            """Loop dedicado apenas para receber nodes e colocá-los na fila."""
+            logger.debug("Receive loop iniciado")
+            
+            while self._running:
+                try:
+                    if not self.transport:
+                        await asyncio.sleep(0.5)
+                        continue
+                    
+                    # Recebe mensagem descriptografada
+                    decrypted = await self.transport.recv(timeout=1.0)
+                    if not decrypted:
+                        continue
+                    
+                    # Decodifica protocol node
+                    node = await self.coder.receive_and_decode(decrypted)
+                    if not node:
+                        continue
+                    
+                    logger.debug(f"Node recebido: {node}")
+                    
+                    # Coloca node na fila para processamento (não bloqueia recepção)
+                    try:
+                        await asyncio.wait_for(node_queue.put((node, decrypted)), timeout=0.1)
+                        logger.debug(f"Node {node.tag} enfileirado (queue_size={node_queue.qsize()})")
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Fila de nodes cheia (qsize={node_queue.qsize()}), descartando node {node.tag} (pode indicar processamento lento)")
+                        continue
+                        
+                except asyncio.TimeoutError:
                     continue
-                
-                # Recebe mensagem descriptografada
-                decrypted = await self.transport.recv(timeout=1.0)
-                if not decrypted:
+                except StreamCancelledError:
+                    logger.info("Stream cancelado, encerrando receive loop")
+                    break
+                except Exception as e:
+                    logger.error(f"Erro no receive loop: {e}", exc_info=True)
+                    await asyncio.sleep(0.1)
                     continue
-                
-                # Decodifica protocol node
-                node = await self.coder.receive_and_decode(decrypted)
-                if not node:
+            
+            logger.debug("Receive loop encerrado")
+        
+        # Worker para processar nodes da fila
+        async def process_worker(worker_id: int):
+            """Worker que processa nodes da fila em paralelo."""
+            logger.debug(f"Worker {worker_id} iniciado")
+            
+            while self._running:
+                try:
+                    # Aguarda node da fila (com timeout para verificar _running periodicamente)
+                    try:
+                        node, raw_data = await asyncio.wait_for(node_queue.get(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        continue
+                    
+                    logger.debug(f"Worker {worker_id} processando node {node.tag} (queue_size={node_queue.qsize()})")
+                    
+                    # Processa node (pode demorar ou falhar, mas não bloqueia outros workers)
+                    try:
+                        await self._process_protocol_node(node, raw_data=raw_data)
+                    except Exception as e:
+                        logger.error(f"Erro ao processar node {node.tag} no worker {worker_id}: {e}", exc_info=True)
+                    finally:
+                        # Marca task como concluída
+                        node_queue.task_done()
+                        logger.debug(f"Worker {worker_id} concluiu processamento de node {node.tag}")
+                        
+                except Exception as e:
+                    logger.error(f"Erro no worker {worker_id}: {e}", exc_info=True)
+                    await asyncio.sleep(0.1)
                     continue
-                
-                # Processa node usando router (passa dados descriptografados)
-                # O router/processor vai descriptografar novamente se necessário
-                await self._process_protocol_node(node, raw_data=decrypted)
-                
-            except asyncio.TimeoutError:
-                continue
-            except StreamCancelledError:
-                logger.info("Stream cancelado, encerrando message loop")
-                break
-            except Exception as e:
-                logger.error(f"Erro no message loop: {e}")
-                await asyncio.sleep(0.1)
+            
+            logger.debug(f"Worker {worker_id} encerrado")
+        
+        # Inicia receive loop e workers
+        receive_task = asyncio.create_task(receive_loop())
+        worker_tasks = [asyncio.create_task(process_worker(i)) for i in range(num_workers)]
+        
+        try:
+            # Aguarda todas as tasks
+            await asyncio.gather(receive_task, *worker_tasks)
+        except Exception as e:
+            logger.error(f"Erro no message loop: {e}", exc_info=True)
+        finally:
+            # Cancela tasks ao encerrar
+            receive_task.cancel()
+            for task in worker_tasks:
+                task.cancel()
+            
+            # Aguarda cancelamento
+            await asyncio.gather(receive_task, *worker_tasks, return_exceptions=True)
+            logger.info("Message loop encerrado")
     
     async def _process_protocol_node(self, node: ProtocolNode, raw_data: Optional[bytes] = None) -> None:
         """
@@ -1465,27 +1545,20 @@ class WhatsAppClient:
         if not message_id:
             message_id = self._message_builder._generate_message_id()
         
-        # Constrói node de mensagem usando MessageBuilder
-        # TODO: Adicionar método build_media_message() no MessageBuilder
-        # Por enquanto, constrói manualmente
-        
-        # Criptografa usando EncryptionSender
-        is_group = self._is_group_jid(to)
-        enc_node = await self._encryption_sender.encrypt_message(
-            plaintext=proto_bytes,
-            to_jid=to,
-            is_group=is_group,
-            media_type="image"
-        )
+        # CORREÇÃO: Garantir que 'to' tenha formato correto com @s.whatsapp.net
+        if "@" not in to:
+            to = f"{to}@s.whatsapp.net"
         
         # Cria node <proto>
+        # CORREÇÃO: Adicionar mediatype para que seja propagado ao <enc>
         proto_node = ProtocolNode(
             tag="proto",
-            attributes={},
+            attributes={"mediatype": "image"},
             data=proto_bytes
         )
         
-        # Cria node de mensagem
+        # CORREÇÃO: Não adicionar enc_node diretamente - será criado em _send_to_contacts_with_sessions
+        # O EncryptedMessageBuilder vai criar a estrutura correta com <participants>
         message_node = ProtocolNode(
             tag="message",
             attributes={
@@ -1493,7 +1566,7 @@ class WhatsAppClient:
                 "type": "media",
                 "id": message_id
             },
-            children=[enc_node, proto_node]
+            children=[proto_node]  # Apenas proto_node, não enc_node
         )
         
         # Envia usando fluxo existente
@@ -1544,20 +1617,18 @@ class WhatsAppClient:
         if not message_id:
             message_id = self._message_builder._generate_message_id()
         
-        is_group = self._is_group_jid(to)
-        enc_node = await self._encryption_sender.encrypt_message(
-            plaintext=proto_bytes,
-            to_jid=to,
-            is_group=is_group,
-            media_type="ptt" if ptt else "audio"
-        )
+        # CORREÇÃO: Garantir que 'to' tenha formato correto com @s.whatsapp.net
+        if "@" not in to:
+            to = f"{to}@s.whatsapp.net"
         
+        # CORREÇÃO: Adicionar mediatype para que seja propagado ao <enc>
         proto_node = ProtocolNode(
             tag="proto",
-            attributes={},
+            attributes={"mediatype": "ptt" if ptt else "audio"},
             data=proto_bytes
         )
         
+        # CORREÇÃO: Não adicionar enc_node diretamente - será criado em _send_to_contacts_with_sessions
         message_node = ProtocolNode(
             tag="message",
             attributes={
@@ -1565,7 +1636,7 @@ class WhatsAppClient:
                 "type": "media",
                 "id": message_id
             },
-            children=[enc_node, proto_node]
+            children=[proto_node]  # Apenas proto_node, não enc_node
         )
         
         await self._send_to_contact(message_node, proto_bytes, to)
@@ -1618,20 +1689,18 @@ class WhatsAppClient:
         if not message_id:
             message_id = self._message_builder._generate_message_id()
         
-        is_group = self._is_group_jid(to)
-        enc_node = await self._encryption_sender.encrypt_message(
-            plaintext=proto_bytes,
-            to_jid=to,
-            is_group=is_group,
-            media_type="document"
-        )
+        # CORREÇÃO: Garantir que 'to' tenha formato correto com @s.whatsapp.net
+        if "@" not in to:
+            to = f"{to}@s.whatsapp.net"
         
+        # CORREÇÃO: Adicionar mediatype para que seja propagado ao <enc>
         proto_node = ProtocolNode(
             tag="proto",
-            attributes={},
+            attributes={"mediatype": "document"},
             data=proto_bytes
         )
         
+        # CORREÇÃO: Não adicionar enc_node diretamente - será criado em _send_to_contacts_with_sessions
         message_node = ProtocolNode(
             tag="message",
             attributes={
@@ -1639,7 +1708,7 @@ class WhatsAppClient:
                 "type": "media",
                 "id": message_id
             },
-            children=[enc_node, proto_node]
+            children=[proto_node]  # Apenas proto_node, não enc_node
         )
         
         await self._send_to_contact(message_node, proto_bytes, to)
@@ -1698,20 +1767,18 @@ class WhatsAppClient:
         if not message_id:
             message_id = self._message_builder._generate_message_id()
         
-        is_group = self._is_group_jid(to)
-        enc_node = await self._encryption_sender.encrypt_message(
-            plaintext=proto_bytes,
-            to_jid=to,
-            is_group=is_group,
-            media_type="sticker"
-        )
+        # CORREÇÃO: Garantir que 'to' tenha formato correto com @s.whatsapp.net
+        if "@" not in to:
+            to = f"{to}@s.whatsapp.net"
         
+        # CORREÇÃO: Adicionar mediatype para que seja propagado ao <enc>
         proto_node = ProtocolNode(
             tag="proto",
-            attributes={},
+            attributes={"mediatype": "sticker"},
             data=proto_bytes
         )
         
+        # CORREÇÃO: Não adicionar enc_node diretamente - será criado em _send_to_contacts_with_sessions
         message_node = ProtocolNode(
             tag="message",
             attributes={
@@ -1719,7 +1786,7 @@ class WhatsAppClient:
                 "type": "media",
                 "id": message_id
             },
-            children=[enc_node, proto_node]
+            children=[proto_node]  # Apenas proto_node, não enc_node
         )
         
         await self._send_to_contact(message_node, proto_bytes, to)
@@ -1820,11 +1887,11 @@ class WhatsAppClient:
         if ":" in account:
             # Dispositivo específico
             jids = [to_jid]
-            await self._send_to_contacts_with_sessions(message_node, proto_bytes, jids)
+            await self._send_to_contacts_with_sessions(message_node, jids)
         elif "lid" in to_jid:
             # LID (Linked ID)
             jids = [to_jid]
-            await self._send_to_contacts_with_sessions(message_node, proto_bytes, jids)
+            await self._send_to_contacts_with_sessions(message_node, jids)
         else:
             # Precisa sincronizar dispositivos primeiro
             recipient_id = account
@@ -1834,7 +1901,7 @@ class WhatsAppClient:
             
             if session_jids:
                 # Tem sessões, envia para elas
-                await self._send_to_contacts_with_sessions(message_node, proto_bytes, session_jids)
+                await self._send_to_contacts_with_sessions(message_node, session_jids)
             else:
                 # Não tem sessão, sincroniza dispositivos e obtém chaves
                 await self._sync_devices_and_send(message_node, proto_bytes, to_jid)
@@ -1973,6 +2040,13 @@ class WhatsAppClient:
         participant = jids[0] if len(jids) == 1 and retry_count > 0 else None
         
         for jid in jids:
+            # Garante que jid é string
+            if not isinstance(jid, str):
+                logger.error(f"JID inválido (não é string): {jid} (tipo: {type(jid)})")
+                continue
+            
+            logger.debug(f"JID: {jid}")
+
             # CORREÇÃO: Converte JID para formato do zowsuplib
             # get_all_session_usernames() retorna formato "recipient_id.recipient_type:device_id"
             # mas zowsuplib espera JID completo "recipient_id@s.whatsapp.net" no node <to>
@@ -2089,8 +2163,13 @@ class WhatsAppClient:
             participant=None
         )
         
+        # Obtém tctoken se necessário
+        tctoken = None
+        if hasattr(self, 'axolotl_manager') and hasattr(self.axolotl_manager, '_store'):
+            tctoken = await self.axolotl_manager._store.getTcToken(jid)
+        
         # Adiciona elementos extras
-        await self._add_message_extras(message_node)
+        await self._add_message_extras(message_node, tctoken=tctoken)
         
         # Enfileira mensagem antes de enviar (para retry)
         self._enqueue_sent_message(message_node)
@@ -2168,8 +2247,13 @@ class WhatsAppClient:
                 participant=None
             )
             
+            # Obtém tctoken se necessário
+            tctoken = None
+            if hasattr(self, 'axolotl_manager') and hasattr(self.axolotl_manager, '_store'):
+                tctoken = await self.axolotl_manager._store.getTcToken(to_jid)
+            
             # Adiciona elementos extras
-            await self._add_message_extras(message_node)
+            await self._add_message_extras(message_node, tctoken=tctoken)
             
             # Enfileira mensagem antes de enviar (para retry)
             self._enqueue_sent_message(message_node)
@@ -2616,8 +2700,19 @@ class WhatsAppClient:
             participant=participant
         )
         
+        # Obtém tctoken se necessário (para grupos, pode não ser necessário, mas verificamos)
+        tctoken = None
+        if hasattr(self, 'axolotl_manager') and hasattr(self.axolotl_manager, '_store'):
+            # Para grupos, tctoken geralmente não é usado, mas verificamos se houver participant específico
+            if participant:
+                tctoken = await self.axolotl_manager._store.getTcToken(participant)
+            else:
+                # Verifica se há algum JID individual na lista que precisa de tctoken
+                # (geralmente grupos não usam tctoken, mas mantemos compatibilidade)
+                pass
+        
         # Adiciona elementos extras
-        await self._add_message_extras(message_node)
+        await self._add_message_extras(message_node, tctoken=tctoken)
         
         # Enfileira mensagem antes de enviar (para retry)
         self._enqueue_sent_message(message_node)
@@ -3359,8 +3454,13 @@ class WhatsAppClient:
                     participant=participant if participant else None
                 )
                 
+                # Obtém tctoken se necessário
+                tctoken = None
+                if hasattr(self, 'axolotl_manager') and hasattr(self.axolotl_manager, '_store'):
+                    tctoken = await self.axolotl_manager._store.getTcToken(normalized_sender_jid)
+                
                 # Adiciona elementos extras
-                await self._add_message_extras(message_node)
+                await self._add_message_extras(message_node, tctoken=tctoken)
                 
                 # Enfileira mensagem antes de enviar (para retry)
                 self._enqueue_sent_message(message_node)

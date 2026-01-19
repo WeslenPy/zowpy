@@ -10,6 +10,7 @@ from typing import Optional
 from loguru import logger
 
 from ...utils.media_tools import ImageTools, ImageMetadata
+from ...utils.tools import WATools
 from ...core.media.media_cipher import MediaCipher
 from ...core.media.media_uploader import AsyncMediaUploader
 from ...core.media.media_connection import MediaConnection
@@ -86,14 +87,16 @@ class StickerBuilder:
         hosts = media_conn["hosts"]
         auth = media_conn["auth"]
         
-        import random
-        host = random.choice(hosts) if hosts else None
+        # Seleciona primeiro host (como zowsup: getHosts()[0])
+        host = hosts[0] if hosts else None
         if not host:
             raise RuntimeError("Nenhum host disponível na media connection")
         
         # Constrói upload URL (stickers usam /mms/image)
-        file_hash_base64 = hashlib.sha256(file_data).hexdigest()[:32]
-        upload_url = f"https://{host}/mms/image/{file_hash_base64}?auth={auth}&token={file_hash_base64}"
+        # IMPORTANTE: usa hash dos DADOS CRIPTOGRAFADOS, não dos originais (como zowsup)
+        b64Hash = WATools.getDataHashForUpload(encrypted_data)
+        b64Hash_urlsafe = b64Hash.replace('+', '-').replace('/', '_').replace('=', '')
+        upload_url = f"https://{host}/mms/image/{b64Hash_urlsafe}?auth={auth}&token={b64Hash_urlsafe}"
         
         # 5. Faz upload
         import tempfile
@@ -105,8 +108,6 @@ class StickerBuilder:
             upload_result = await self._media_uploader.upload(
                 filepath=tmp_encrypted_path,
                 upload_url=upload_url,
-                to_jid=to_jid,
-                from_jid=from_jid,
                 progress_callback=self._progress_callback
             )
             self._upload_result = upload_result
@@ -118,9 +119,9 @@ class StickerBuilder:
                 logger.warning(f"Erro ao remover arquivo temporário: {e}")
         
         # 6. Constrói StickerMessage
-        from ...proto.e2e_pb2 import StickerMessage
+        from ...proto.e2e_pb2 import Message
         
-        sticker_msg = StickerMessage()
+        sticker_msg = Message.StickerMessage()
         sticker_msg.url = self._upload_result["url"]
         sticker_msg.mimetype = self._image_metadata.mimetype
         sticker_msg.file_sha256 = self._image_metadata.file_sha256

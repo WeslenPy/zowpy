@@ -11,6 +11,7 @@ from typing import Optional, Dict, Any
 from loguru import logger
 
 from ...utils.media_tools import ImageTools, ImageMetadata, normalize_file_path_or_url
+from ...utils.tools import WATools
 from ...core.media.media_cipher import MediaCipher
 from ...core.media.media_uploader import AsyncMediaUploader
 from ...core.media.media_connection import MediaConnection
@@ -153,9 +154,9 @@ class ImageBuilder:
         if not hasattr(self, '_upload_result'):
             raise RuntimeError("Upload ainda não foi feito. Use upload_and_build()")
         
-        from ...proto.e2e_pb2 import ImageMessage
+        from ...proto.e2e_pb2 import Message
         
-        image_msg = ImageMessage()
+        image_msg = Message.ImageMessage()
         
         # Campos obrigatórios
         image_msg.url = self._upload_result["url"]
@@ -233,15 +234,16 @@ class ImageBuilder:
         hosts = media_conn["hosts"]
         auth = media_conn["auth"]
         
-        # Seleciona host aleatoriamente
-        import random
-        host = random.choice(hosts) if hosts else None
+        # Seleciona primeiro host (como zowsup: getHosts()[0])
+        host = hosts[0] if hosts else None
         if not host:
             raise RuntimeError("Nenhum host disponível na media connection")
         
         # Constrói upload URL (formato novo: https://{host}/mms/image/{hash}?auth={auth}&token={hash})
-        file_hash_base64 = hashlib.sha256(file_data).hexdigest()[:32]
-        upload_url = f"https://{host}/mms/image/{file_hash_base64}?auth={auth}&token={file_hash_base64}"
+        # IMPORTANTE: usa hash dos DADOS CRIPTOGRAFADOS, não dos originais (como zowsup)
+        b64Hash = WATools.getDataHashForUpload(encrypted_data)
+        b64Hash_urlsafe = b64Hash.replace('+', '-').replace('/', '_').replace('=', '')
+        upload_url = f"https://{host}/mms/image/{b64Hash_urlsafe}?auth={auth}&token={b64Hash_urlsafe}"
         
         # 5. Faz upload
         logger.debug(f"Iniciando upload de imagem para {upload_url[:50]}...")
@@ -251,13 +253,14 @@ class ImageBuilder:
         with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
             tmp_file.write(encrypted_data)
             tmp_encrypted_path = tmp_file.name
+
+
+        logger.debug(f"Upload URL: {upload_url[:80]}...")
         
         try:
             upload_result = await self._media_uploader.upload(
                 filepath=tmp_encrypted_path,
                 upload_url=upload_url,
-                to_jid=to_jid,
-                from_jid=from_jid,
                 progress_callback=self._progress_callback
             )
             self._upload_result = upload_result
