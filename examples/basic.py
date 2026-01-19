@@ -51,7 +51,9 @@ async def main():
     
     # Importa conta (se necessário)
     # six_parts = "201288305948,gehExdJAhPTAkqd5LDQ0zsBmUuuvP837jAQHNgndgnk=,+I0r7c+ZSZl6HmmY9uUI8E3ki4+ZRQ3trbYGISvLem0=,HiqT5eRDdur33fCRLW/UmUi8Sm/c+mEL+ajC/pIE/nk=,AAOlZ9VKgYuEvIetCouS+BS2DXCLd5XS2PispXKClkw=,MjAxMjg4MzA1OTQ4I6EaQHqQklbEQ2Klo9w0kEh1yPOB"
-    six_parts= "201208868278,+PfRJy8TA13JI8rZiQYLnWZ+X0sEYDmB08ZzxiSsWxo=,aL74nYQzRkb3OGioDiAbeCMBadegkXBPO3TE5xf3nFM=,MbuNxcpVZuFg6C4IC2+knQeyvdd+R2icsOSh1vD57Xk=,qCPWUX3807N+/KU4hkogYh9REvvGOxpugFj2CQWIynM=,MjAxMjA4ODY4Mjc4I2nimRzHQYZasFIhLa1u1gEQrfAm"
+    # six_parts= "201208868278,+PfRJy8TA13JI8rZiQYLnWZ+X0sEYDmB08ZzxiSsWxo=,aL74nYQzRkb3OGioDiAbeCMBadegkXBPO3TE5xf3nFM=,MbuNxcpVZuFg6C4IC2+knQeyvdd+R2icsOSh1vD57Xk=,qCPWUX3807N+/KU4hkogYh9REvvGOxpugFj2CQWIynM=,MjAxMjA4ODY4Mjc4I2nimRzHQYZasFIhLa1u1gEQrfAm"
+    
+    six_parts = "201223930365,yn393U8sbIKti1Efdnbk0e2Q6m5yUwYOtLlnYVfPP0Q=,MLamPzWnhfKj5JPcnBPEEp6YIcomYbYrUPXdlrf/qEQ=,GSsGb7EHKfeAHBQRnXFRjlUeo7jS7Zh0LdoyUPCraiQ=,0G7eIsr2cQTY0e5bj/+ax5COdC3tP59B3lz8mlqvD0U=,MjAxMjIzOTMwMzY1IwN6OSuFVT02qBFhrRnOYQFckUMB"
     await import_account_from_six_parts(six_parts, env="smb_android")
     
     # Cria cliente
