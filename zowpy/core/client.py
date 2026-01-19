@@ -110,7 +110,7 @@ class WhatsAppClient:
             proxy: Configuração de proxy (opcional)
         """
         self.account_id = normalize(account_id)
-        self.endpoint = endpoint or (f"e13.whatsapp.net", 5222)#{random.randint(1, 16)}
+        self.endpoint = endpoint or (f"g.whatsapp.net", 443)#{random.randint(1, 16)}
         self.proxy = proxy
         self.db_pool = db_pool
         self.device_config = device_config
@@ -387,10 +387,129 @@ class WhatsAppClient:
         
         # Configura função para obter media connection via IQ
         async def get_media_conn_fn():
-            # Obtém media connection via IQ media_conn
-            # TODO: Implementar IQ request para media_conn
-            # Por enquanto retorna None (será implementado quando IQ media_conn estiver pronto)
-            return None
+            """
+            Obtém media connection via IQ media_conn.
+            
+            Returns:
+                MediaConnectionInfo ou None se falhar
+            """
+            from .media.media_connection import MediaConnectionInfo
+            
+            # Cria IQ request para media_conn
+            iq_id = ProtocolNode._generateId()
+            query_node = ProtocolNode(tag="media_conn")
+            iq_node = ProtocolNode(
+                tag="iq",
+                attributes={
+                    "id": iq_id,
+                    "type": "set",
+                    "xmlns": "w:m",
+                    "to": "s.whatsapp.net"
+                },
+                children=[query_node]
+            )
+            
+            # Event para aguardar resposta
+            response_event = asyncio.Event()
+            response_data = {"info": None, "error": None}
+            
+            # Registra callback para processar resposta
+            async def handle_response(node: ProtocolNode):
+                try:
+                    # Verifica se é resposta válida
+                    if node.get_attribute("type") == "error":
+                        error_node = node.get_child("error")
+                        error_msg = error_node.get_attribute("text") if error_node else "Unknown error"
+                        logger.error(f"Erro ao obter media connection: {error_msg}")
+                        response_data["error"] = RuntimeError(f"Erro ao obter media connection: {error_msg}")
+                        response_event.set()
+                        return
+                    
+                    # Extrai media_conn do node
+                    media_conn_node = node.get_child("media_conn")
+                    if not media_conn_node:
+                        logger.error("Resposta de media_conn sem node media_conn")
+                        response_data["error"] = RuntimeError("Resposta inválida: sem node media_conn")
+                        response_event.set()
+                        return
+                    
+                    # Extrai hosts
+                    # Baseado em ResultRequestMediaConnIqProtocolEntity.fromProtocolTreeNode() do zowsuplib
+                    # Os nodes são <host> com atributo hostname (não <hostname>)
+                    hosts = []
+                    host_nodes = media_conn_node.get_all_children("host")
+                    if host_nodes:
+                        for host_node in host_nodes:
+                            # Extrai hostname do atributo do node <host>
+                            hostname = host_node.get_attribute("hostname")
+                            if hostname:
+                                hosts.append(hostname)
+                    else:
+                        # Fallback: tenta obter do atributo hostname do próprio node (formato antigo)
+                        hostname = media_conn_node.get_attribute("hostname")
+                        if hostname:
+                            hosts.append(hostname)
+                    
+                    # Extrai auth
+                    auth = media_conn_node.get_attribute("auth") or ""
+                    
+                    # Extrai TTL (padrão 86400 segundos = 24h)
+                    ttl_str = media_conn_node.get_attribute("ttl") or "86400"
+                    try:
+                        ttl = int(ttl_str)
+                    except ValueError:
+                        logger.warning(f"TTL inválido '{ttl_str}', usando padrão 86400")
+                        ttl = 86400
+                    
+                    if not hosts:
+                        logger.error("Resposta de media_conn sem hosts")
+                        response_data["error"] = RuntimeError("Resposta inválida: sem hosts")
+                        response_event.set()
+                        return
+                    
+                    # Cria MediaConnectionInfo
+                    connection_info = MediaConnectionInfo(
+                        hosts=hosts,
+                        auth=auth,
+                        ttl=ttl,
+                        timestamp=time.time()
+                    )
+                    
+                    response_data["info"] = connection_info
+                    response_event.set()
+                    
+                except Exception as e:
+                    logger.error(f"Erro ao processar resposta de media_conn: {e}", exc_info=True)
+                    response_data["error"] = e
+                    response_event.set()
+            
+            # Registra callback
+            self._iq_response_processor.register_callback(iq_id, handle_response, timeout=30.0)
+            
+            try:
+                # Envia IQ request
+                await self._send_protocol_node(iq_node)
+                logger.debug(f"IQ request para media_conn enviado (id={iq_id})")
+                
+                # Aguarda resposta (timeout de 30 segundos)
+                try:
+                    await asyncio.wait_for(response_event.wait(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    self._iq_response_processor.unregister_callback(iq_id)
+                    logger.error("Timeout ao aguardar resposta de media_conn")
+                    return None
+                
+                # Verifica se houve erro
+                if response_data["error"]:
+                    raise response_data["error"]
+                
+                # Retorna connection info
+                return response_data["info"]
+                
+            except Exception as e:
+                logger.error(f"Erro ao obter media connection: {e}", exc_info=True)
+                self._iq_response_processor.unregister_callback(iq_id)
+                return None
         
         self._media_connection.set_get_media_conn_fn(get_media_conn_fn)
         

@@ -107,22 +107,16 @@ async def main():
         # Envia mensagem inicial (opcional)
         to = "559885700260"
         text = "Hello! Esta é uma mensagem de teste do ZowPy."
-        # print(f"📤 Enviando mensagem para {to}...")
+        print(f"📤 Enviando mensagem para {to}...")
         msg_id = await client.send_text(to, text)
+
+        await client.send_image(to, "https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png")
         # print(f"✅ Mensagem enviada! ID: {msg_id}")
         
         # Mantém o cliente online indefinidamente
         # O keepalive é enviado automaticamente a cada 20 segundos
         # A reconexão automática é tratada no handler on_disconnected
         while running:
-            # Verifica se ainda está conectado
-            if not client._connected or not client._authenticated:
-                if running:
-                    print("⚠️ Cliente desconectado, aguardando reconexão automática...")
-                    await asyncio.sleep(5)
-                    continue
-            
-            # Aguarda 1 segundo e verifica novamente
             await asyncio.sleep(1)
         
         print("\n🔄 Desconectando...")
