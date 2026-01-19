@@ -7,6 +7,7 @@ Fluxo direto: conexão → handshake → autenticação.
 
 import asyncio
 import base64
+import json
 import random
 import time
 from typing import Optional, Dict, Any, Tuple, List, Union
@@ -1520,7 +1521,7 @@ class WhatsAppClient:
         if not self._authenticated:
             raise RuntimeError("Not authenticated")
         
-        # Usa ImageBuilder para construir e enviar
+        # Usa ImageBuilder para upload
         from .builders.image_builder import ImageBuilder
         
         builder = await ImageBuilder.from_filepath(
@@ -1535,39 +1536,296 @@ class WhatsAppClient:
         # Obtém JID do remetente
         from_jid = f"{self.account_id}@{YowConstants.WHATSAPP_SERVER}"
         
-        # Faz upload e constrói ImageMessage
+        # Faz upload e constrói ImageMessage protobuf
         image_msg = await builder.upload_and_build(to, from_jid)
         
-        # Serializa protobuf
-        proto_bytes = image_msg.SerializeToString()
+        # Extrai dados do protobuf
+        url = image_msg.url
+        direct_path = image_msg.direct_path if image_msg.direct_path else None
+        mimetype = image_msg.mimetype
+        file_sha256 = image_msg.file_sha256
+        file_length = image_msg.file_length
+        media_key = image_msg.media_key
+        media_key_timestamp = image_msg.media_key_timestamp
+        file_enc_sha256 = image_msg.file_enc_sha256
+        width = image_msg.width
+        height = image_msg.height
+        jpeg_thumbnail = image_msg.jpeg_thumbnail if image_msg.jpeg_thumbnail else None
         
         # Gera message_id se não fornecido
         if not message_id:
             message_id = self._message_builder._generate_message_id()
         
-        # CORREÇÃO: Garantir que 'to' tenha formato correto com @s.whatsapp.net
+        # Garante que 'to' tenha formato correto
         if "@" not in to:
-            to = f"{to}@s.whatsapp.net"
+            to = f"{to}@{YowConstants.WHATSAPP_SERVER}"
         
-        # Cria node <proto>
-        # CORREÇÃO: Adicionar mediatype para que seja propagado ao <enc>
-        proto_node = ProtocolNode(
-            tag="proto",
-            attributes={"mediatype": "image"},
-            data=proto_bytes
+        # Importa classes necessárias
+        from ..protocol.entities.attributes import (
+            DownloadableMediaMessageAttributes,
+            ImageAttributes,
+            MessageMetaAttributes,
+        )
+        from ..protocol.entities.media import (
+            ImageDownloadableMediaMessageProtocolEntity,
         )
         
-        # CORREÇÃO: Não adicionar enc_node diretamente - será criado em _send_to_contacts_with_sessions
-        # O EncryptedMessageBuilder vai criar a estrutura correta com <participants>
-        message_node = ProtocolNode(
-            tag="message",
-            attributes={
-                "to": to,
-                "type": "media",
-                "id": message_id
-            },
-            children=[proto_node]  # Apenas proto_node, não enc_node
+        # Cria DownloadableMediaMessageAttributes
+        downloadable_attrs = DownloadableMediaMessageAttributes(
+            mimetype=mimetype,
+            file_length=file_length,
+            file_sha256=file_sha256,
+            media_key=media_key,
+            media_key_timestamp=media_key_timestamp,
+            file_enc_sha256=file_enc_sha256,
+            url=url,
+            direct_path=direct_path
         )
+        
+        # Cria ImageAttributes
+        image_attrs = ImageAttributes(
+            downloadable_attrs,
+            width,
+            height,
+            caption,
+            jpeg_thumbnail
+        )
+        
+        # Cria MessageMetaAttributes
+        message_meta_attrs = MessageMetaAttributes(
+            id=message_id,
+            recipient=to,
+            fromMe=True,
+            timestamp=int(time.time())
+        )
+        
+        # Cria Protocol Entity
+        entity = ImageDownloadableMediaMessageProtocolEntity(
+            image_attrs,
+            message_meta_attrs
+        )
+        
+        # Converte para ProtocolNode
+        message_node = entity.to_protocol_node()
+        
+        # Extrai proto_bytes do node <proto>
+        proto_node = None
+        for child in message_node.children:
+            if child.tag == "proto":
+                proto_node = child
+                break
+        
+        if not proto_node or not proto_node.data:
+            raise ValueError("Falha ao obter dados protobuf do Protocol Entity")
+        
+        proto_bytes = proto_node.data
+        
+        # Envia usando fluxo existente
+        await self._send_to_contact(message_node, proto_bytes, to)
+        
+        return message_id
+    
+    async def send_media_direct(
+        self,
+        to: str,
+        media_type: str,
+        url: str,
+        mimetype: str,
+        file_sha256: bytes,
+        file_length: int,
+        media_key: bytes,
+        file_enc_sha256: bytes,
+        *,
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+        direct_path: Optional[str] = None,
+        caption: Optional[str] = None,
+        jpeg_thumbnail: Optional[bytes] = None,
+        media_key_timestamp: Optional[int] = None,
+        message_id: Optional[str] = None,
+        # Opções específicas por tipo de mídia
+        ptt: bool = False,
+        waveform: Optional[bytes] = None,
+        duration: Optional[int] = None,
+        file_name: Optional[str] = None,
+        **options: Any
+    ) -> str:
+        """
+        Envia mídia diretamente usando valores já processados, sem fazer upload.
+        
+        Útil quando você já tem os dados do upload (URL, direct_path, etc.)
+        e quer apenas enviar a mensagem.
+        
+        Agora usa as novas Protocol Entities seguindo o padrão do zowsuplib.
+        
+        Args:
+            to: JID do destinatário
+            media_type: Tipo de mídia ("image", "video", "audio", "document", "sticker")
+            url: URL da mídia no servidor WhatsApp
+            mimetype: Tipo MIME da mídia (ex: "image/jpeg")
+            file_sha256: Hash SHA256 do arquivo original (32 bytes)
+            file_length: Tamanho do arquivo em bytes
+            media_key: Chave de mídia usada para criptografia (32 bytes)
+            file_enc_sha256: Hash SHA256 dos dados criptografados (32 bytes)
+            width: Largura (para imagens/vídeos/stickers)
+            height: Altura (para imagens/vídeos/stickers)
+            direct_path: Caminho direto da mídia (opcional)
+            caption: Legenda da mídia (opcional, não aplicável para stickers)
+            jpeg_thumbnail: Thumbnail JPEG (opcional, bytes)
+            media_key_timestamp: Timestamp da media_key (opcional, padrão: agora)
+            message_id: ID da mensagem (gerado se None)
+            # Opções específicas por tipo:
+            ptt: Se True, envia áudio como push-to-talk (voice message)
+            waveform: Waveform para áudio PTT (100 bytes)
+            duration: Duração em segundos (para áudio/vídeo)
+            file_name: Nome do arquivo (para documentos)
+            **options: Outras opções específicas por tipo de mídia
+        
+        Returns:
+            ID da mensagem enviada
+        """
+        if not self._authenticated:
+            raise RuntimeError("Not authenticated")
+        
+        if media_type not in ("image", "video", "audio", "document", "sticker"):
+            raise ValueError(f"media_type deve ser um de: image, video, audio, document, sticker. Recebido: {media_type}")
+        
+        import time
+        from ..protocol.entities.attributes import (
+            DownloadableMediaMessageAttributes,
+            ImageAttributes,
+            VideoAttributes,
+            AudioAttributes,
+            DocumentAttributes,
+            StickerAttributes,
+            MessageMetaAttributes,
+            MessageAttributes,
+        )
+        from ..protocol.entities.media import (
+            ImageDownloadableMediaMessageProtocolEntity,
+            VideoDownloadableMediaMessageProtocolEntity,
+            AudioDownloadableMediaMessageProtocolEntity,
+            DocumentDownloadableMediaMessageProtocolEntity,
+            StickerDownloadableMediaMessageProtocolEntity,
+        )
+        
+        # Gera message_id se não fornecido
+        if not message_id:
+            message_id = self._message_builder._generate_message_id()
+        
+        # Garante que 'to' tenha formato correto
+        if "@" not in to:
+            to = f"{to}@{YowConstants.WHATSAPP_SERVER}"
+        
+        # Cria DownloadableMediaMessageAttributes
+        downloadable_attrs = DownloadableMediaMessageAttributes(
+            mimetype=mimetype,
+            file_length=file_length,
+            file_sha256=file_sha256,
+            media_key=media_key,
+            media_key_timestamp=media_key_timestamp if media_key_timestamp is not None else int(time.time()),
+            file_enc_sha256=file_enc_sha256,
+            url=url,
+            direct_path=direct_path
+        )
+        
+        # Cria MessageMetaAttributes
+        message_meta_attrs = MessageMetaAttributes(
+            id=message_id,
+            recipient=to,
+            fromMe=True,
+            timestamp=int(time.time())
+        )
+        
+        # Cria Protocol Entity baseado no tipo de mídia
+        entity = None
+        
+        if media_type == "image":
+            if width is None or height is None:
+                raise ValueError("width e height são obrigatórios para imagens")
+            
+            image_attrs = ImageAttributes(
+                downloadable_attrs,
+                width,
+                height,
+                caption,
+                jpeg_thumbnail
+            )
+            entity = ImageDownloadableMediaMessageProtocolEntity(image_attrs, message_meta_attrs)
+        
+        elif media_type == "audio":
+            audio_attrs = AudioAttributes(
+                downloadable_attrs,
+                duration or 0,
+                ptt,
+                None,  # streaming_sidecar
+                waveform
+            )
+            entity = AudioDownloadableMediaMessageProtocolEntity(audio_attrs, message_meta_attrs)
+        
+        elif media_type == "video":
+            if width is None or height is None:
+                raise ValueError("width e height são obrigatórios para vídeos")
+            
+            video_attrs = VideoAttributes(
+                downloadable_attrs,
+                width,
+                height,
+                duration or 0,
+                caption,
+                False,  # gif_playback
+                jpeg_thumbnail,
+                0,  # gif_attribution
+                None  # streaming_sidecar
+            )
+            entity = VideoDownloadableMediaMessageProtocolEntity(video_attrs, message_meta_attrs)
+        
+        elif media_type == "document":
+            doc_attrs = DocumentAttributes(
+                downloadable_attrs,
+                file_name or "",
+                file_length,
+                None,  # title
+                None,  # page_count
+                jpeg_thumbnail,
+                caption
+            )
+            entity = DocumentDownloadableMediaMessageProtocolEntity(doc_attrs, message_meta_attrs)
+        
+        elif media_type == "sticker":
+            if width is None or height is None:
+                raise ValueError("width e height são obrigatórios para stickers")
+            
+            sticker_attrs = StickerAttributes(
+                downloadable_attrs,
+                width,
+                height,
+                jpeg_thumbnail,  # png_thumbnail (aceita bytes)
+                options.get("is_animated", False),
+                None,  # sticker_sent_ts (será gerado automaticamente)
+                options.get("is_avatar", False),
+                options.get("is_ai_sticker", False),
+                options.get("is_lottie", False)
+            )
+            entity = StickerDownloadableMediaMessageProtocolEntity(sticker_attrs, message_meta_attrs)
+        
+        if entity is None:
+            raise ValueError(f"Falha ao criar Protocol Entity para media_type: {media_type}")
+        
+        # Converte para ProtocolNode
+        message_node = entity.to_protocol_node()
+        
+        # Extrai proto_bytes do node <proto>
+        proto_node = None
+        for child in message_node.children:
+            if child.tag == "proto":
+                proto_node = child
+                break
+        
+        if not proto_node or not proto_node.data:
+            raise ValueError("Falha ao obter dados protobuf do Protocol Entity")
+        
+        proto_bytes = proto_node.data
         
         # Envia usando fluxo existente
         await self._send_to_contact(message_node, proto_bytes, to)
@@ -1612,32 +1870,84 @@ class WhatsAppClient:
         from_jid = f"{self.account_id}@{YowConstants.WHATSAPP_SERVER}"
         audio_msg = await builder.upload_and_build(to, from_jid)
         
-        proto_bytes = audio_msg.SerializeToString()
+        # Extrai dados do protobuf
+        url = audio_msg.url
+        direct_path = audio_msg.direct_path if audio_msg.direct_path else None
+        mimetype = audio_msg.mimetype
+        file_sha256 = audio_msg.file_sha256
+        file_length = audio_msg.file_length
+        media_key = audio_msg.media_key
+        media_key_timestamp = audio_msg.media_key_timestamp
+        file_enc_sha256 = audio_msg.file_enc_sha256
+        duration = audio_msg.seconds if hasattr(audio_msg, 'seconds') else 0
+        waveform = audio_msg.waveform if hasattr(audio_msg, 'waveform') and audio_msg.waveform else None
         
         if not message_id:
             message_id = self._message_builder._generate_message_id()
         
-        # CORREÇÃO: Garantir que 'to' tenha formato correto com @s.whatsapp.net
+        # Garante que 'to' tenha formato correto
         if "@" not in to:
-            to = f"{to}@s.whatsapp.net"
+            to = f"{to}@{YowConstants.WHATSAPP_SERVER}"
         
-        # CORREÇÃO: Adicionar mediatype para que seja propagado ao <enc>
-        proto_node = ProtocolNode(
-            tag="proto",
-            attributes={"mediatype": "ptt" if ptt else "audio"},
-            data=proto_bytes
+        # Importa classes necessárias
+        from ..protocol.entities.attributes import (
+            DownloadableMediaMessageAttributes,
+            AudioAttributes,
+            MessageMetaAttributes,
+        )
+        from ..protocol.entities.media import (
+            AudioDownloadableMediaMessageProtocolEntity,
         )
         
-        # CORREÇÃO: Não adicionar enc_node diretamente - será criado em _send_to_contacts_with_sessions
-        message_node = ProtocolNode(
-            tag="message",
-            attributes={
-                "to": to,
-                "type": "media",
-                "id": message_id
-            },
-            children=[proto_node]  # Apenas proto_node, não enc_node
+        # Cria DownloadableMediaMessageAttributes
+        downloadable_attrs = DownloadableMediaMessageAttributes(
+            mimetype=mimetype,
+            file_length=file_length,
+            file_sha256=file_sha256,
+            media_key=media_key,
+            media_key_timestamp=media_key_timestamp,
+            file_enc_sha256=file_enc_sha256,
+            url=url,
+            direct_path=direct_path
         )
+        
+        # Cria AudioAttributes
+        audio_attrs = AudioAttributes(
+            downloadable_attrs,
+            duration,
+            ptt,
+            None,  # streaming_sidecar
+            waveform
+        )
+        
+        # Cria MessageMetaAttributes
+        message_meta_attrs = MessageMetaAttributes(
+            id=message_id,
+            recipient=to,
+            fromMe=True,
+            timestamp=int(time.time())
+        )
+        
+        # Cria Protocol Entity
+        entity = AudioDownloadableMediaMessageProtocolEntity(
+            audio_attrs,
+            message_meta_attrs
+        )
+        
+        # Converte para ProtocolNode
+        message_node = entity.to_protocol_node()
+        
+        # Extrai proto_bytes do node <proto>
+        proto_node = None
+        for child in message_node.children:
+            if child.tag == "proto":
+                proto_node = child
+                break
+        
+        if not proto_node or not proto_node.data:
+            raise ValueError("Falha ao obter dados protobuf do Protocol Entity")
+        
+        proto_bytes = proto_node.data
         
         await self._send_to_contact(message_node, proto_bytes, to)
         
@@ -1684,32 +1994,87 @@ class WhatsAppClient:
         from_jid = f"{self.account_id}@{YowConstants.WHATSAPP_SERVER}"
         doc_msg = await builder.upload_and_build(to, from_jid)
         
-        proto_bytes = doc_msg.SerializeToString()
+        # Extrai dados do protobuf
+        url = doc_msg.url
+        direct_path = doc_msg.direct_path if doc_msg.direct_path else None
+        mimetype = doc_msg.mimetype
+        file_sha256 = doc_msg.file_sha256
+        file_length = doc_msg.file_length
+        media_key = doc_msg.media_key
+        media_key_timestamp = doc_msg.media_key_timestamp
+        file_enc_sha256 = doc_msg.file_enc_sha256
+        file_name = doc_msg.file_name
+        jpeg_thumbnail = doc_msg.jpeg_thumbnail if doc_msg.jpeg_thumbnail else None
+        caption_from_proto = doc_msg.caption if doc_msg.caption else caption
         
         if not message_id:
             message_id = self._message_builder._generate_message_id()
         
-        # CORREÇÃO: Garantir que 'to' tenha formato correto com @s.whatsapp.net
+        # Garante que 'to' tenha formato correto
         if "@" not in to:
-            to = f"{to}@s.whatsapp.net"
+            to = f"{to}@{YowConstants.WHATSAPP_SERVER}"
         
-        # CORREÇÃO: Adicionar mediatype para que seja propagado ao <enc>
-        proto_node = ProtocolNode(
-            tag="proto",
-            attributes={"mediatype": "document"},
-            data=proto_bytes
+        # Importa classes necessárias
+        from ..protocol.entities.attributes import (
+            DownloadableMediaMessageAttributes,
+            DocumentAttributes,
+            MessageMetaAttributes,
+        )
+        from ..protocol.entities.media import (
+            DocumentDownloadableMediaMessageProtocolEntity,
         )
         
-        # CORREÇÃO: Não adicionar enc_node diretamente - será criado em _send_to_contacts_with_sessions
-        message_node = ProtocolNode(
-            tag="message",
-            attributes={
-                "to": to,
-                "type": "media",
-                "id": message_id
-            },
-            children=[proto_node]  # Apenas proto_node, não enc_node
+        # Cria DownloadableMediaMessageAttributes
+        downloadable_attrs = DownloadableMediaMessageAttributes(
+            mimetype=mimetype,
+            file_length=file_length,
+            file_sha256=file_sha256,
+            media_key=media_key,
+            media_key_timestamp=media_key_timestamp,
+            file_enc_sha256=file_enc_sha256,
+            url=url,
+            direct_path=direct_path
         )
+        
+        # Cria DocumentAttributes
+        doc_attrs = DocumentAttributes(
+            downloadable_attrs,
+            file_name,
+            file_length,
+            None,  # title
+            None,  # page_count
+            jpeg_thumbnail,
+            caption_from_proto
+        )
+        
+        # Cria MessageMetaAttributes
+        message_meta_attrs = MessageMetaAttributes(
+            id=message_id,
+            recipient=to,
+            fromMe=True,
+            timestamp=int(time.time())
+        )
+        
+        # Cria Protocol Entity
+        entity = DocumentDownloadableMediaMessageProtocolEntity(
+            doc_attrs,
+            message_meta_attrs
+        )
+        
+        # Converte para ProtocolNode
+        message_node = entity.to_protocol_node()
+        
+        # Extrai proto_bytes do node <proto>
+        proto_node = None
+        for child in message_node.children:
+            if child.tag == "proto":
+                proto_node = child
+                break
+        
+        if not proto_node or not proto_node.data:
+            raise ValueError("Falha ao obter dados protobuf do Protocol Entity")
+        
+        proto_bytes = proto_node.data
         
         await self._send_to_contact(message_node, proto_bytes, to)
         
@@ -1762,32 +2127,89 @@ class WhatsAppClient:
         from_jid = f"{self.account_id}@{YowConstants.WHATSAPP_SERVER}"
         sticker_msg = await builder.upload_and_build(to, from_jid)
         
-        proto_bytes = sticker_msg.SerializeToString()
+        # Extrai dados do protobuf
+        url = sticker_msg.url
+        direct_path = sticker_msg.direct_path if sticker_msg.direct_path else None
+        mimetype = sticker_msg.mimetype
+        file_sha256 = sticker_msg.file_sha256
+        file_length = sticker_msg.file_length
+        media_key = sticker_msg.media_key
+        media_key_timestamp = sticker_msg.media_key_timestamp
+        file_enc_sha256 = sticker_msg.file_enc_sha256
+        width = sticker_msg.width
+        height = sticker_msg.height
+        png_thumbnail = None  # StickerMessage não tem thumbnail no protobuf
         
         if not message_id:
             message_id = self._message_builder._generate_message_id()
         
-        # CORREÇÃO: Garantir que 'to' tenha formato correto com @s.whatsapp.net
+        # Garante que 'to' tenha formato correto
         if "@" not in to:
-            to = f"{to}@s.whatsapp.net"
+            to = f"{to}@{YowConstants.WHATSAPP_SERVER}"
         
-        # CORREÇÃO: Adicionar mediatype para que seja propagado ao <enc>
-        proto_node = ProtocolNode(
-            tag="proto",
-            attributes={"mediatype": "sticker"},
-            data=proto_bytes
+        # Importa classes necessárias
+        from ..protocol.entities.attributes import (
+            DownloadableMediaMessageAttributes,
+            StickerAttributes,
+            MessageMetaAttributes,
+        )
+        from ..protocol.entities.media import (
+            StickerDownloadableMediaMessageProtocolEntity,
         )
         
-        # CORREÇÃO: Não adicionar enc_node diretamente - será criado em _send_to_contacts_with_sessions
-        message_node = ProtocolNode(
-            tag="message",
-            attributes={
-                "to": to,
-                "type": "media",
-                "id": message_id
-            },
-            children=[proto_node]  # Apenas proto_node, não enc_node
+        # Cria DownloadableMediaMessageAttributes
+        downloadable_attrs = DownloadableMediaMessageAttributes(
+            mimetype=mimetype,
+            file_length=file_length,
+            file_sha256=file_sha256,
+            media_key=media_key,
+            media_key_timestamp=media_key_timestamp,
+            file_enc_sha256=file_enc_sha256,
+            url=url,
+            direct_path=direct_path
         )
+        
+        # Cria StickerAttributes
+        sticker_attrs = StickerAttributes(
+            downloadable_attrs,
+            width,
+            height,
+            png_thumbnail,
+            is_animated,
+            sticker_msg.sticker_sent_ts if hasattr(sticker_msg, 'sticker_sent_ts') else None,
+            is_avatar,
+            is_ai_sticker,
+            is_lottie
+        )
+        
+        # Cria MessageMetaAttributes
+        message_meta_attrs = MessageMetaAttributes(
+            id=message_id,
+            recipient=to,
+            fromMe=True,
+            timestamp=int(time.time())
+        )
+        
+        # Cria Protocol Entity
+        entity = StickerDownloadableMediaMessageProtocolEntity(
+            sticker_attrs,
+            message_meta_attrs
+        )
+        
+        # Converte para ProtocolNode
+        message_node = entity.to_protocol_node()
+        
+        # Extrai proto_bytes do node <proto>
+        proto_node = None
+        for child in message_node.children:
+            if child.tag == "proto":
+                proto_node = child
+                break
+        
+        if not proto_node or not proto_node.data:
+            raise ValueError("Falha ao obter dados protobuf do Protocol Entity")
+        
+        proto_bytes = proto_node.data
         
         await self._send_to_contact(message_node, proto_bytes, to)
         
@@ -3814,5 +4236,6 @@ class WhatsAppClient:
         except Exception as e:
             logger.warning(f"Erro ao testar proxy: {e}")
             return False
+
 
 

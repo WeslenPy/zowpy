@@ -5,11 +5,10 @@ Sticker Builder - Constrói StickerMessage protobuf para envio de stickers.
 import os
 import time
 import hashlib
-import secrets
 from typing import Optional
 from loguru import logger
 
-from ...utils.media_tools import ImageTools, ImageMetadata
+from ...utils.media_tools import ImageTools, ImageMetadata, normalize_file_path_or_url
 from ...utils.tools import WATools
 from ...core.media.media_cipher import MediaCipher
 from ...core.media.media_uploader import AsyncMediaUploader
@@ -33,7 +32,7 @@ class StickerBuilder:
     @classmethod
     async def from_filepath(
         cls,
-        filepath: str,
+        file_path_or_url: str,
         media_cipher: MediaCipher,
         media_uploader: AsyncMediaUploader,
         media_connection: MediaConnection,
@@ -43,23 +42,37 @@ class StickerBuilder:
         is_lottie: bool = False,
         progress_callback: Optional[callable] = None
     ) -> 'StickerBuilder':
-        """Cria StickerBuilder a partir de arquivo."""
-        if not os.path.exists(filepath):
-            raise FileNotFoundError(f"Arquivo não encontrado: {filepath}")
+        """Cria StickerBuilder a partir de arquivo ou URL."""
+        # Normaliza: se for URL, baixa temporariamente
+        filepath, is_temporary = await normalize_file_path_or_url(
+            file_path_or_url,
+            default_extension=".png",
+            prefix="sticker"
+        )
         
-        # Processa sticker (tratado como imagem)
-        image_metadata = ImageTools.process_image(filepath)
-        
-        builder = cls(media_cipher, media_uploader, media_connection)
-        builder._filepath = filepath
-        builder._image_metadata = image_metadata
-        builder._is_animated = is_animated
-        builder._is_avatar = is_avatar
-        builder._is_ai_sticker = is_ai_sticker
-        builder._is_lottie = is_lottie
-        builder._progress_callback = progress_callback
-        
-        return builder
+        try:
+            # Processa sticker (tratado como imagem)
+            image_metadata = ImageTools.process_image(filepath)
+            
+            builder = cls(media_cipher, media_uploader, media_connection)
+            builder._filepath = filepath
+            builder._is_temporary = is_temporary
+            builder._image_metadata = image_metadata
+            builder._is_animated = is_animated
+            builder._is_avatar = is_avatar
+            builder._is_ai_sticker = is_ai_sticker
+            builder._is_lottie = is_lottie
+            builder._progress_callback = progress_callback
+            
+            return builder
+        except Exception as e:
+            # Limpa arquivo temporário em caso de erro
+            if is_temporary:
+                try:
+                    os.unlink(filepath)
+                except:
+                    pass
+            raise
     
     async def upload_and_build(
         self,
@@ -74,12 +87,13 @@ class StickerBuilder:
         with open(self._filepath, 'rb') as f:
             file_data = f.read()
         
-        # 2. Gera media_key
-        self._media_key = secrets.token_bytes(32)
+        # 2. Gera media_key (formato compatível com zowsuplib)
+        self._media_key = WATools.generate_media_key()
         self._media_key_timestamp = int(time.time())
         
         # 3. Criptografa sticker
         encrypted_data = self._media_cipher.encrypt_sticker(file_data, self._media_key)
+        # Bytes raw (32 bytes) - protobuf espera bytes, não base64
         self._file_enc_sha256 = hashlib.sha256(encrypted_data).digest()
         
         # 4. Obtém media connection
@@ -126,6 +140,7 @@ class StickerBuilder:
         sticker_msg.mimetype = self._image_metadata.mimetype
         sticker_msg.file_sha256 = self._image_metadata.file_sha256
         sticker_msg.file_enc_sha256 = self._file_enc_sha256
+        # media_key já é bytes raw (32 bytes) - protobuf espera bytes, não base64
         sticker_msg.media_key = self._media_key
         sticker_msg.media_key_timestamp = self._media_key_timestamp
         sticker_msg.file_length = self._image_metadata.file_length
@@ -140,6 +155,13 @@ class StickerBuilder:
         sticker_msg.is_ai_sticker = self._is_ai_sticker
         sticker_msg.is_lottie = self._is_lottie
         sticker_msg.sticker_sent_ts = int(time.time() * 1000)  # Timestamp em milissegundos
+        
+        # Limpa arquivo temporário se foi baixado de URL
+        if hasattr(self, '_is_temporary') and self._is_temporary:
+            try:
+                os.unlink(self._filepath)
+            except Exception as e:
+                logger.warning(f"Erro ao remover arquivo temporário: {e}")
         
         return sticker_msg
 

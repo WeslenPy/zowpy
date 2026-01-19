@@ -182,6 +182,9 @@ class ImageBuilder:
         
         if hasattr(self, '_direct_path') and self._direct_path:
             image_msg.direct_path = self._direct_path
+
+
+        logger.debug(f"ImageMessage: {image_msg}")
         
         return image_msg
     
@@ -215,9 +218,8 @@ class ImageBuilder:
         with open(self._filepath, 'rb') as f:
             file_data = f.read()
         
-        # 2. Gera media_key (32 bytes aleatórios)
-        import secrets
-        self._media_key = secrets.token_bytes(32)
+        # 2. Gera media_key (formato compatível com zowsuplib)
+        self._media_key = WATools.generate_media_key()
         self._media_key_timestamp = int(time.time())
         
         # 3. Criptografa imagem
@@ -245,6 +247,7 @@ class ImageBuilder:
         b64Hash_urlsafe = b64Hash.replace('+', '-').replace('/', '_').replace('=', '')
         upload_url = f"https://{host}/mms/image/{b64Hash_urlsafe}?auth={auth}&token={b64Hash_urlsafe}"
         
+        logger.debug(f"Upload URL: {upload_url}")
         # 5. Faz upload
         logger.debug(f"Iniciando upload de imagem para {upload_url[:50]}...")
         
@@ -265,12 +268,22 @@ class ImageBuilder:
             )
             self._upload_result = upload_result
             self._direct_path = upload_result.get("direct_path", "")
+
+            logger.debug(f"Upload result: {upload_result}")
         finally:
             # Remove arquivo temporário
             try:
                 os.unlink(tmp_encrypted_path)
             except Exception as e:
                 logger.warning(f"Erro ao remover arquivo temporário {tmp_encrypted_path}: {e}")
+        
+        # Limpa arquivo temporário se foi baixado de URL
+        if hasattr(self, '_is_temporary') and self._is_temporary:
+            try:
+                os.unlink(self._filepath)
+                logger.debug(f"Arquivo temporário removido: {self._filepath}")
+            except Exception as e:
+                logger.warning(f"Erro ao remover arquivo temporário: {e}")
         
         # 6. Constrói ImageMessage
         return await self.build_protobuf(to_jid, from_jid)

@@ -211,7 +211,7 @@ class ImageTools:
     """Ferramentas para processar imagens."""
     
     MAX_THUMBNAIL_SIZE = 32 * 1024  # 32KB máximo
-    MAX_THUMBNAIL_DIMENSION = 640  # 640px máximo
+    MAX_THUMBNAIL_DIMENSION = 64  # 64px máximo (igual zowsuplib PREVIEW_WIDTH/HEIGHT)
     JPEG_QUALITY = 85
     
     @staticmethod
@@ -276,15 +276,16 @@ class ImageTools:
         """
         Gera thumbnail JPEG da imagem.
         
-        Baseado em comportamento do WhatsApp:
-        - Redimensiona mantendo proporção
-        - Máximo 640px na maior dimensão
+        Baseado em zowsuplib ImageTools.generatePreviewFromImage():
+        - Usa PREVIEW_WIDTH = 64 e PREVIEW_HEIGHT = 64
+        - Redimensiona mantendo proporção (thumbnail limita ambas dimensões)
+        - Máximo 64px em ambas dimensões (igual zowsuplib)
         - Máximo 32KB de tamanho
         - Formato JPEG
         
         Args:
             filepath: Caminho do arquivo
-            max_dimension: Dimensão máxima (padrão: 640px)
+            max_dimension: Dimensão máxima (padrão: 64px, igual zowsuplib)
             quality: Qualidade JPEG 1-100 (padrão: 85)
             max_size: Tamanho máximo em bytes (padrão: 32KB)
         
@@ -313,17 +314,9 @@ class ImageTools:
                 elif img.mode != "RGB":
                     img = img.convert("RGB")
                 
-                # Redimensiona mantendo proporção
-                width, height = img.size
-                if width > max_dimension or height > max_dimension:
-                    if width > height:
-                        new_width = max_dimension
-                        new_height = int((height * max_dimension) / width)
-                    else:
-                        new_height = max_dimension
-                        new_width = int((width * max_dimension) / height)
-                    
-                    img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                # Redimensiona usando thumbnail (igual zowsuplib scaleImage)
+                # thumbnail() mantém proporção e limita ambas dimensões ao máximo
+                img.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
                 
                 # Gera JPEG e ajusta qualidade se necessário
                 import io
@@ -377,7 +370,7 @@ class ImageTools:
             file_data = f.read()
         
         file_length = len(file_data)
-        sha256 = hashlib.sha256(file_data).digest()
+        sha256 = hashlib.sha256(file_data).digest()  # Bytes raw (32 bytes) - protobuf espera bytes, não base64
         
         # Gera thumbnail
         jpeg_thumbnail = None

@@ -7,7 +7,6 @@ Baseado no comportamento do WhatsApp para envio de áudio/PTT.
 import os
 import time
 import hashlib
-import secrets
 from typing import Optional, Dict, Any
 from loguru import logger
 
@@ -65,7 +64,7 @@ class AudioBuilder:
             file_data = f.read()
         
         file_length = len(file_data)
-        file_sha256 = hashlib.sha256(file_data).digest()
+        file_sha256 = hashlib.sha256(file_data).digest()  # Bytes raw (32 bytes) - protobuf espera bytes, não base64
         
         # Gera waveform se PTT
         waveform = None
@@ -107,12 +106,13 @@ class AudioBuilder:
         with open(self._filepath, 'rb') as f:
             file_data = f.read()
         
-        # 2. Gera media_key
-        self._media_key = secrets.token_bytes(32)
+        # 2. Gera media_key (formato compatível com zowsuplib)
+        self._media_key = WATools.generate_media_key()
         self._media_key_timestamp = int(time.time())
         
         # 3. Criptografa áudio
         encrypted_data = self._media_cipher.encrypt_audio(file_data, self._media_key)
+        # Bytes raw (32 bytes) - protobuf espera bytes, não base64
         self._file_enc_sha256 = hashlib.sha256(encrypted_data).digest()
         
         # 4. Obtém media connection
@@ -162,6 +162,7 @@ class AudioBuilder:
         audio_msg.file_length = self._file_length
         audio_msg.seconds = self._duration
         audio_msg.ptt = self._ptt
+        # media_key já é bytes raw (32 bytes) - protobuf espera bytes, não base64
         audio_msg.media_key = self._media_key
         audio_msg.media_key_timestamp = self._media_key_timestamp
         audio_msg.file_enc_sha256 = self._file_enc_sha256

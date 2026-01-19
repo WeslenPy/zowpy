@@ -7,6 +7,7 @@ Usa o novo cliente linear (client_v2) que implementa fluxo baseado no zowsuplib.
 
 import asyncio
 import signal
+import base64
 from zowpy import ZowPyClient
 from zowpy.core.import_account import import_account_from_six_parts
 from loguru import logger
@@ -105,12 +106,30 @@ async def main():
         print("💡 Pressione Ctrl+C para desconectar")
         
         # Envia mensagem inicial (opcional)
-        to = "559885700260"
+        # to = "559885700260"
+        to = "120363403793561395@g.us"
         text = "Hello! Esta é uma mensagem de teste do ZowPy."
         print(f"📤 Enviando mensagem para {to}...")
         msg_id = await client.send_text(to, text)
 
-        await client.send_image(to, "https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png")
+        # Exemplo de uso do send_media_direct
+        # Baseado nos logs do zowsuplib (multi.log linhas 24222-24229)
+        # Valores extraídos do log de envio de imagem PNG
+        print(f"\n📤 Exemplo: Enviando mídia usando send_media_direct...")
+        
+
+        # result = await client.list_groups()
+        # print(result)
+
+        # await client.send_image(to, "https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png")
+
+        # await client.send_sticker(to, "https://s3-bucket-waconnect.s3.us-west-2.amazonaws.com/static/api/5981fc257c8d45b8dd74eeccc674637baff025d19de3eeec877e571e8015732a7777214b675efc19f8d319f6daebb011f5b0d3ea0f52f721dbe015345c37a805.webp")
+        
+        
+        # await client.send_audio(to, "https://s3-bucket-waconnect.s3.us-west-2.amazonaws.com/static/api/f5ba3d484c1f8a182648272831cdcbe6155f686c8600edc703c3a75965b2a7da924d69c8d9591e32c28a1b21ab2b9820f7ca06578420839f68996c76cd6090b1.ogg",ptt=True)
+        
+        # await client.send_document(to, "https://s3-bucket-waconnect.s3.us-west-2.amazonaws.com/static/api/f5ba3d484c1f8a182648272831cdcbe6155f686c8600edc703c3a75965b2a7da924d69c8d9591e32c28a1b21ab2b9820f7ca06578420839f68996c76cd6090b1.ogg")
+        
         # print(f"✅ Mensagem enviada! ID: {msg_id}")
         
         # Mantém o cliente online indefinidamente
@@ -143,3 +162,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+

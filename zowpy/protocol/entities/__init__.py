@@ -10,13 +10,39 @@ from .message import (
     MessageProtocolEntity,
     TextMessageProtocolEntity,
     ExtendedTextMessageProtocolEntity,
-    MessageMetaAttributes,
+    MessageMetaAttributes as MessageMetaAttributesSimple,  # Renomeado para evitar conflito
 )
 from .iq import IqProtocolEntity, GetKeysIqProtocolEntity, SetKeysIqProtocolEntity
 from .presence import PresenceProtocolEntity
 from .receipt import ReceiptProtocolEntity, RetryOutgoingReceiptProtocolEntity
 from .ack import AckProtocolEntity
 from .enc import EncProtocolEntity
+
+# Importa classes de mídia
+from .media import (
+    MediaMessageProtocolEntity,
+    DownloadableMediaMessageProtocolEntity,
+    ImageDownloadableMediaMessageProtocolEntity,
+    VideoDownloadableMediaMessageProtocolEntity,
+    AudioDownloadableMediaMessageProtocolEntity,
+    DocumentDownloadableMediaMessageProtocolEntity,
+    StickerDownloadableMediaMessageProtocolEntity,
+)
+
+# Importa classes de attributes
+from .attributes import (
+    MediaAttributes,
+    ContextInfoAttributes,
+    DownloadableMediaMessageAttributes,
+    ImageAttributes,
+    VideoAttributes,
+    AudioAttributes,
+    DocumentAttributes,
+    StickerAttributes,
+    MessageMetaAttributes,  # A versão completa de attributes
+    MessageAttributes,
+    AttributesConverter,
+)
 
 __all__ = [
     "ProtocolEntity",
@@ -26,7 +52,7 @@ __all__ = [
     "MessageProtocolEntity",
     "TextMessageProtocolEntity",
     "ExtendedTextMessageProtocolEntity",
-    "MessageMetaAttributes",
+    "MessageMetaAttributesSimple",  # Versão simples de message.py
     "IqProtocolEntity",
     "GetKeysIqProtocolEntity",
     "SetKeysIqProtocolEntity",
@@ -35,5 +61,25 @@ __all__ = [
     "RetryOutgoingReceiptProtocolEntity",
     "AckProtocolEntity",
     "EncProtocolEntity",
+    # Media Protocol Entities
+    "MediaMessageProtocolEntity",
+    "DownloadableMediaMessageProtocolEntity",
+    "ImageDownloadableMediaMessageProtocolEntity",
+    "VideoDownloadableMediaMessageProtocolEntity",
+    "AudioDownloadableMediaMessageProtocolEntity",
+    "DocumentDownloadableMediaMessageProtocolEntity",
+    "StickerDownloadableMediaMessageProtocolEntity",
+    # Attributes
+    "MediaAttributes",
+    "ContextInfoAttributes",
+    "DownloadableMediaMessageAttributes",
+    "ImageAttributes",
+    "VideoAttributes",
+    "AudioAttributes",
+    "DocumentAttributes",
+    "StickerAttributes",
+    "MessageMetaAttributes",
+    "MessageAttributes",
+    "AttributesConverter",
 ]
 
