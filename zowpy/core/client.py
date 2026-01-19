@@ -1278,7 +1278,7 @@ class WhatsAppClient:
         if not normalized_jid:
             logger.error(f"assure_contacts_and_send: falha ao normalizar JID: {to}")
             raise ValueError(f"JID inválido: {to}")
-        
+
         phone = normalized_jid.split('@')[0] if '@' in normalized_jid else normalized_jid
 
         # 5. Verifica se contato é novo
@@ -1342,8 +1342,8 @@ class WhatsAppClient:
         if not self._authenticated:
             raise RuntimeError("Not authenticated")
         
-        to_jid = to_whatsapp_jid(to)
-        is_group = to_jid.endswith(f"@{YowConstants.WHATSAPP_GROUP_SERVER}")
+        is_group = to.endswith(f"@{YowConstants.WHATSAPP_GROUP_SERVER}")
+        to_jid = to_whatsapp_jid(to, is_group)
         
         # Incrementa contador de mensagens diárias
         self._daily_message_count += 1
@@ -2964,6 +2964,44 @@ class WhatsAppClient:
             # Sender key não existe, precisa criar e distribuir
             logger.debug(f"Sender key não encontrado para grupo {group_jid}, criando e distribuindo...")
             
+            # Casos especiais: status@broadcast e @broadcast
+            if group_jid == "status@broadcast":
+                # Para status@broadcast, obtém todos os contatos conhecidos
+                logger.debug("Tentando obter contatos para status@broadcast")
+                try:
+                    if hasattr(self.axolotl_manager, '_store') and hasattr(self.axolotl_manager._store, 'getAllContact'):
+                        jids = await self.axolotl_manager._store.getAllContact() if asyncio.iscoroutinefunction(self.axolotl_manager._store.getAllContact) else self.axolotl_manager._store.getAllContact()
+                        logger.info(f"Enviando status para {len(jids)} contatos via status@broadcast")
+                        await self.ensure_sessions_and_send_to_group(message_node, jids)
+                        return
+                    else:
+                        logger.warning("Store não tem método getAllContact, enviando sem destinatários específicos")
+                        await self.ensure_sessions_and_send_to_group(message_node, [])
+                        return
+                except Exception as e:
+                    logger.error(f"Erro ao obter contatos para status@broadcast: {e}")
+                    await self.ensure_sessions_and_send_to_group(message_node, [])
+                    return
+            
+            elif group_jid.endswith("@broadcast"):
+                # Para @broadcast, obtém participantes por BCID
+                logger.debug(f"Obtendo participantes para broadcast: {group_jid}")
+                try:
+                    if hasattr(self.axolotl_manager, '_store') and hasattr(self.axolotl_manager._store, 'findParticipantsByBcid'):
+                        jids = await self.axolotl_manager._store.findParticipantsByBcid(group_jid) if asyncio.iscoroutinefunction(self.axolotl_manager._store.findParticipantsByBcid) else self.axolotl_manager._store.findParticipantsByBcid(group_jid)
+                        logger.debug(f"Participantes obtidos para broadcast: {len(jids)}")
+                        await self.ensure_sessions_and_send_to_group(message_node, jids)
+                        return
+                    else:
+                        logger.warning("Store não tem método findParticipantsByBcid, enviando sem participantes")
+                        await self.ensure_sessions_and_send_to_group(message_node, [])
+                        return
+                except Exception as e:
+                    logger.error(f"Erro ao obter participantes para broadcast: {e}")
+                    await self.ensure_sessions_and_send_to_group(message_node, [])
+                    return
+            
+            # Grupo normal (@g.us)
             # Cria sender key
             await self.axolotl_manager.group_create_skmsg(group_jid)
             
@@ -2977,14 +3015,31 @@ class WhatsAppClient:
                     await self.ensure_sessions_and_send_to_group(message_node, participants)
                     return
                 except Exception as e:
-                    logger.error(f"Erro ao obter participantes do grupo: {e}")
-                    # Fallback: envia sem distribution
+                    logger.error(f"Erro ao obter participantes do grupo via group_handler: {e}")
+                    # Fallback: tenta IQ request direto
+                    logger.debug("Tentando obter participantes via IQ request como fallback...")
+                    try:
+                        participants = await self._get_group_participants_via_iq(group_jid, own_jid)
+                        logger.debug(f"Participantes obtidos via IQ: {len(participants)}")
+                        await self.ensure_sessions_and_send_to_group(message_node, participants)
+                        return
+                    except Exception as iq_error:
+                        logger.error(f"Erro ao obter participantes via IQ request: {iq_error}")
+                        # Fallback final: envia sem distribution
+                        await self._send_to_group_with_sessions(message_node, [], retry_count=0)
+                        return
+            else:
+                logger.warning("GroupHandler não disponível, tentando IQ request direto...")
+                try:
+                    participants = await self._get_group_participants_via_iq(group_jid, own_jid)
+                    logger.debug(f"Participantes obtidos via IQ: {len(participants)}")
+                    await self.ensure_sessions_and_send_to_group(message_node, participants)
+                    return
+                except Exception as iq_error:
+                    logger.error(f"Erro ao obter participantes via IQ request: {iq_error}")
+                    # Fallback final: envia sem distribution
                     await self._send_to_group_with_sessions(message_node, [], retry_count=0)
                     return
-            else:
-                logger.warning("GroupHandler não disponível, enviando sem distribution")
-                await self._send_to_group_with_sessions(message_node, [], retry_count=0)
-                return
         else:
             # Sender key existe, verifica retry
             logger.debug("Sender key encontrado, verificando retry...")
@@ -2994,21 +3049,122 @@ class WhatsAppClient:
             
             if retry_receipt_entity is not None:
                 # Extrai informações do retry
-                retry_count_attr = retry_receipt_entity.get_attribute("count")
-                retry_jid_attr = retry_receipt_entity.get_attribute("retry_jid")
-                
-                if retry_count_attr:
+                # Tenta usar métodos se disponíveis (compatibilidade com objetos)
+                if hasattr(retry_receipt_entity, 'getRetryCount'):
                     try:
-                        retry_count = int(retry_count_attr)
-                    except (ValueError, TypeError):
+                        retry_count = retry_receipt_entity.getRetryCount()
+                    except Exception:
                         retry_count = 0
+                else:
+                    retry_count_attr = retry_receipt_entity.get_attribute("count")
+                    if retry_count_attr:
+                        try:
+                            retry_count = int(retry_count_attr)
+                        except (ValueError, TypeError):
+                            retry_count = 0
                 
-                if retry_jid_attr:
-                    jids_need_sender_key = [retry_jid_attr]
-                    logger.debug(f"Retry detectado: count={retry_count}, jid={retry_jid_attr}")
+                if hasattr(retry_receipt_entity, 'getRetryJid'):
+                    try:
+                        retry_jid = retry_receipt_entity.getRetryJid()
+                        if retry_jid:
+                            jids_need_sender_key = [retry_jid]
+                            logger.debug(f"Retry detectado (via método): count={retry_count}, jid={retry_jid}")
+                    except Exception:
+                        pass
+                else:
+                    retry_jid_attr = retry_receipt_entity.get_attribute("retry_jid")
+                    if retry_jid_attr:
+                        jids_need_sender_key = [retry_jid_attr]
+                        logger.debug(f"Retry detectado (via atributo): count={retry_count}, jid={retry_jid_attr}")
             
             # Envia com sender key distribution se necessário
             await self._send_to_group_with_sessions(message_node, jids_need_sender_key, retry_count=retry_count)
+    
+    async def _get_group_participants_via_iq(
+        self,
+        group_jid: str,
+        own_jid: Optional[str] = None
+    ) -> List[str]:
+        """
+        Obtém participantes do grupo via IQ request direto (fallback).
+        
+        Usado quando group_handler.get_group_participants() falha.
+        
+        Args:
+            group_jid: JID do grupo
+            own_jid: JID próprio para remover da lista (opcional)
+        
+        Returns:
+            Lista de JIDs dos participantes (sem o próprio JID)
+        
+        Raises:
+            Exception: Se obtenção falhar
+        """
+        from .builders.group_builder import GroupBuilder
+        
+        if not self._iq_response_processor:
+            raise RuntimeError("IQResponseProcessor não disponível")
+        
+        logger.debug(f"Obtendo participantes via IQ request para grupo: {group_jid}")
+        
+        # Constrói IQ request
+        iq_node = GroupBuilder.build_get_info(group_jid)
+        iq_id = iq_node.get_attribute("id")
+        
+        # Cria Future para aguardar resposta
+        future = asyncio.Future()
+        
+        async def on_response(node: ProtocolNode):
+            """Processa resposta de informações do grupo"""
+            try:
+                if node.get_attribute("type") != "result":
+                    future.set_exception(Exception(f"Erro ao obter informações: tipo={node.get_attribute('type')}"))
+                    return
+                
+                # Extrai informações do node <group>
+                group_node = node.get_child("group")
+                if not group_node:
+                    future.set_exception(Exception("Resposta sem node <group>"))
+                    return
+                
+                participants = []
+                
+                # Verifica addressing_mode para determinar qual atributo usar
+                addressing_mode = group_node.get_attribute("addressing_mode")
+                value_name = "phone_number" if addressing_mode == "lid" else "jid"
+                
+                # Extrai participantes
+                for child in group_node.children:
+                    if child.tag == "participant":
+                        participant_id = child.get_attribute(value_name)
+                        if participant_id:
+                            participants.append(participant_id)
+                
+                # Remove próprio JID se estiver na lista
+                if own_jid and own_jid in participants:
+                    participants.remove(own_jid)
+                
+                logger.debug(f"Participantes obtidos via IQ: {len(participants)}")
+                future.set_result(participants)
+            
+            except Exception as e:
+                future.set_exception(e)
+        
+        # Registra callback
+        self._iq_response_processor.register_callback(iq_id, on_response, timeout=30.0)
+        
+        # Envia IQ
+        async def send_iq_fn(iq_node: ProtocolNode):
+            await self._send_protocol_node(iq_node)
+        
+        await send_iq_fn(iq_node)
+        
+        # Aguarda resposta
+        try:
+            return await asyncio.wait_for(future, timeout=30.0)
+        except asyncio.TimeoutError:
+            self._iq_response_processor.unregister_callback(iq_id)
+            raise Exception("Timeout aguardando informações do grupo via IQ")
     
     async def _send_to_group_with_sessions(
         self,
@@ -3027,6 +3183,23 @@ class WhatsAppClient:
             retry_count: Contador de retry (se > 0, é retry para participante específico)
         """
         group_jid = message_node.get_attribute("to")
+        
+        # CORREÇÃO: Normaliza group_jid para garantir que seja @g.us
+        # O atributo 'to' deve sempre ser o JID do grupo, não do participante
+        if not group_jid or not group_jid.endswith("@g.us") or len(group_jid) >= 15:
+            # Se não termina com @g.us, pode ser que o to esteja incorreto
+            # Tenta extrair o ID do grupo ou usar o to original
+            # Se o to for um JID individual, isso é um erro - mas vamos tentar corrigir
+            if group_jid and ("@s.whatsapp.net" in group_jid or "@lid" in group_jid):
+                # Extrai o ID numérico antes do @
+                group_id = group_jid.split("@")[0]
+                group_jid = f"{group_id}@g.us"
+                logger.warning(f"Corrigindo 'to' de {message_node.get_attribute('to')} para {group_jid}")
+            
+            # Atualiza o atributo 'to' do message_node
+            if group_jid:
+                message_node.attributes["to"] = group_jid
+        
         proto_node = message_node.get_child("proto")
         if not proto_node:
             raise ValueError("Node de mensagem deve ter <proto>")
@@ -3081,39 +3254,55 @@ class WhatsAppClient:
                 
                 enc_entities.append(enc_node)
         
-        # Se não é retry, adiciona SKMSG da mensagem original
-        if retry_count == 0:
+        # CORREÇÃO: SKMSG deve ser sempre adicionado, não apenas quando retry_count == 0
+        # O SKMSG é a mensagem principal criptografada com sender key que todos os participantes precisam receber
+        # Mesmo que não haja participantes que precisam de sender key distribution, o SKMSG ainda é necessário
+        try:
+            # Criptografa mensagem original com sender key
+            ciphertext = await self.axolotl_manager.group_encrypt(group_jid, proto_bytes)
+            
+            skmsg_node = EncEntity.create_enc_node(
+                enc_type=EncEntity.TYPE_SKMSG,
+                ciphertext=ciphertext,
+                mediatype=mediatype,
+                jid=None
+            )
+            
+            enc_entities.append(skmsg_node)
+            
+        except exceptions.NoSessionException as e:
+            # Se sender key não existe, criar antes
+            logger.warning(f"Sender key não encontrado para grupo {group_jid}, criando...")
+            await self.axolotl_manager.group_create_skmsg(group_jid)
+            # Tentar criptografar novamente
+            ciphertext = await self.axolotl_manager.group_encrypt(group_jid, proto_bytes)
+            
+            skmsg_node = EncEntity.create_enc_node(
+                enc_type=EncEntity.TYPE_SKMSG,
+                ciphertext=ciphertext,
+                mediatype=mediatype,
+                jid=None
+            )
+            
+            enc_entities.append(skmsg_node)
+        except Exception as e:
+            # Em caso de erro, loga mas não falha completamente
+            # O SKMSG é crítico, mas em retries pode ser que a mensagem original já tenha sido enviada
+            logger.warning(f"Erro ao criar SKMSG para grupo {group_jid}: {e}")
+            # Tenta criar sender key e tentar novamente
             try:
-                # Criptografa mensagem original com sender key
+                await self.axolotl_manager.group_create_skmsg(group_jid)
                 ciphertext = await self.axolotl_manager.group_encrypt(group_jid, proto_bytes)
-                
                 skmsg_node = EncEntity.create_enc_node(
                     enc_type=EncEntity.TYPE_SKMSG,
                     ciphertext=ciphertext,
                     mediatype=mediatype,
                     jid=None
                 )
-                
                 enc_entities.append(skmsg_node)
-                
-            except Exception as e:
-                # Se sender key não existe, criar antes
-                if "NoSessionException" in str(type(e)) or "No session" in str(e) or "No sender key" in str(e):
-                    logger.warning(f"Sender key não encontrado para grupo {group_jid}, criando...")
-                    await self.axolotl_manager.group_create_skmsg(group_jid)
-                    # Tentar criptografar novamente
-                    ciphertext = await self.axolotl_manager.group_encrypt(group_jid, proto_bytes)
-                    
-                    skmsg_node = EncEntity.create_enc_node(
-                        enc_type=EncEntity.TYPE_SKMSG,
-                        ciphertext=ciphertext,
-                        mediatype=mediatype,
-                        jid=None
-                    )
-                    
-                    enc_entities.append(skmsg_node)
-                else:
-                    raise
+            except Exception as e2:
+                logger.error(f"Erro crítico ao criar SKMSG após tentativa de criar sender key: {e2}")
+                # Não adiciona SKMSG, mas continua - pode ser um retry onde o SKMSG já foi enviado
         
         # Constrói node final usando EncryptedMessageBuilder
         message_node = EncryptedMessageBuilder.build_encrypted_message(

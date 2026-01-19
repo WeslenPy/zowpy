@@ -156,15 +156,19 @@ class GroupHandler:
                     "admins": []
                 }
                 
+                # Verifica addressing_mode para determinar qual atributo usar
+                addressing_mode = group_node.get_attribute("addressing_mode")
+                value_name = "phone_number" if addressing_mode == "lid" else "jid"
+                
                 # Extrai participantes
                 for child in group_node.children:
                     if child.tag == "participant":
-                        jid = child.get_attribute("jid")
+                        participant_id = child.get_attribute(value_name)
                         participant_type = child.get_attribute("type")
-                        if jid:
-                            info["participants"].append(jid)
+                        if participant_id:
+                            info["participants"].append(participant_id)
                             if participant_type == "admin":
-                                info["admins"].append(jid)
+                                info["admins"].append(participant_id)
                 
                 logger.info(f"Informações do grupo obtidas: {info['jid']}, participants={len(info['participants'])}")
                 future.set_result(info)
