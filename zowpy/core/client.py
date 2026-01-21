@@ -994,7 +994,9 @@ class WhatsAppClient:
                     
                     # Coloca node na fila para processamento (não bloqueia recepção)
                     try:
+                        logger.debug(f"Worker ANTES de processar node {node.tag}")
                         await asyncio.wait_for(node_queue.put((node, decrypted)), timeout=0.1)
+                        logger.debug(f"Worker DEPOIS de processar node {node.tag}")
                         logger.debug(f"Node {node.tag} enfileirado (queue_size={node_queue.qsize()})")
                     except asyncio.TimeoutError:
                         logger.warning(f"Fila de nodes cheia (qsize={node_queue.qsize()}), descartando node {node.tag} (pode indicar processamento lento)")
@@ -1029,7 +1031,9 @@ class WhatsAppClient:
                     
                     # Processa node (pode demorar ou falhar, mas não bloqueia outros workers)
                     try:
+                        logger.debug(f"Worker {worker_id} ANTES de processar node {node.tag}")
                         await self._process_protocol_node(node, raw_data=raw_data)
+                        logger.debug(f"Worker {worker_id} DEPOIS de processar node {node.tag}")
                     except Exception as e:
                         logger.error(f"Erro ao processar node {node.tag} no worker {worker_id}: {e}", exc_info=True)
                     finally:
@@ -2730,34 +2734,6 @@ class WhatsAppClient:
         jids = [recipient_jid]
         
         logger.debug(f"Obtendo chaves para {recipient_jid}, reason={reason}")
-        
-        # CORREÇÃO: Verifica se já existe PKMSG pendente para este recipient
-        async with self._pending_keys_lock:
-            if recipient_jid in self._pending_keys_requests:
-                pending_future = self._pending_keys_requests[recipient_jid]
-                if not pending_future.done():
-                    logger.debug(
-                        f"PKMSG já pendente para {recipient_jid}, "
-                        "aguardando resultado existente"
-                    )
-                    try:
-                        # Aguarda resultado do PKMSG pendente
-                        result = await pending_future
-                        logger.debug(
-                            f"Resultado do PKMSG pendente para {recipient_jid}: "
-                            f"success={len(result[0])}, errors={len(result[1])}"
-                        )
-                        return result
-                    except Exception as e:
-                        logger.error(
-                            f"Erro ao aguardar PKMSG pendente para {recipient_jid}: {e}",
-                            exc_info=True
-                        )
-                        # Remove future com erro e continua para criar novo
-                        del self._pending_keys_requests[recipient_jid]
-                else:
-                    # Future já completou, remove da fila
-                    del self._pending_keys_requests[recipient_jid]
         
         # Cria IQ para obter chaves
         iq_node = PrekeyBuilder.build_get_keys_iq(

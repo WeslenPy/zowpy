@@ -113,11 +113,11 @@ async def main():
         print("💡 Pressione Ctrl+C para desconectar")
         
         # Envia mensagem inicial (opcional)
-        # to = "559885700260"
-        to = "120363404389347069@g.us"
+        to = "559885700260"
+        # to = "120363404389347069@g.us"
         text = "Hello! Esta é uma mensagem de teste do ZowPy."
         print(f"📤 Enviando mensagem para {to}...")
-        # msg_id = await client.send_text(to, text)
+        msg_id = await client.send_text(to, text)
 
         # Exemplo de uso do send_media_direct
         # Baseado nos logs do zowsuplib (multi.log linhas 24222-24229)

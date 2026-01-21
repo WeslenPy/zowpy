@@ -146,18 +146,20 @@ class EncryptionReceiver:
             
             if self._send_pkmsg_for_invalid_message:
                 try:
-                    # await self._send_pkmsg_for_invalid_message(target_jid, message_id, participant)
-                    pass
+                    # CORREÇÃO: Executa _send_pkmsg_for_invalid_message em task separada para evitar deadlock
+                    # O worker não pode bloquear esperando por _get_keys_for_recipient, que precisa processar
+                    # respostas IQ que estão na fila. Se o worker está bloqueado, as respostas IQ não podem
+                    # ser processadas, causando deadlock circular.
+                    import asyncio
+                    asyncio.create_task(self._send_pkmsg_for_invalid_message(target_jid, message_id, participant))
                 except Exception as e:
-                    logger.error(f"Erro ao enviar PKMSG para sincronização: {e}", exc_info=True)
+                    logger.error(f"Erro ao criar task para PKMSG de sincronização: {e}", exc_info=True)
             else:
                 logger.warning("_send_pkmsg_for_invalid_message não configurada")
 
 
             return None
           
-
-        
         except exceptions.NoSessionException:
             logger.warning(f"No session para {sender_jid}, armazenando mensagem pendente")
             # Armazena mensagem pendente

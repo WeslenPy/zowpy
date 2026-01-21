@@ -155,7 +155,7 @@ class AxolotlManager(object):
             session_cipher = self._session_ciphers[key]
         else:
             # Cria wrapper síncrono do store para uso com SessionCipher
-            session_cipher= SessionCipher(self.store, username, deviceid)
+            session_cipher= SessionCipher(self._store,self._store,self._store,self._store, username, deviceid)
             self._session_ciphers[key] = session_cipher
         return session_cipher
 
