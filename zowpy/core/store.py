@@ -10,8 +10,7 @@ import json
 from typing import Optional, Dict, Any
 from loguru import logger
 
-from ..db.pool import AsyncDatabasePool
-
+from zowpy.db.config.engine import AsyncSessionMaker
 
 class AsyncStateStore:
     """
@@ -19,9 +18,9 @@ class AsyncStateStore:
     Cache em memória com TTL, integração com DB assíncrono.
     """
     
-    def __init__(self, account_id: str, db_pool: AsyncDatabasePool):
+    def __init__(self, account_id: str, session_maker: AsyncSessionMaker):
         self.account_id = account_id
-        self.db_pool = db_pool
+        self.session_maker = session_maker
         self._cache: Dict[str, Any] = {}
         self._cache_ttl: Dict[str, float] = {}
         self._cache_lock = asyncio.Lock()
@@ -250,7 +249,7 @@ class AsyncStateStore:
         from ..db.models import Account, AccountState
         from sqlalchemy import select
         
-        async with self.db_pool.get_session() as session:
+        async with self.session_maker() as session:
             # Primeiro obtém Account pelo phone
             result = await session.execute(select(Account).filter_by(phone=self.account_id))
             account = result.scalar_one_or_none()
@@ -294,7 +293,7 @@ class AsyncStateStore:
         from ..db.models import Account, AccountState
         from sqlalchemy import select
         
-        async with self.db_pool.get_session() as session:
+        async with self.session_maker() as session:
             # Primeiro obtém Account pelo phone
             result = await session.execute(select(Account).filter_by(phone=self.account_id))
             account = result.scalar_one_or_none()
@@ -341,7 +340,7 @@ class AsyncStateStore:
         from ..db.models import Account, AccountState
         from sqlalchemy import select
         
-        async with self.db_pool.get_session() as session:
+        async with self.session_maker() as session:
             # Primeiro obtém Account pelo phone
             result = await session.execute(select(Account).filter_by(phone=self.account_id))
             account = result.scalar_one_or_none()

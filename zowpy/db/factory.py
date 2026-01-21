@@ -1,8 +1,9 @@
+from sqlalchemy.ext.asyncio import AsyncSession
 from .manager import AxolotlManager
-from .store.sqlaxolotlstore import SqlAxolotlStore
-from .pool import AsyncDatabasePool
+from .store import SqlAxolotlStore
 from typing import Optional
 from loguru import logger
+from .config.engine import AsyncSessionMaker
 
 
 class AxolotlManagerFactory(object):
@@ -13,19 +14,28 @@ class AxolotlManagerFactory(object):
     linked via foreign keys to the Account table.
     """
 
-    def __init__(self, db_pool: Optional[AsyncDatabasePool] = None):
+    def __init__(self, session_maker: Optional[AsyncSessionMaker] = None):
         """
-        :param db_pool: AsyncDatabasePool instance (optional, will use from_settings if None)
+        :param session_maker: AsyncSessionMaker instance (optional, will use default if None)
         """
-        if db_pool is None:
-            db_pool = AsyncDatabasePool.from_settings()
-        self.db_pool = db_pool
+        if session_maker is None:
+            session_maker = AsyncSessionMaker
+        self.session_maker = session_maker
 
-    async def get_manager(self, profile_name, username, db_pool=None):
+    async def get_manager(self, profile_name, username, session_maker: Optional[AsyncSessionMaker] = None):
         logger.debug(f"get_manager(profile_name={profile_name}, username={username})")
 
         # Unified backend: single DB, multi-account schema
-        store = SqlAxolotlStore(username, db_pool or self.db_pool)
+        session_maker_to_use = session_maker or self.session_maker
+        
+        # Obter account_id primeiro
+        from .models import Account
+        async with session_maker_to_use() as temp_session:
+            account = await Account.get_or_create_account(temp_session, username)
+            account_id = account.id
+        
+        store = SqlAxolotlStore(username, account_id, session_maker_to_use)
+        await store.setup()
 
         manager = AxolotlManager(store, username)
         await manager.initialize()

@@ -19,7 +19,15 @@ class Settings(BaseSettings):
     
     # Default Device Environment
     zowpy_default_device_env: str = "android"
-    
+
+    zowpy_db_echo:bool = False
+    zowpy_db_pool_size:int = 10
+    zowpy_db_max_overflow:int = 20
+    zowpy_db_pool_recycle:int = 3600
+    zowpy_db_pool_timeout:int = 30
+    zowpy_db_pool_pre_ping:bool = True
+
+
     # Logging
     zowpy_log_level: str = "INFO"
     
@@ -31,6 +39,7 @@ class Settings(BaseSettings):
 
 # Instância global
 settings = Settings()
+
 
 
 

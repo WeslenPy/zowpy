@@ -8,8 +8,9 @@ import asyncio
 from typing import Dict, Optional
 from loguru import logger
 
+from zowpy.db.config.engine import AsyncSessionMaker
+
 from .client import ZowPyClient
-from ..db.pool import AsyncDatabasePool
 
 
 class AccountManager:
@@ -18,9 +19,9 @@ class AccountManager:
     Gerencia múltiplos ZowPyClient de forma assíncrona.
     """
     
-    def __init__(self, db_pool: Optional[AsyncDatabasePool] = None):
+    def __init__(self, session_maker: Optional[AsyncSessionMaker] = None):
         from ..config.settings import settings
-        self.db_pool = db_pool or AsyncDatabasePool(settings.zowpy_db_url)
+        self.session_maker = session_maker or AsyncSessionMaker
         self._clients: Dict[str, ZowPyClient] = {}
         self._lock = asyncio.Lock()
     
@@ -38,7 +39,7 @@ class AccountManager:
             if account_id in self._clients:
                 return self._clients[account_id]
             
-            client = ZowPyClient(account_id, self.db_pool)
+            client = ZowPyClient(account_id, self.session_maker)
             self._clients[account_id] = client
             
             logger.info(f"Conta {account_id} adicionada")
@@ -94,8 +95,8 @@ class AccountManager:
     async def shutdown(self) -> None:
         """Encerra manager de forma assíncrona"""
         await self.disconnect_all()
-        if self.db_pool:
-            await self.db_pool.close()
+
+
 
 
 

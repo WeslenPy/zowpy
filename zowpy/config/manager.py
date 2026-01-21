@@ -28,7 +28,7 @@ class ConfigManager(object):
         TYPE_JSON: DictJsonTransform
     }
 
-    async def load(self, path_or_profile_name, profile_only=False, db_pool=None):
+    async def load(self, path_or_profile_name, profile_only=False, session_maker=None):
         # type: (str, bool) -> Config
         """
         Loads a Config instance directly from the unified database (ProfileConfig).
@@ -46,7 +46,7 @@ class ConfigManager(object):
         profile_name = path_or_profile_name
 
         # Load from DB-backed ProfileConfig (JSON only)
-        db_cfg = await StorageTools.readProfileConfig(profile_name, db_pool=db_pool)
+        db_cfg = await StorageTools.readProfileConfig(profile_name, session_maker=session_maker)
         if db_cfg:
             logger.debug(f"Loaded config for profile={profile_name} from ProfileConfig DB")
             if isinstance(db_cfg, (bytes, bytearray)):
@@ -130,7 +130,7 @@ class ConfigManager(object):
 
         raise ValueError("unrecognized serialize_type=%d" % serialize_type)
 
-    async def save(self, profile_name, config, serialize_type=TYPE_JSON, dest=None, db_pool=None):
+    async def save(self, profile_name, config, serialize_type=TYPE_JSON, dest=None, session_maker=None):
         """
         Persists a Config instance for the given profile_name directly into
         the unified database (ProfileConfig table).
@@ -146,6 +146,6 @@ class ConfigManager(object):
 
         outputdata = self.config_to_str(config, serialize_type)
         logger.debug(f"save config: {outputdata}")
-        await StorageTools.writeProfileConfig(profile_name, outputdata, db_pool=db_pool)
+        await StorageTools.writeProfileConfig(profile_name, outputdata, session_maker=session_maker)
 
 

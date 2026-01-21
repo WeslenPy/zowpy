@@ -28,19 +28,19 @@ classifiers = [
 dependencies = [
     "asyncpg>=0.29.0",
     "aiosqlite>=0.19.0",
-    "protobuf>=5.0.0",
-    "betterproto>=2.0.0b7",
+    "protobuf (==5.29.5)",
+    "betterproto (==1.2.5)",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
     "loguru>=0.7.0",
-    "dissononce>=0.34.3",
+    "dissononce (==0.34.3)",
     "transitions>=0.9.0",
-    "pycryptodome>=3.19.0",
-    "python-axolotl-curve25519>=0.4.0",
+    "pycryptodome (==3.23.0)",
+    "python-axolotl-curve25519 (>=0.4.1.post2)",
     "aiohttp>=3.9.0",
     "aiofiles>=23.0.0",
     "requests>=2.31.0",
-    "sqlalchemy>=2.0.0",
+    "sqlalchemy (==2.0.45)",
     "alembic>=1.13.0",
     "PySocks>=1.7.1",
     "pydub (>=0.25.1,<0.26.0)",
@@ -49,6 +49,7 @@ dependencies = [
     "pillow (>=12.1.0,<13.0.0)",
     "names (>=0.3.0,<0.4.0)",
     "socksio (>=1.0.0,<2.0.0)",
+    "cryptography (==46.0.3)",
 ]
 
 [project.optional-dependencies]
@@ -83,3 +84,8 @@ strict = false
 asyncio_mode = "auto"
 testpaths = ["tests"]
 
+
+[dependency-groups]
+dev = [
+    "pytest (>=9.0.2,<10.0.0)"
+]

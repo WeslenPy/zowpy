@@ -1,27 +1,9 @@
 # -*- coding: utf-8 -*-
 
 import logging
-import asyncio
 
 from .ecc.curve import Curve
 
-def _run_async(coro):
-    """Helper para executar corrotina em contexto síncrono"""
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Se já há um loop rodando, cria um novo
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                return loop.run_until_complete(coro)
-            finally:
-                loop.close()
-        else:
-            return loop.run_until_complete(coro)
-    except RuntimeError:
-        # Não há loop, cria um novo
-        return asyncio.run(coro)
 from .ratchet.aliceaxolotlparameters import AliceAxolotlParameters
 from .ratchet.bobaxolotlparamaters import BobAxolotlParameters
 from .ratchet.symmetricaxolotlparameters import SymmetricAxolotlParameters
@@ -263,7 +245,7 @@ class SessionBuilder:
 
     def processInitKeyExchangeMessage(self):
         try:
-            sequence = _run_async(KeyHelper.getRandomSequence(65534)) + 1
+            sequence = KeyHelper.getRandomSequence(65534) + 1
             flags = KeyExchangeMessage.INITIATE_FLAG
             baseKey = Curve.generateKeyPair()
             ratchetKey = Curve.generateKeyPair()

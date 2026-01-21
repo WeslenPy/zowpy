@@ -19,8 +19,7 @@ from ..axolotl.exceptions import (
 )
 from ..axolotl.protocol.senderkeydistributionmessage import SenderKeyDistributionMessage
 from ..axolotl.state.axolotlstore import AxolotlStore
-from ..db.store.sqlaxolotlstore import SqlAxolotlStore
-from ..db.store.sqlite.liteaxolotlstore import LiteAxolotlStore
+from ..db.store import SqlAxolotlStore
 from ..axolotl import exceptions
 import random
 import sys
@@ -61,15 +60,11 @@ class AxolotlManager(object):
         logger.debug(f"Identity key pair: {type(self._identity)}")
         logger.debug(f"Registration ID: {type(self._registration_id)}")
 
-
-
         assert self._registration_id is not None
         assert self._identity is not None
 
         # GroupSessionBuilder precisa de senderKeyStore síncrono
-        from ..db.store.sync_wrapper import SyncStoreWrapper
-        sync_store = SyncStoreWrapper(self._store)
-        self._group_session_builder = GroupSessionBuilder(sync_store)
+        self._group_session_builder = GroupSessionBuilder(self._store)
         self._session_ciphers = {} # type: dict[str, SessionCipher]
         self._group_ciphers = {} # type: dict[str, GroupCipher]
         # logger.debug(f"Initialized AxolotlManager [username={self._username}, db={store}]")
@@ -95,16 +90,18 @@ class AxolotlManager(object):
 
         if force or len_pending_prekeys < self.THRESHOLD_REGEN:
             count_gen = self.COUNT_GEN_PREKEYS
-            max_prekey_id = await self._store.preKeyStore.loadMaxPreKeyId()
+            max_prekey_id = await self._store.loadMaxPreKeyId()
             logger.info(f"Generating {count_gen} prekeys, current max_prekey_id={max_prekey_id}")
-            prekeys = await KeyHelper.generatePreKeys(max_prekey_id + 1, count_gen)
-            logger.info(f"Storing {len(prekeys)} prekeys")
-            for i in range(0, len(prekeys)):
-                key = prekeys[i]
-                logger.debug(f"Storing prekey {i + 1}/{len(prekeys)} \r")
-                await self._store.storePreKey(key.getId(), key)
+            prekeys = KeyHelper.generatePreKeys(max_prekey_id + 1, count_gen)
+            logger.info(f"Storing {len(prekeys)} prekeys using bulk insert")
+            
+            # Bulk insert: prepara lista de tuplas (preKeyId, preKeyRecord)
+            prekey_tuples = [(key.getId(), key) for key in prekeys]
+            
+            # Armazena todos os prekeys em uma única transação
+            await self._store.storePreKeys(prekey_tuples)
+            logger.info(f"Successfully stored {len(prekeys)} prekeys in bulk")
             return prekeys
-
 
         return []
 
@@ -112,7 +109,7 @@ class AxolotlManager(object):
     async def load_unsent_prekeys(self):
         logger.debug("load_unsent_prekeys")
         # Usa o método do store que já gerencia a sessão de banco
-        unsent = await self._store.preKeyStore.loadUnsentPendingPreKeys()
+        unsent = await self._store.loadUnsentPendingPreKeys()
         if unsent and len(unsent) > 0:
             logger.info(f"Loaded {len(unsent)} unsent prekeys")
         return unsent if unsent else []
@@ -125,7 +122,7 @@ class AxolotlManager(object):
         :rtype:
         """
         logger.debug(f"set_prekeys_as_sent(prekeyIds=[{len(prekeyIds)} prekeyIds])")
-        await self._store.preKeyStore.setAsSent([prekey.getId() for prekey in prekeyIds])
+        await self._store.setPreKeysAsSent([prekey.getId() for prekey in prekeyIds])
 
     async def generate_signed_prekey(self):
         logger.debug("generate_signed_prekey")
@@ -139,7 +136,7 @@ class AxolotlManager(object):
                 new_signed_prekey_id = latest_signed_prekey.getId() + 1
         else:
             new_signed_prekey_id = random.randint(0,800)
-        signed_prekey = await KeyHelper.generateSignedPreKey(self._identity, new_signed_prekey_id)
+        signed_prekey = KeyHelper.generateSignedPreKey(self._identity, new_signed_prekey_id)
         await self._store.storeSignedPreKey(signed_prekey.getId(), signed_prekey)
         return signed_prekey
 
@@ -158,9 +155,7 @@ class AxolotlManager(object):
             session_cipher = self._session_ciphers[key]
         else:
             # Cria wrapper síncrono do store para uso com SessionCipher
-            from ..db.store.sync_wrapper import SyncStoreWrapper
-            sync_store = SyncStoreWrapper(self._store)
-            session_cipher= SessionCipher(sync_store, sync_store, sync_store, sync_store, username, deviceid)
+            session_cipher= SessionCipher(self.store, username, deviceid)
             self._session_ciphers[key] = session_cipher
         return session_cipher
 
@@ -172,9 +167,7 @@ class AxolotlManager(object):
         else:
             # GroupCipher precisa de um senderKeyStore síncrono
             # Cria wrapper síncrono que também funciona como SenderKeyStore
-            from ..db.store.sync_wrapper import SyncStoreWrapper
-            sync_store = SyncStoreWrapper(self._store)
-            group_cipher = GroupCipher(sync_store, senderkeyname)
+            group_cipher = GroupCipher(self._store, senderkeyname)
             self._group_ciphers[senderkeyname] = group_cipher
         return group_cipher
 
@@ -204,7 +197,7 @@ class AxolotlManager(object):
         recipientId,a,deviceid = WATools.jidDecode(username)
 
         cipher = self._get_session_cipher(recipientId,deviceid)
-        return await asyncio.to_thread(lambda: cipher.encrypt(message + self._generate_random_padding()))
+        return  cipher.encrypt(message + self._generate_random_padding())
     
     async def decrypt_pkmsg(self, senderid, data, unpad):
         logger.debug(f"decrypt_pkmsg(senderid={senderid}, data=(omitted), unpad={unpad})")
@@ -315,11 +308,11 @@ class AxolotlManager(object):
         recipient,a,deviceid = WATools.jidDecode(username)
 
         # Usa wrapper síncrono para SessionBuilder
-        from ..db.store.sync_wrapper import SyncStoreWrapper
-        sync_store = SyncStoreWrapper(self._store)
-        session_builder = SessionBuilder(sync_store, sync_store, sync_store, sync_store, recipient, deviceid)
+        session_builder = SessionBuilder(self._store, self._store, 
+                                            self._store, self._store, 
+                                            recipient, deviceid)
         try:
-            await asyncio.to_thread(lambda: session_builder.processPreKeyBundle(prekeybundle))
+            session_builder.processPreKeyBundle(prekeybundle)
         except UntrustedIdentityException as ex:
             if autotrust:
                 await self.trust_identity(ex.getName(), ex.getIdentityKey())

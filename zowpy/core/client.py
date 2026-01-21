@@ -13,8 +13,9 @@ import time
 from typing import Optional, Dict, Any, Tuple, List, Union
 from loguru import logger
 
-# from zowpy.axolotl.state.prekeyrecord import PreKeyRecord
+from zowpy.db.config.engine import AsyncSessionMaker
 from zowpy.db.factory import AxolotlManagerFactory
+from zowpy.db.models import Account
 from zowpy.profile.profile import AsyncProfile
 from zowpy.config.v1.config import Config
 from zowpy.utils.tools import WATools
@@ -96,7 +97,7 @@ class WhatsAppClient:
         self,
         account_id: str,
         endpoint: Tuple[str, int] = None,
-        db_pool=None,
+        session_maker: Optional[AsyncSessionMaker] = None,
         device_config=None,
         proxy: Optional[Dict[str, any]] = None,
     ):
@@ -106,14 +107,14 @@ class WhatsAppClient:
         Args:
             account_id: ID da conta (número de telefone)
             endpoint: Endpoint TCP do WhatsApp (host, port)
-            db_pool: Pool de banco de dados
+            session_maker: AsyncSessionMaker
             device_config: Configuração do dispositivo
             proxy: Configuração de proxy (opcional)
         """
         self.account_id = normalize(account_id)
         self.endpoint = endpoint or (f"g.whatsapp.net", 443)#{random.randint(1, 16)}
         self.proxy = proxy
-        self.db_pool = db_pool
+        self.session_maker = session_maker
         self.device_config = device_config
         
         # Componentes principais
@@ -211,7 +212,7 @@ class WhatsAppClient:
             
             # 2. Gera prekeys ANTES da conexão para evitar timeout
             logger.info("Gerando prekeys antes da conexão...")
-            await self._load_prekeys()
+            prekeys_generated = await self._load_prekeys()
             logger.info("✓ Prekeys gerados")
             
             # 2.5. Verifica prekeys não enviadas e define passive=True se necessário
@@ -338,13 +339,13 @@ class WhatsAppClient:
         await self._load_proxy_from_db()
         
         # Profile
-        self.profile = AsyncProfile(self.account_id, db_pool=self.db_pool)
+        self.profile = AsyncProfile(self.account_id, session_maker=self.session_maker)
         
         # State store
-        self.state_store = AsyncStateStore(self.account_id, self.db_pool)
+        self.state_store = AsyncStateStore(self.account_id, self.session_maker)
         
         # Axolotl manager
-        factory = AxolotlManagerFactory(db_pool=self.db_pool)
+        factory = AxolotlManagerFactory(session_maker=self.session_maker)
         self.axolotl_manager = await factory.get_manager(self.account_id, self.account_id)
         
         # Coder (sem eventos - versão simplificada)
@@ -694,8 +695,13 @@ class WhatsAppClient:
                 logger.info(f"Geradas {len(prekeys)} prekeys com sucesso")
             else:
                 logger.info("Prekeys já existem em quantidade suficiente")
+
+            return prekeys
         except Exception as e:
             logger.warning(f"Erro ao gerar prekeys (não crítico): {e}")
+
+            return []
+
     
     async def _perform_handshake(self) -> None:
         """
@@ -845,7 +851,7 @@ class WhatsAppClient:
         Baseado no fluxograma do zowsuplib:
         - update_account_status: marca conta como logged_in
         """
-        if not self.db_pool:
+        if not self.session_maker:
             logger.debug("db_pool não disponível, pulando atualização de status")
             return
         
@@ -853,7 +859,7 @@ class WhatsAppClient:
             from ..db.models import Account
             from sqlalchemy import select
             
-            async with self.db_pool.get_session() as session:
+            async with self.session_maker() as session:
                 result = await session.execute(
                     select(Account).filter_by(phone=self.account_id)
                 )
@@ -3561,15 +3567,16 @@ class WhatsAppClient:
         
         logger.info("Reconectado com sucesso")
     
-    async def _check_and_flush_prekeys(self) -> None:
+    async def _check_and_flush_prekeys(self, prekeys_generated: list=[]) -> None:
         """
         Verifica e envia prekeys não enviadas.
         
         Baseado em AxolotlControlLayer.onAuthed()
         """
+
         try:
             # Carrega prekeys não enviadas
-            unsent_prekeys_result = await self.axolotl_manager.load_unsent_prekeys()
+            unsent_prekeys_result = prekeys_generated or await self.axolotl_manager.load_unsent_prekeys()
             logger.debug(f"load_unsent_prekeys retornou tipo: {type(unsent_prekeys_result)}")
             
             # Garante que é uma lista
@@ -3615,95 +3622,126 @@ class WhatsAppClient:
         import random
         import binascii
         
+        logger.info("=" * 80)
+        logger.info("[ZOWPY] _flush_prekeys() INICIADO")
+        logger.info(f"[ZOWPY] Parâmetros: prekeys_count={len(prekeys)}, reboot_connection={reboot_connection}, retry_count={retry_count}")
+        
         # Armazena informações para retry se necessário
         async with self._keys_retry_lock:
             self._pending_keys_retry = (signed_prekey, prekeys, reboot_connection, retry_count)
         
         # Prepara dicionário de prekeys
-        # CORREÇÃO: Ajustar IDs antes de passar para o builder (como no zowsuplib)
-        logger.info("[ZOWPY] Preparando prekeys_dict (comparação com zowsuplib)...")
+        logger.info("[ZOWPY] Preparando prekeys_dict...")
         prekeys_dict = {}
-        for prekey in prekeys:
+        for i, prekey in enumerate(prekeys):
             key_pair = prekey.getKeyPair()
+            prekey_id_orig = prekey.getId()
+            logger.debug(f"[ZOWPY] Prekey[{i}] ID={prekey_id_orig}, public_key serialized len={len(key_pair.getPublicKey().serialize())}")
+            
             # Serializa public key (remove primeiro byte)
             public_key_bytes = key_pair.getPublicKey().serialize()[1:]
-            # Ajusta array e ID (como no zowsuplib)
-            adjusted_key = PrekeyBuilder._adjust_array(public_key_bytes)
-            prekey_id = prekey.getId()
-            adjusted_id = PrekeyBuilder._adjust_id(prekey_id)  # Ajusta ID aqui
-            prekeys_dict[adjusted_id] = adjusted_key  # Usa bytes ajustado como chave
+            logger.debug(f"[ZOWPY] Prekey[{i}] public_key after [1:] len={len(public_key_bytes)}")
             
-            # Log detalhado para comparação
-            logger.debug(f"[ZOWPY] Prekey preparado: id_int={prekey_id}, id_ajustado_len={len(adjusted_id)}, public_key_raw_len={len(public_key_bytes)}, adjusted_key_len={len(adjusted_key)}")
+            # Ajusta array e ID (como no zowsuplib)
+            adjusted_id = PrekeyBuilder._adjust_id(prekey_id_orig)
+            adjusted_key = PrekeyBuilder._adjust_array(public_key_bytes)
+            prekeys_dict[adjusted_id] = adjusted_key
+            
+            logger.debug(f"[ZOWPY] Prekey[{i}] ID ajustado: {prekey_id_orig} (int) -> {len(adjusted_id)} bytes: {binascii.hexlify(adjusted_id).decode()}")
+            logger.debug(f"[ZOWPY] Prekey[{i}] Key ajustado: raw_len={len(public_key_bytes)}, adjusted_len={len(adjusted_key)}, first_20_hex={binascii.hexlify(adjusted_key[:20]).decode() if len(adjusted_key) >= 20 else binascii.hexlify(adjusted_key).decode()}")
+            
+            # Log detalhado para os primeiros 3 prekeys
+            if i < 3:
+                logger.info(f"[ZOWPY] Prekey[{i}] FINAL: id_hex={binascii.hexlify(adjusted_id).decode()}, key_first_40_hex={binascii.hexlify(adjusted_key[:40]).decode() if len(adjusted_key) >= 40 else binascii.hexlify(adjusted_key).decode()}...")
         
-        logger.info(f"[ZOWPY] prekeys_dict criado com {len(prekeys_dict)} prekeys (chaves são bytes ajustados, valores são bytes ajustados)")
+        logger.info(f"[ZOWPY] preKeysDict criado com {len(prekeys_dict)} prekeys")
         
         # Prepara signed prekey
-        # CORREÇÃO: Ajustar ID antes de passar para o builder (como no zowsuplib)
-        logger.info("[ZOWPY] Preparando signed_prekey (comparação com zowsuplib)...")
+        logger.info("[ZOWPY] Preparando signedKeyTuple...")
         signed_prekey_id = signed_prekey.getId()
-        adjusted_signed_id = PrekeyBuilder._adjust_id(signed_prekey_id)  # Ajusta ID aqui
-        signed_public_key = signed_prekey.getKeyPair().getPublicKey().serialize()[1:]
-        signed_adjusted_key = PrekeyBuilder._adjust_array(signed_public_key)
-        signed_signature = signed_prekey.getSignature()
-        signed_adjusted_sig = PrekeyBuilder._adjust_array(signed_signature)
-        signed_key_tuple = (adjusted_signed_id, signed_adjusted_key, signed_adjusted_sig)  # ID já ajustado (bytes)
+        logger.info(f"[ZOWPY] Signed prekey ID original: {signed_prekey_id} (int, tipo={type(signed_prekey_id)})")
         
-        logger.info(f"[ZOWPY] Signed prekey preparado: id_int={signed_prekey_id}, id_ajustado_len={len(adjusted_signed_id)}, public_key_raw_len={len(signed_public_key)}, adjusted_key_len={len(signed_adjusted_key)}, signature_raw_len={len(signed_signature)}, adjusted_sig_len={len(signed_adjusted_sig)}")
+        # Ajusta signed prekey ID
+        adjusted_signed_id = PrekeyBuilder._adjust_id(signed_prekey_id)
+        logger.info(f"[ZOWPY] Signed prekey ID ajustado: {len(adjusted_signed_id)} bytes: {binascii.hexlify(adjusted_signed_id).decode()}")
+        
+        # Serializa signed prekey public key
+        signed_public_key_serialized = signed_prekey.getKeyPair().getPublicKey().serialize()
+        logger.debug(f"[ZOWPY] Signed prekey public_key serialized len={len(signed_public_key_serialized)}")
+        signed_public_key_trimmed = signed_public_key_serialized[1:]
+        logger.debug(f"[ZOWPY] Signed prekey public_key after [1:] len={len(signed_public_key_trimmed)}")
+        
+        # Ajusta signed prekey public key
+        adjusted_signed_key = PrekeyBuilder._adjust_array(signed_public_key_trimmed)
+        logger.info(f"[ZOWPY] Signed prekey key ajustado: raw_len={len(signed_public_key_trimmed)}, adjusted_len={len(adjusted_signed_key)}, first_40_hex={binascii.hexlify(adjusted_signed_key[:40]).decode() if len(adjusted_signed_key) >= 40 else binascii.hexlify(adjusted_signed_key).decode()}...")
+        
+        # Serializa signature
+        signature_raw = signed_prekey.getSignature()
+        logger.debug(f"[ZOWPY] Signed prekey signature raw len={len(signature_raw)}, first_40_hex={binascii.hexlify(signature_raw[:40]).decode() if len(signature_raw) >= 40 else binascii.hexlify(signature_raw).decode()}...")
+        
+        # Ajusta signature
+        adjusted_signature = PrekeyBuilder._adjust_array(signature_raw)
+        logger.info(f"[ZOWPY] Signed prekey signature ajustado: raw_len={len(signature_raw)}, adjusted_len={len(adjusted_signature)}, first_40_hex={binascii.hexlify(adjusted_signature[:40]).decode() if len(adjusted_signature) >= 40 else binascii.hexlify(adjusted_signature).decode()}...")
+        
+        signed_key_tuple = (adjusted_signed_id, adjusted_signed_key, adjusted_signature)
+        logger.info(f"[ZOWPY] signedKeyTuple criado: id_len={len(adjusted_signed_id)}, key_len={len(adjusted_signed_key)}, sig_len={len(adjusted_signature)}")
         
         # Prepara identity key
-        logger.info("[ZOWPY] Preparando identity_key (comparação com zowsuplib)...")
-        identity_public_key = self.axolotl_manager.identity.getPublicKey().serialize()[1:]
-        adjusted_identity = PrekeyBuilder._adjust_array(identity_public_key)
-        logger.info(f"[ZOWPY] Identity key preparado: raw_len={len(identity_public_key)}, adjusted_len={len(adjusted_identity)}")
+        logger.info("[ZOWPY] Preparando identity key...")
+        identity_public_key_serialized = self.axolotl_manager.identity.getPublicKey().serialize()
+        logger.debug(f"[ZOWPY] Identity public_key serialized len={len(identity_public_key_serialized)}")
+        identity_public_key_trimmed = identity_public_key_serialized[1:]
+        logger.debug(f"[ZOWPY] Identity public_key after [1:] len={len(identity_public_key_trimmed)}")
+        
+        adjusted_identity = PrekeyBuilder._adjust_array(identity_public_key_trimmed)
+        logger.info(f"[ZOWPY] Identity key ajustado: raw_len={len(identity_public_key_trimmed)}, adjusted_len={len(adjusted_identity)}, first_40_hex={binascii.hexlify(adjusted_identity[:40]).decode() if len(adjusted_identity) >= 40 else binascii.hexlify(adjusted_identity).decode()}...")
         
         # Prepara registration ID
-        # CORREÇÃO: Ajustar registration ID antes de passar para o builder (como no zowsuplib)
+        logger.info("[ZOWPY] Preparando registration_id...")
         registration_id_int = self.axolotl_manager.registration_id
-        adjusted_registration_id = PrekeyBuilder._adjust_id(registration_id_int, byte_count=4)  # Ajusta ID aqui
-        logger.info(f"[ZOWPY] Registration ID: {registration_id_int} (int) -> ajustado: {len(adjusted_registration_id)} bytes")
+        logger.info(f"[ZOWPY] Registration ID original: {registration_id_int} (int, tipo={type(registration_id_int)})")
+        
+        adjusted_registration_id = PrekeyBuilder._adjust_id(registration_id_int, byte_count=4)
+        logger.info(f"[ZOWPY] Registration ID ajustado: {len(adjusted_registration_id)} bytes: {binascii.hexlify(adjusted_registration_id).decode()}")
         
         # Cria IQ node
-        logger.info("[ZOWPY] Chamando PrekeyBuilder.build_set_keys_iq()...")
-        logger.info(f"[ZOWPY] Parâmetros: prekeys_dict_len={len(prekeys_dict)}, registration_id_ajustado_len={len(adjusted_registration_id)}, djb_type=5")
-        logger.info("[ZOWPY] Comparação esperada com zowsuplib:")
-        logger.info("[ZOWSUPLIB] SetKeysIqProtocolEntity(identityKey, signedPreKey, preKeys, Curve.DJB_TYPE, registrationId)")
-        logger.info("[ZOWSUPLIB] - identityKey: bytes ajustados (adjustArray)")
-        logger.info("[ZOWSUPLIB] - signedPreKey: tuple(id_ajustado, key_ajustado, sig_ajustado)")
-        logger.info("[ZOWSUPLIB] - preKeys: dict{id_ajustado: key_ajustado}")
-        logger.info("[ZOWSUPLIB] - djbType: 5 (Curve.DJB_TYPE)")
-        logger.info("[ZOWSUPLIB] - registrationId: bytes ajustados (adjustId, byte_count=4)")
+        logger.info("[ZOWPY] Criando SetKeysIqProtocolEntity...")
+        logger.info("[ZOWPY] Parâmetros do SetKeysIqProtocolEntity:")
+        logger.info(f"[ZOWPY]   - identityKey: {len(adjusted_identity)} bytes")
+        logger.info(f"[ZOWPY]   - signedPreKey: tuple({len(adjusted_signed_id)}, {len(adjusted_signed_key)}, {len(adjusted_signature)})")
+        logger.info(f"[ZOWPY]   - preKeys: dict com {len(prekeys_dict)} chaves")
+        logger.info(f"[ZOWPY]   - djbType: 5")
+        logger.info(f"[ZOWPY]   - registrationId: {len(adjusted_registration_id)} bytes")
         
         iq_node = PrekeyBuilder.build_set_keys_iq(
             identity_key=adjusted_identity,
             signed_prekey=signed_key_tuple,
             prekeys=prekeys_dict,
-            registration_id=adjusted_registration_id,  # Passa bytes ajustado
-            djb_type=5,  # Curve.DJB_TYPE
-            iq_id=None  # Será gerado
+            registration_id=adjusted_registration_id,
+            djb_type=5,
+            iq_id=None
         )
         
         iq_id = iq_node.get_attribute("id")
-        logger.info(f"[ZOWPY] IQ node criado com ID: {iq_id}")
+        logger.info(f"[ZOWPY] IQ node criado, ID: {iq_id}")
    
         async def on_error(node: ProtocolNode):
             """Callback de erro"""
-            logger.info(f"Callback flush keys  de erro: {node}")
+            logger.info(f"Callback flush keys de erro: {node}")
             await self._on_sent_keys_error(node, iq_node, signed_prekey, prekeys, reboot_connection, retry_count)
         
-
         async def on_success(node):
             await self._on_keys_flushed(prekeys, reboot_connection=reboot_connection)
 
         # Registra callbacks e envia
-        # O IQResponseProcessor processa automaticamente erros se o tipo for "error"
-
         self._iq_response_processor.register_callback(iq_id, on_success, timeout=30.0)
-        # Para erros, vamos verificar no process_iq_response
 
         await self._send_protocol_node(iq_node)
         
-        logger.info(f"Prekeys enviadas: {len(prekeys)} prekeys, signed_prekey_id={signed_prekey.getId()}")
+        logger.info(f"[ZOWPY] Enviando IQ node para servidor...")
+        logger.info(f"[ZOWPY] Prekeys enviadas: {len(prekeys)} prekeys, signed_prekey_id={signed_prekey.getId()}")
+        logger.info("[ZOWPY] _flush_prekeys() FINALIZADO")
+        logger.info("=" * 80)
     
     async def _on_keys_flushed(self, prekeys: list, reboot_connection: bool = False) -> None:
         """
@@ -3711,18 +3749,23 @@ class WhatsAppClient:
         
         Baseado em AxolotlControlLayer.on_keys_flushed()
         """
+        logger.info("=" * 80)
+        logger.info("[ZOWPY] _on_keys_flushed() - Prekeys enviadas com sucesso!")
+        logger.info(f"[ZOWPY] Prekeys enviadas: {len(prekeys)}")
+        
         async with self._keys_retry_lock:
             self._pending_keys_retry = None
       
-        
         await self.axolotl_manager.set_prekeys_as_sent(prekeys)
         
-        logger.info(f"Prekeys marcadas como enviadas: {len(prekeys)} prekeys")
+        logger.info(f"[ZOWPY] Prekeys marcadas como enviadas: {len(prekeys)} prekeys")
         
         if reboot_connection:
-            logger.info("Reiniciando conexão após envio de prekeys...")
-            # Reconecta usando o método reconnect
+            logger.info("[ZOWPY] Reiniciando conexão após envio de prekeys...")
             await self.reconnect()
+        
+        logger.info("[ZOWPY] _on_keys_flushed() FINALIZADO")
+        logger.info("=" * 80)
     
     async def _on_sent_keys_error(
         self,
@@ -4299,14 +4342,14 @@ class WhatsAppClient:
     
     async def _load_proxy_from_db(self) -> Optional[ProxyConfig]:
         """Carrega proxy do banco de dados e configura na instância."""
-        if not self.db_pool:
+        if not self.session_maker:
             return None
         
         try:
             from ..db.models import Account
             from sqlalchemy import select
             
-            async with self.db_pool.get_session() as session:
+            async with self.session_maker() as session:
                 result = await session.execute(
                     select(Account).filter_by(phone=self.account_id)
                 )
@@ -4334,7 +4377,7 @@ class WhatsAppClient:
     
     async def _save_proxy_to_db(self, proxy_config: ProxyConfig) -> None:
         """Salva proxy no banco de dados."""
-        if not self.db_pool:
+        if not self.session_maker:
             logger.debug("db_pool não disponível, pulando salvamento de proxy")
             return
         
@@ -4342,7 +4385,7 @@ class WhatsAppClient:
             from ..db.models import Account
             from sqlalchemy import select
             
-            async with self.db_pool.get_session() as session:
+            async with self.session_maker() as session:
                 result = await session.execute(
                     select(Account).filter_by(phone=self.account_id)
                 )
@@ -4366,14 +4409,14 @@ class WhatsAppClient:
     
     async def _remove_proxy_from_db(self) -> None:
         """Remove proxy do banco de dados."""
-        if not self.db_pool:
+        if not self.session_maker:
             return
         
         try:
             from ..db.models import Account
             from sqlalchemy import select
             
-            async with self.db_pool.get_session() as session:
+            async with self.session_maker() as session:
                 result = await session.execute(
                     select(Account).filter_by(phone=self.account_id)
                 )
@@ -4425,6 +4468,7 @@ class WhatsAppClient:
         except Exception as e:
             logger.warning(f"Erro ao testar proxy: {e}")
             return False
+
 
 
 

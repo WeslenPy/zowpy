@@ -18,7 +18,7 @@ class KeyHelper:
         pass
 
     @staticmethod
-    async def generateIdentityKeyPair():
+    def generateIdentityKeyPair():
         """
         Generate an identity key pair.  Clients should only do this once,
         at install time.
@@ -35,7 +35,7 @@ class KeyHelper:
         # return IdentityKeyPair(serialized=serialized)
 
     @staticmethod
-    async def generateRegistrationId(extended_range=False):
+    def generateRegistrationId(extended_range=False):
         """
         Generate a registration ID.  Clients should only do this once,
         at install time.
@@ -44,18 +44,18 @@ class KeyHelper:
         of slightly higher encoding overhead.
         """
         if extended_range:
-            regId = await KeyHelper.getRandomSequence(2147483646) + 1
+            regId = KeyHelper.getRandomSequence(2147483646) + 1
         else:
-            regId = await KeyHelper.getRandomSequence(16380) + 1
+            regId = KeyHelper.getRandomSequence(16380) + 1
 
         return regId
 
     @staticmethod
-    async def getRandomSequence(max):
+    def getRandomSequence(max):
         return SystemRandom().randrange(max)
 
     @staticmethod
-    async def generatePreKeys(start, count):
+    def generatePreKeys(start, count):
         """
         Generate a list of PreKeys.  Clients should do this at install time, and
         subsequently any time the list of PreKeys stored on the server runs low.
@@ -77,7 +77,7 @@ class KeyHelper:
         return results
 
     @staticmethod
-    async def generateSignedPreKey(identityKeyPair, signedPreKeyId):
+    def generateSignedPreKey(identityKeyPair, signedPreKeyId):
         keyPair = Curve.generateKeyPair()
         signature = Curve.calculateSignature(identityKeyPair.getPrivateKey(), keyPair.getPublicKey().serialize())
 
@@ -86,15 +86,15 @@ class KeyHelper:
         return spk
 
     @staticmethod
-    async def generateSenderSigningKey():
+    def generateSenderSigningKey():
         return Curve.generateKeyPair()
 
     @staticmethod
-    async def generateSenderKey():
+    def generateSenderKey():
         return os.urandom(32)
 
     @staticmethod
-    async def generateSenderKeyId():
-        return await KeyHelper.getRandomSequence(2147483647)
+    def generateSenderKeyId():
+        return KeyHelper.getRandomSequence(2147483647)
 
 

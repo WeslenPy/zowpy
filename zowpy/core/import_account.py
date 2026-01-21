@@ -18,7 +18,8 @@ from zowpy.utils.tools import WATools, StorageTools
 from ..consonance.structs.keypair import KeyPair
 from ..db.manager import AxolotlManager
 from ..db.models import Account
-from ..db.pool import AsyncDatabasePool
+from ..db.config.engine import AsyncSessionMaker
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from ..config.bot_env import BotEnv
 from ..config.device_env import DeviceEnv
 from ..config.network import NetworkEnv
@@ -33,7 +34,7 @@ async def import_account_from_six_parts(
     six_parts_data: str,
     *,
     env: str = "android",
-    db_pool: Optional[AsyncDatabasePool] = None,
+    session_maker: Optional[AsyncSessionMaker] = None,
 ) -> str:
     """
     Importa uma conta nova a partir de uma string no formato 6-parts.
@@ -60,7 +61,7 @@ async def import_account_from_six_parts(
     Args:
         six_parts_data: String com 6 campos separados por vírgula
         env: Ambiente do dispositivo (default: "android")
-        db_pool: Pool de banco de dados (opcional, cria padrão se não fornecido)
+        session_maker: AsyncSessionMaker instance (opcional, cria padrão se não fornecido)
     
     Returns:
         str: Número de telefone (account_id) da conta importada
@@ -68,15 +69,17 @@ async def import_account_from_six_parts(
     Raises:
         ValueError: Se o formato dos dados for inválido
     """
-    # Cria db_pool padrão se não fornecido
-    if db_pool is None:
+    # Cria session_maker padrão se não fornecido
+    if session_maker is None:
         from ..config.settings import settings
-        db_pool = AsyncDatabasePool(settings.zowpy_db_url)
-        await db_pool.initialize()
+        engine = create_async_engine(settings.zowpy_db_url)
+        session_maker = async_sessionmaker(bind=engine, expire_on_commit=False)
         
         # Inicializa banco de dados (cria tabelas se não existirem)
-        from ..db import init_db
-        await init_db(db_pool=db_pool)
+        from ..db.config.base import Model
+        async with session_maker() as temp_session:
+            async with temp_session.bind.begin() as conn:
+                await conn.run_sync(Model.metadata.create_all)
     
     parts = [p.strip() for p in six_parts_data.split(",")]
     if len(parts) != 6:
@@ -85,7 +88,7 @@ async def import_account_from_six_parts(
     phone, pk1, sk1, pk2, sk2, sixth = parts
     
     # Verifica se a conta já existe no banco de dados
-    async with db_pool.get_session() as session:
+    async with session_maker() as session:
         from sqlalchemy import select
         result = await session.execute(select(Account).filter_by(phone=phone))
         existing_account = result.scalar_one_or_none()
@@ -162,7 +165,7 @@ async def import_account_from_six_parts(
     )
     
     # Garante que a conta exista e atualiza alguns metadados básicos
-    async with db_pool.get_session() as session:
+    async with session_maker() as session:
         from sqlalchemy import select
         result = await session.execute(select(Account).filter_by(phone=phone))
         account = result.scalar_one_or_none()
@@ -181,11 +184,16 @@ async def import_account_from_six_parts(
         
         await session.commit()
     
-    profile = AsyncProfile(phone, db_pool=db_pool)
-    await profile.write_config(config,db_pool=db_pool)
+    profile = AsyncProfile(phone, session_maker=session_maker)
+    await profile.write_config(config, session_maker=session_maker)
     
-    from ..db.store.sqlaxolotlstore import SqlAxolotlStore
-    store = SqlAxolotlStore(phone, db_pool)
+    # Obter account_id primeiro
+    async with session_maker() as temp_session:
+        account = await Account.get_or_create_account(temp_session, phone)
+        account_id = account.id
+    
+    from ..db.store import SqlAxolotlStore
+    store = SqlAxolotlStore(phone, account_id, session_maker)
     axolotl_manager = AxolotlManager(store, phone)
     
     pub_raw = base64.b64decode(pk2)

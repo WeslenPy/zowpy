@@ -9,12 +9,13 @@ import asyncio
 from typing import Optional, Callable, Dict, Any, Union
 from loguru import logger
 
+from zowpy.db.config.engine import AsyncSessionMaker
+
 from ..core.client import WhatsAppClient
 from ..core.events import AsyncEventEmitter
 from ..core.store import AsyncStateStore
 from ..axolotl.sessioncipher import SessionCipher
 from ..protocol.messages import AsyncMessageHandler
-from ..db.pool import AsyncDatabasePool
 from .errors import ZowPyError, ConnectionError
 
 
@@ -27,7 +28,7 @@ class ZowPyClient:
     def __init__(
         self,
         account_id: str,
-        db_pool: Optional[AsyncDatabasePool] = None,
+        session_maker: Optional[AsyncSessionMaker] = None,
         device_env: Optional[str] = None,
     ):
         """
@@ -35,12 +36,12 @@ class ZowPyClient:
         
         Args:
             account_id: ID da conta (número de telefone)
-            db_pool: Pool de banco de dados (opcional)
+            session_maker: Pool de banco de dados (opcional)
             device_env: Ambiente do dispositivo (android, ios, smb_android, smb_ios)
         """
         self.account_id = account_id
         from ..config.settings import settings
-        self.db_pool = db_pool or AsyncDatabasePool(settings.zowpy_db_url)
+        self.session_maker = session_maker or AsyncSessionMaker
         self.device_env = device_env or "smb_android"
         
         # Componentes internos
@@ -60,20 +61,16 @@ class ZowPyClient:
             ConnectionError: Se conexão falhar
         """
         try:
-            # Inicializa DB pool se necessário
-            if not hasattr(self.db_pool, '_pool') or self.db_pool._pool is None:
-                await self.db_pool.initialize()
             
-            # Inicializa banco de dados (cria tabelas se não existirem)
-            from ..db import init_db
-            await init_db(db_pool=self.db_pool)
+            from ..db.config import create_db
+            await create_db()
             
             # Cria cliente completo
             # CORREÇÃO: Endpoint None = seleção aleatória (igual ao zowsuplib)
             self._client = WhatsAppClient(
                 self.account_id,
                 # endpoint=None,  # Seleciona aleatoriamente da lista do zowsuplib
-                db_pool=self.db_pool,
+                session_maker=self.session_maker,
                 device_config=self.device_env,
             )
             
@@ -545,9 +542,7 @@ class ZowPyClient:
         """Desconecta de forma assíncrona"""
         if self._client:
             await self._client.disconnect()
-        
-        if self.db_pool:
-            await self.db_pool.close()
+
     
     def on_message(self, handler: Callable) -> None:
         """Registra handler de mensagem"""
@@ -560,6 +555,7 @@ class ZowPyClient:
     def on_disconnected(self, handler: Callable) -> None:
         """Registra handler de desconexão"""
         self._events.on("disconnected", handler)
+
 
 
 

@@ -53,7 +53,11 @@ async def main():
     # six_parts = "201288305948,gehExdJAhPTAkqd5LDQ0zsBmUuuvP837jAQHNgndgnk=,+I0r7c+ZSZl6HmmY9uUI8E3ki4+ZRQ3trbYGISvLem0=,HiqT5eRDdur33fCRLW/UmUi8Sm/c+mEL+ajC/pIE/nk=,AAOlZ9VKgYuEvIetCouS+BS2DXCLd5XS2PispXKClkw=,MjAxMjg4MzA1OTQ4I6EaQHqQklbEQ2Klo9w0kEh1yPOB"
     # six_parts= "201208868278,+PfRJy8TA13JI8rZiQYLnWZ+X0sEYDmB08ZzxiSsWxo=,aL74nYQzRkb3OGioDiAbeCMBadegkXBPO3TE5xf3nFM=,MbuNxcpVZuFg6C4IC2+knQeyvdd+R2icsOSh1vD57Xk=,qCPWUX3807N+/KU4hkogYh9REvvGOxpugFj2CQWIynM=,MjAxMjA4ODY4Mjc4I2nimRzHQYZasFIhLa1u1gEQrfAm"
     
-    six_parts = "201223930365,yn393U8sbIKti1Efdnbk0e2Q6m5yUwYOtLlnYVfPP0Q=,MLamPzWnhfKj5JPcnBPEEp6YIcomYbYrUPXdlrf/qEQ=,GSsGb7EHKfeAHBQRnXFRjlUeo7jS7Zh0LdoyUPCraiQ=,0G7eIsr2cQTY0e5bj/+ax5COdC3tP59B3lz8mlqvD0U=,MjAxMjIzOTMwMzY1IwN6OSuFVT02qBFhrRnOYQFckUMB"
+    # six_parts = "201223930365,yn393U8sbIKti1Efdnbk0e2Q6m5yUwYOtLlnYVfPP0Q=,MLamPzWnhfKj5JPcnBPEEp6YIcomYbYrUPXdlrf/qEQ=,GSsGb7EHKfeAHBQRnXFRjlUeo7jS7Zh0LdoyUPCraiQ=,0G7eIsr2cQTY0e5bj/+ax5COdC3tP59B3lz8mlqvD0U=,MjAxMjIzOTMwMzY1IwN6OSuFVT02qBFhrRnOYQFckUMB"
+    
+    # six_parts = "201221738157,Z2If9htLbmWogKiefrdlAzHwQHjkwfPAvkTmucpoQBE=,kGNH79dHSLZ7xIJZapNvT17jaWC79hgfxx074nVSt0A=,POI3x69j0om0xaNPOYG+kqKfW0HpTq9lpfgBTBo5xnw=,yJuW4Ikd0eB0001p0ss9f2EiA6GitdVGTUYdooQr6FA=,MjAxMjIxNzM4MTU3I6WKbYijHPwkd9k4qepyoM2bPTlR"
+    
+    six_parts = "201228276695,Apxk7RvapZh/uBUcLbaYvguEgd0mHyP3jSN6wfy3cTk=,UDBcdUHsAYTr9i+X4/ehoAAvlZr6WGBy5lAPst2Yz0w=,4B+wLEZzb+PWkRI2l8C8Kr7togg86hdmsiq46pdl4TU=,8LL3kDyHnPlArTFz5hztHugaGAXRbAnWplLZAes7Hno=,MjAxMjI4Mjc2Njk1I5ck5MpKH/TfJeN6V/6YUhg0w5s+"
     await import_account_from_six_parts(six_parts, env="smb_android")
     
     # Cria cliente
@@ -113,7 +117,7 @@ async def main():
         to = "120363404389347069@g.us"
         text = "Hello! Esta é uma mensagem de teste do ZowPy."
         print(f"📤 Enviando mensagem para {to}...")
-        msg_id = await client.send_text(to, text)
+        # msg_id = await client.send_text(to, text)
 
         # Exemplo de uso do send_media_direct
         # Baseado nos logs do zowsuplib (multi.log linhas 24222-24229)
@@ -124,9 +128,9 @@ async def main():
         # result = await client.list_groups()
         # print(result)
 
-        await client.send_image(to, "https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png")
+        # await client.send_image(to, "https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png")
 
-        await client.send_sticker(to, "https://s3-bucket-waconnect.s3.us-west-2.amazonaws.com/static/api/5981fc257c8d45b8dd74eeccc674637baff025d19de3eeec877e571e8015732a7777214b675efc19f8d319f6daebb011f5b0d3ea0f52f721dbe015345c37a805.webp")
+        # await client.send_sticker(to, "https://s3-bucket-waconnect.s3.us-west-2.amazonaws.com/static/api/5981fc257c8d45b8dd74eeccc674637baff025d19de3eeec877e571e8015732a7777214b675efc19f8d319f6daebb011f5b0d3ea0f52f721dbe015345c37a805.webp")
         
         
         # await client.send_audio(to, "https://s3-bucket-waconnect.s3.us-west-2.amazonaws.com/static/api/f5ba3d484c1f8a182648272831cdcbe6155f686c8600edc703c3a75965b2a7da924d69c8d9591e32c28a1b21ab2b9820f7ca06578420839f68996c76cd6090b1.ogg",ptt=True)
@@ -165,4 +169,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 

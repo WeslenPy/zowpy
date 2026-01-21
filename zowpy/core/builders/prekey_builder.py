@@ -38,10 +38,19 @@ class PrekeyBuilder:
         Returns:
             bytes: ID ajustado
         """
+        _id_orig = _id
         _id_hex = format(_id, 'x')
+        logger.debug(f"[ZOWPY] adjustId: input_id={_id_orig} (tipo={type(_id_orig)}), hex_original={_id_hex}, byte_count={byte_count}")
+        
         zfiller = len(_id_hex) if len(_id_hex) % 2 == 0 else len(_id_hex) + 1
-        _id_hex = _id_hex.zfill(zfiller if zfiller > byte_count * 2 else byte_count * 2)
-        return binascii.unhexlify(_id_hex)
+        logger.debug(f"[ZOWPY] adjustId: zfiller={zfiller}, target_bytes={byte_count*2}")
+        
+        _id_hex_padded = _id_hex.zfill(zfiller if zfiller > byte_count * 2 else byte_count * 2)
+        logger.debug(f"[ZOWPY] adjustId: hex_padded={_id_hex_padded}, len={len(_id_hex_padded)}")
+        
+        result = binascii.unhexlify(_id_hex_padded)
+        logger.debug(f"[ZOWPY] adjustId: output_len={len(result)}, output_hex={binascii.hexlify(result).decode()}")
+        return result
     
     @staticmethod
     def _adjust_array(arr: bytes) -> bytes:
@@ -57,7 +66,10 @@ class PrekeyBuilder:
             bytes: Array ajustado
         """
         from ...axolotl.util.hexutil import HexUtil
-        return HexUtil.decodeHex(binascii.hexlify(arr))
+        arr_hex = binascii.hexlify(arr).decode()
+        result = HexUtil.decodeHex(arr_hex)
+        logger.debug(f"[ZOWPY] adjustArray: input_len={len(arr)}, input_hex_first_40={arr_hex[:40]}..., output_len={len(result)}, output_hex_first_40={binascii.hexlify(result[:40]).decode() if len(result) >= 40 else binascii.hexlify(result).decode()}...")
+        return result
     
     @staticmethod
     def build_set_keys_iq(
@@ -86,6 +98,9 @@ class PrekeyBuilder:
         Returns:
             ProtocolNode: Node IQ para enviar prekeys
         """
+        logger.info("=" * 80)
+        logger.info("[ZOWPY] PrekeyBuilder.build_set_keys_iq() INICIADO")
+        
         if not iq_id:
             iq_id = IQBuilder.generate_iq_id()
         
@@ -96,6 +111,7 @@ class PrekeyBuilder:
             iq_id=iq_id,
             to=YowConstants.WHATSAPP_SERVER
         )
+        logger.debug(f"[ZOWPY] IQ base node criado: xmlns=encrypt, type=set, id={iq_id}")
         
         # Identity key já vem ajustado de _flush_prekeys()
         identity_node = ProtocolNode(
@@ -103,6 +119,7 @@ class PrekeyBuilder:
             attributes={},
             data=identity_key  # Usa diretamente, sem ajuste
         )
+        logger.debug(f"[ZOWPY] Identity node criado: data_len={len(identity_key)}, first_40_hex={binascii.hexlify(identity_key[:40]).decode() if len(identity_key) >= 40 else binascii.hexlify(identity_key).decode()}...")
         
         # Cria lista de prekeys
         list_node = ProtocolNode(
@@ -112,7 +129,8 @@ class PrekeyBuilder:
         )
         keyNodes = []
         
-        for key_id, public_key in prekeys.items():
+        logger.info(f"[ZOWPY] Criando lista de {len(prekeys)} prekeys...")
+        for i, (key_id, public_key) in enumerate(prekeys.items()):
             # CORREÇÃO: ID já vem ajustado (bytes), não precisa ajustar novamente
             key_node = ProtocolNode(
                 tag="key",
@@ -131,14 +149,22 @@ class PrekeyBuilder:
                 ]
             )
             keyNodes.append(key_node)
-
+            
+            # Log detalhado para os primeiros 3 prekeys
+            if i < 3:
+                logger.debug(f"[ZOWPY] Prekey[{i}] no IQ: id_len={len(key_id)}, id_hex={binascii.hexlify(key_id).decode()}, value_len={len(public_key)}, value_first_40_hex={binascii.hexlify(public_key[:40]).decode() if len(public_key) >= 40 else binascii.hexlify(public_key).decode()}...")
 
         list_node.add_children(keyNodes)
-            
+        logger.info(f"[ZOWPY] Lista de prekeys criada com {len(keyNodes)} keys")
         
         # Cria signed prekey node
         # CORREÇÃO: signed_id já vem ajustado (bytes), não precisa ajustar novamente
         signed_id, signed_value, signed_signature = signed_prekey
+        
+        logger.debug(f"[ZOWPY] Signed prekey detalhes: id_len={len(signed_id)}, key_len={len(signed_value)}, sig_len={len(signed_signature)}")
+        logger.debug(f"[ZOWPY] Signed prekey ID hex: {binascii.hexlify(signed_id).decode()}")
+        logger.debug(f"[ZOWPY] Signed prekey key first_40_hex: {binascii.hexlify(signed_value[:40]).decode() if len(signed_value) >= 40 else binascii.hexlify(signed_value).decode()}...")
+        logger.debug(f"[ZOWPY] Signed prekey sig first_40_hex: {binascii.hexlify(signed_signature[:40]).decode() if len(signed_signature) >= 40 else binascii.hexlify(signed_signature).decode()}...")
         
         skey_node = ProtocolNode(
             tag="skey",
@@ -161,6 +187,7 @@ class PrekeyBuilder:
                 )
             ]
         )
+        logger.debug(f"[ZOWPY] Signed prekey node criado")
         
         # Cria registration node
         # CORREÇÃO: registration_id já vem ajustado (bytes), não precisa ajustar novamente
@@ -169,6 +196,7 @@ class PrekeyBuilder:
             attributes={},
             data=registration_id  # ID já ajustado (bytes)
         )
+        logger.debug(f"[ZOWPY] Registration node criado: data_len={len(registration_id)}, hex={binascii.hexlify(registration_id).decode()}")
         
         # Cria type node
         type_node = ProtocolNode(
@@ -176,6 +204,7 @@ class PrekeyBuilder:
             attributes={},
             data=struct.pack('<B', djb_type)
         )
+        logger.debug(f"[ZOWPY] Type node criado: djbType={djb_type}, data={binascii.hexlify(struct.pack('<B', djb_type)).decode()}")
         
         # Adiciona todos os children ao node IQ
         node.add_children([
@@ -185,6 +214,10 @@ class PrekeyBuilder:
             type_node,
             skey_node
         ])
+        
+        logger.info(f"[ZOWPY] IQ node finalizado: {len(node.children)} children adicionados")
+        logger.info("[ZOWPY] PrekeyBuilder.build_set_keys_iq() CONCLUÍDO")
+        logger.info("=" * 80)
         
         logger.debug(f"Set keys IQ construído: prekeys={len(prekeys)}, registration_id_len={len(registration_id)}")
         ldata = list(node) if type(node) is bytearray else node

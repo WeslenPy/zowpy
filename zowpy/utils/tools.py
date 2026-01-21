@@ -257,7 +257,7 @@ class StorageTools:
         return default
 
     @classmethod
-    async def writeProfileConfig(cls, profile_name, config, db_pool):
+    async def writeProfileConfig(cls, profile_name, config, session_maker):
         """
         Writes profile config exclusively to the unified database (ProfileConfig).
 
@@ -267,10 +267,10 @@ class StorageTools:
         
         :param profile_name: Nome do perfil (deve conter o número de telefone)
         :param config: Configuração (str ou bytes)
-        :param db_pool: AsyncDatabasePool instance
+        :param session_maker: AsyncSessionMaker instance
         """
-        if db_pool is None:
-            logger.error("db_pool é obrigatório para writeProfileConfig")
+        if session_maker is None:
+            logger.error("session_maker é obrigatório para writeProfileConfig")
             return
         
         phone = cls._extract_phone_from_profile_name(profile_name)
@@ -283,7 +283,7 @@ class StorageTools:
         from ..db.models import Account, ProfileConfig
         from sqlalchemy import select
 
-        async with db_pool.get_session() as session:
+        async with session_maker() as session:
             # Busca ou cria Account
             result = await session.execute(select(Account).filter_by(phone=phone))
             account = result.scalar_one_or_none()
@@ -318,7 +318,7 @@ class StorageTools:
             logger.debug(f"ProfileConfig stored in DB for phone={phone}")
 
     @classmethod
-    async def readProfileConfig(cls, profile_name, db_pool):
+    async def readProfileConfig(cls, profile_name, session_maker):
         """
         Reads profile config exclusively from the unified database (ProfileConfig).
 
@@ -326,11 +326,11 @@ class StorageTools:
         file-based config.json lookup is performed.
         
         :param profile_name: Nome do perfil (deve conter o número de telefone)
-        :param db_pool: AsyncDatabasePool instance
+        :param session_maker: AsyncSessionMaker instance
         :return: bytes ou None
         """
-        if db_pool is None:
-            logger.error("db_pool é obrigatório para readProfileConfig")
+        if session_maker is None:
+            logger.error("session_maker é obrigatório para readProfileConfig")
             return None
         
         phone = cls._extract_phone_from_profile_name(profile_name)
@@ -342,7 +342,7 @@ class StorageTools:
         from ..db.models import Account, ProfileConfig
         from sqlalchemy import select
 
-        async with db_pool.get_session() as session:
+        async with session_maker() as session:
             result = await session.execute(select(Account).filter_by(phone=phone))
             account = result.scalar_one_or_none()
             
