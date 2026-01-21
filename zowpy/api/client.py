@@ -349,6 +349,12 @@ class ZowPyClient:
             raise ConnectionError("Cliente não conectado")
         return await self._client.group_handler.join_with_code(code)
     
+    async def join_group_with_link(self, invite_link: str) -> str:
+        """Entra em grupo com link de convite."""
+        if not self._client or not self._client.group_handler:
+            raise ConnectionError("Cliente não conectado")
+        return await self._client.group_handler.join_group_with_link(invite_link)
+    
     async def approve_group_participants(self, group_jid: str, participants: list, action: str = "approve") -> bool:
         """Aprova ou rejeita participantes pendentes."""
         if not self._client or not self._client.group_handler:
@@ -555,6 +561,7 @@ class ZowPyClient:
     def on_disconnected(self, handler: Callable) -> None:
         """Registra handler de desconexão"""
         self._events.on("disconnected", handler)
+
 
 
 

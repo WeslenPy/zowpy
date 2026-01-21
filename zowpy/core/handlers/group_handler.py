@@ -734,6 +734,49 @@ class GroupHandler:
             self._iq_processor.unregister_callback(iq_id)
             raise Exception("Timeout aguardando entrada no grupo")
     
+    async def join_group_with_link(self, invite_link: str) -> str:
+        """
+        Entra em grupo com link de convite.
+        
+        Extrai o código do link e usa join_with_code.
+        
+        Args:
+            invite_link: Link de convite (ex: https://chat.whatsapp.com/CnZ7Qm021N5pAa4oQk0oIq)
+        
+        Returns:
+            JID do grupo
+        
+        Raises:
+            ValueError: Se o link for inválido
+            Exception: Se entrada falhar
+        """
+        # Extrai o código do link
+        # Link formato: https://chat.whatsapp.com/CODE
+        if not invite_link:
+            raise ValueError("Link de convite não pode ser vazio")
+        
+        # Remove espaços e quebras de linha
+        invite_link = invite_link.strip()
+        
+        # Extrai código (parte após a última barra)
+        if "/" in invite_link:
+            code = invite_link.split("/")[-1]
+        else:
+            # Se não tiver barra, assume que já é o código
+            code = invite_link
+        
+        # Remove query params se houver (ex: ?ref=...)
+        if "?" in code:
+            code = code.split("?")[0]
+        
+        if not code:
+            raise ValueError(f"Link de convite inválido: {invite_link}")
+        
+        logger.info(f"Extraído código '{code}' do link '{invite_link}'")
+        
+        # Usa join_with_code com o código extraído
+        return await self.join_with_code(code)
+    
     async def approve_participants(
         self,
         group_jid: str,

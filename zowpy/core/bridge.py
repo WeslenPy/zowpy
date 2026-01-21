@@ -113,6 +113,7 @@ class TCPStreamBridge:
                     if not data:
                         # EOF - conexão fechada
                         logger.info("Bridge: EOF recebido do TCP, encerrando loop")
+                        await self._stream.cancel()
                         break
                     
                     logger.debug(f"Bridge: recebidos {len(data)} bytes do TCP")
@@ -158,6 +159,7 @@ class TCPStreamBridge:
                 
                 except StreamCancelledError:
                     logger.info("Bridge: stream cancelado, encerrando loop TCP→Stream")
+                    await self._stream.cancel()
                     break
                 except ConnectionError as e:
                     logger.error(f"Bridge: erro de conexão no loop TCP→Stream: {e}")

@@ -98,6 +98,11 @@ class ProtocolNode:
         return self.attributes.get(key)
 
 
+    def remove_attribute(self, key: str) -> None:
+        """Remove atributo do node."""
+        self.attributes.pop(key, None)
+
+
     def get_all_children(self,tag = None):
         ret = []
         if tag is None:

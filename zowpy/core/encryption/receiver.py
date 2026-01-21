@@ -97,31 +97,31 @@ class EncryptionReceiver:
             return None
 
 
-        target_jid = sender_pn if sender_pn else sender_jid
+        real_target_jid = sender_jid if sender_jid else sender_pn
         
         try:
             # Descriptografa baseado no tipo
             if enc_type == self.TYPE_SKMSG:
                 # Mensagem de grupo
-                return await self._decrypt_skmsg(node, enc_data, sender_jid)
+                return await self._decrypt_skmsg(node, enc_data, real_target_jid)
             elif enc_type == self.TYPE_PKMSG:
                 # Mensagem PreKey
-                return await self._decrypt_pkmsg(node, enc_data, sender_jid, enc_version)
+                return await self._decrypt_pkmsg(node, enc_data, real_target_jid, enc_version)
             elif enc_type == self.TYPE_MSG:
                 # Mensagem normal (WhisperMessage)
-                return await self._decrypt_msg(node, enc_data, sender_jid, enc_version)
+                return await self._decrypt_msg(node, enc_data, real_target_jid, enc_version)
             else:
                 logger.warning(f"Tipo de mensagem criptografada não suportado: {enc_type}")
                 return None
         
         except exceptions.InvalidKeyIdException:
-            logger.warning(f"Invalid KeyId para {target_jid}, ignorando")
+            logger.warning(f"Invalid KeyId para {real_target_jid}, ignorando")
             return None
         
         except exceptions.InvalidMessageException as e:
             # Trata InvalidMessage (Bad MAC, sessão desincronizada, etc.)
             error_msg = str(e) if str(e) else "Invalid message (Bad MAC ou sessão desincronizada)"
-            logger.warning(f"InvalidMessage para {sender_jid}: {error_msg}")
+            logger.warning(f"InvalidMessage para {real_target_jid}: {error_msg}")
             
             # Retry logic (máximo 2 tentativas)
             message_id = node.get_attribute("id")
@@ -135,8 +135,8 @@ class EncryptionReceiver:
             participant = node.get_attribute("participant")
             
             # Prioriza sender_pn sobre from_jid
-            if not target_jid:
-                logger.error(f"Não foi possível determinar target_jid para PKMSG: sender_pn={sender_pn}, from_jid={from_jid}")
+            if not real_target_jid:
+                logger.error(f"Não foi possível determinar real_target_jid para PKMSG: sender_pn={sender_pn}, from_jid={real_target_jid}")
                 return None
             
             if sender_pn:
@@ -151,7 +151,7 @@ class EncryptionReceiver:
                     # respostas IQ que estão na fila. Se o worker está bloqueado, as respostas IQ não podem
                     # ser processadas, causando deadlock circular.
                     import asyncio
-                    asyncio.create_task(self._send_pkmsg_for_invalid_message(target_jid, message_id, participant))
+                    # asyncio.create_task(self._send_pkmsg_for_invalid_message(real_target_jid, message_id, participant))
                 except Exception as e:
                     logger.error(f"Erro ao criar task para PKMSG de sincronização: {e}", exc_info=True)
             else:
@@ -173,18 +173,21 @@ class EncryptionReceiver:
             
             # Obtém chaves se tiver função configurada
             if self._get_keys:
-
                 try:
-                    success_jids, error_jids = await self._get_keys(target_jid, reason=None)
-                    if success_jids:
-                        # Processa mensagens pendentes após obter sessão
-                        if self._process_pending:
-                            await self._process_pending(conversation_id[0], conversation_id[1])
-                    else:
-                        logger.warning(f"Erro ao obter chaves para {sender_pn}: {error_jids}")
+                    import asyncio
+                    async def get_keys(conversation_id: Tuple[str, str], real_target_jid: str) -> Tuple[List[str], List[str]]:
+                        success_jids, error_jids  =  await self._get_keys(real_target_jid, reason=None)
+                        if success_jids:
+                            # Processa mensagens pendentes após obter sessão
+                            if self._process_pending:
+                                await self._process_pending(conversation_id[0], conversation_id[1], success_jids)
+                            else:
+                                logger.warning(f"Erro ao obter chaves para {real_target_jid}: {error_jids}")
+
+                    asyncio.create_task(get_keys(conversation_id,real_target_jid))
+
                 except Exception as e:
-                    logger.error(f"Erro ao obter chaves para {sender_pn}: {e}", exc_info=True)
-            else:
+                    logger.error(f"Erro ao obter chaves para {real_target_jid}: {e}", exc_info=True)
                 logger.warning("get_keys_fn não configurada, não é possível obter chaves automaticamente")
             
             # Retorna None para indicar que mensagem está pendente

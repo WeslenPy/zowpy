@@ -169,6 +169,11 @@ class WhatsAppClient:
         self._pending_keys_requests: Dict[str, asyncio.Future] = {}
         self._pending_keys_lock = asyncio.Lock()
         
+        # Fila de PKMSG de sincronização em andamento (para evitar múltiplos envios simultâneos para o mesmo JID)
+        # normalized_sender_jid -> asyncio.Future (para rastrear envio de PKMSG de sincronização)
+        self._pending_pkmsg_sync_requests: Dict[str, asyncio.Future] = {}
+        self._pending_pkmsg_sync_lock = asyncio.Lock()
+        
         # Fila de mensagens enviadas (para retry)
         self._sent_messages_queue: List[ProtocolNode] = []
         self._MAX_SENT_QUEUE = 256
@@ -2669,7 +2674,7 @@ class WhatsAppClient:
                 enc_type=enc_type,
                 ciphertext=ciphertext.serialize(),
                 mediatype=mediatype,
-                jid=None
+                jid=recipient_id
             )
             
             # Constrói node final usando EncryptedMessageBuilder
@@ -3362,7 +3367,7 @@ class WhatsAppClient:
         # Se há JIDs sem sessão, obtém chaves primeiro
         if len(jids_no_session) > 0:
             # Obtém chaves para JIDs sem sessão
-            success_jids, error_jids = await self._get_keys_for_recipients(jids_no_session)
+            success_jids, error_jids = await self._get_keys_for_jids(jids_no_session)
             await on_get_keys_success(success_jids, error_jids)
         else:
             # Todos têm sessão, envia direto
@@ -3736,9 +3741,9 @@ class WhatsAppClient:
         
         logger.info(f"[ZOWPY] Prekeys marcadas como enviadas: {len(prekeys)} prekeys")
         
-        if reboot_connection:
-            logger.info("[ZOWPY] Reiniciando conexão após envio de prekeys...")
-            await self.reconnect()
+        # if reboot_connection:
+        #     logger.info("[ZOWPY] Reiniciando conexão após envio de prekeys...")
+        #     await self.reconnect()
         
         logger.info("[ZOWPY] _on_keys_flushed() FINALIZADO")
         logger.info("=" * 80)
@@ -3892,7 +3897,8 @@ class WhatsAppClient:
     async def _process_pending_messages(
         self,
         from_jid: str,
-        participant_jid: Optional[str] = None
+        participant_jid: Optional[str] = None,
+        success_jids: Optional[List[str]] = None
     ) -> None:
         """
         Processa mensagens pendentes após obter sessão.
@@ -3943,11 +3949,16 @@ class WhatsAppClient:
         e re-sincronização com o remetente. Deleta temporariamente a sessão existente para 
         forçar envio como PKMSG.
         
+        Se já houver uma requisição em andamento para o mesmo JID, a nova requisição será ignorada.
+        
         Args:
             from_jid: JID do remetente (pode ser grupo ou contato)
             message_id: ID da mensagem que falhou
             participant: Participante (para grupos, opcional)
         """
+        future = None
+        normalized_sender_jid = None
+        
         try:
             from ..utils.tools import WATools
 
@@ -3955,6 +3966,21 @@ class WhatsAppClient:
             
             # Normaliza JID se necessário (baseado em zowsuplib)
             normalized_sender_jid = WATools.normalizeJid(from_jid)
+            
+            # Verifica se já há uma requisição em andamento para este JID
+            async with self._pending_pkmsg_sync_lock:
+                if normalized_sender_jid in self._pending_pkmsg_sync_requests:
+                    existing_future = self._pending_pkmsg_sync_requests[normalized_sender_jid]
+                    if not existing_future.done():
+                        logger.debug(f"PKMSG de sincronização já em andamento para {normalized_sender_jid}, ignorando nova requisição")
+                        return
+                    else:
+                        # Future já concluída, remove da fila
+                        del self._pending_pkmsg_sync_requests[normalized_sender_jid]
+                
+                # Cria nova Future para rastrear esta requisição
+                future = asyncio.Future()
+                self._pending_pkmsg_sync_requests[normalized_sender_jid] = future
             
             logger.info(f"Enviando PKMSG para sincronização com {normalized_sender_jid} (mensagem {message_id})")
             
@@ -3987,10 +4013,10 @@ class WhatsAppClient:
                 children=[]
             )
             
-            # Adiciona node <proto>
+            # Adiciona node <proto> com mediatype (seguindo padrão de _send_as_pkmsg)
             proto_node = ProtocolNode(
                 tag="proto",
-                attributes={},
+                attributes={"mediatype": "text"},
                 data=proto_bytes
             )
             message_node.children.append(proto_node)
@@ -4054,30 +4080,46 @@ class WhatsAppClient:
                             logger.debug(f"Sessão restaurada após erro ao obter chaves para {normalized_sender_jid}")
                         except Exception as e:
                             logger.warning(f"Erro ao restaurar sessão: {e}")
+                    # Marca Future como concluída com erro e remove da fila
+                    if future and not future.done():
+                        future.set_exception(Exception(f"Erro ao obter chaves: {error_jids}"))
+                    async with self._pending_pkmsg_sync_lock:
+                        if normalized_sender_jid in self._pending_pkmsg_sync_requests:
+                            if self._pending_pkmsg_sync_requests[normalized_sender_jid] == future:
+                                del self._pending_pkmsg_sync_requests[normalized_sender_jid]
+                                logger.debug(f"PKMSG de sincronização removido da fila após erro ao obter chaves para {normalized_sender_jid}")
                     return
                 
-                # Obtém mediatype do proto node
-                mediatype = "text"  # Mensagem de texto vazia
+                # Obtém mediatype do proto node (seguindo padrão de _send_as_pkmsg)
+                mediatype = proto_node.get_attribute("mediatype") if proto_node else "text"
                 
                 # Encripta como PreKeyWhisperMessage (PKMSG)
                 # Como deletamos a sessão, isso deve forçar PKMSG
                 ciphertext = await self.axolotl_manager.encrypt(recipient_id, proto_bytes)
                 
-                # Verifica se é PreKeyWhisperMessage (deve ser, já que deletamos a sessão)
-                # Baseado em zowsuplib: if ciphertext.__class__ != PreKeyWhisperMessage
-                if not isinstance(ciphertext, PreKeyWhisperMessage):
-                    logger.warning(f"Esperado PreKeyWhisperMessage, mas obteve {ciphertext.__class__.__name__}")
+                # Identifica tipo (seguindo padrão de _send_as_pkmsg)
+                if isinstance(ciphertext, PreKeyWhisperMessage):
+                    enc_type = EncEntity.TYPE_PKMSG
+                else:
+                    enc_type = EncEntity.TYPE_MSG
                 
-                # Cria node <enc> com TYPE_PKMSG
-                # Baseado em zowsuplib: EncProtocolEntity(TYPE_PKMSG, 2, ciphertext.serialize(), mediaType)
+                # Cria node <enc> usando EncEntity helper (seguindo padrão de _send_as_pkmsg)
+                # Para PKMSG em mensagens normais (não peer), sempre precisa do <to> wrapper
+                # dentro de <participants>, então sempre usa normalized_sender_jid
+                # Para grupos com participant, usa jid do participant (normalized_sender_jid)
+                # Para contatos individuais, também usa normalized_sender_jid para criar <to> wrapper
+                enc_jid = normalized_sender_jid
+
+                logger.debug(f"Enc_jid: {enc_jid}")
+                
                 enc_node = EncEntity.create_enc_node(
-                    enc_type=EncEntity.TYPE_PKMSG,  # Força PKMSG
+                    enc_type=enc_type,
                     ciphertext=ciphertext.serialize(),
                     mediatype=mediatype,
-                    jid=None
+                    jid=enc_jid
                 )
                 
-                # Constrói node final usando EncryptedMessageBuilder
+                # Constrói node final usando EncryptedMessageBuilder (seguindo padrão de _send_as_pkmsg)
                 message_node = EncryptedMessageBuilder.build_encrypted_message(
                     message_node=message_node,
                     enc_entities=[enc_node],
@@ -4099,6 +4141,10 @@ class WhatsAppClient:
                 await self._send_protocol_node(message_node)
                 
                 logger.info(f"PKMSG de sincronização enviado para {normalized_sender_jid} (sync_message_id={sync_message_id})")
+                
+                # Marca Future como concluída com sucesso
+                if not future.done():
+                    future.set_result(None)
             
             except Exception as e:
                 logger.error(f"Erro ao enviar PKMSG para sincronização: {e}", exc_info=True)
@@ -4109,9 +4155,29 @@ class WhatsAppClient:
                         logger.debug(f"Sessão restaurada após erro para {normalized_sender_jid}")
                     except Exception as restore_error:
                         logger.warning(f"Erro ao restaurar sessão: {restore_error}")
+                
+                # Marca Future como concluída com erro
+                if not future.done():
+                    future.set_exception(e)
+            
+            finally:
+                # Remove da fila após conclusão (sucesso ou erro)
+                async with self._pending_pkmsg_sync_lock:
+                    if normalized_sender_jid in self._pending_pkmsg_sync_requests:
+                        # Verifica se é o mesmo future (pode ter sido substituído)
+                        if self._pending_pkmsg_sync_requests[normalized_sender_jid] == future:
+                            del self._pending_pkmsg_sync_requests[normalized_sender_jid]
+                            logger.debug(f"PKMSG de sincronização concluído para {normalized_sender_jid}, removido da fila")
         
         except Exception as e:
             logger.error(f"Erro ao enviar PKMSG para sincronização: {e}", exc_info=True)
+            # Remove da fila em caso de erro não tratado
+            if normalized_sender_jid and future:
+                async with self._pending_pkmsg_sync_lock:
+                    if normalized_sender_jid in self._pending_pkmsg_sync_requests:
+                        if self._pending_pkmsg_sync_requests[normalized_sender_jid] == future:
+                            del self._pending_pkmsg_sync_requests[normalized_sender_jid]
+                            logger.debug(f"PKMSG de sincronização removido da fila após erro não tratado para {normalized_sender_jid}")
     
     async def _send_retry_receipt(self, retry_receipt: ProtocolNode) -> None:
         """
@@ -4444,6 +4510,7 @@ class WhatsAppClient:
         except Exception as e:
             logger.warning(f"Erro ao testar proxy: {e}")
             return False
+
 
 
 
