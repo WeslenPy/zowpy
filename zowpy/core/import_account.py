@@ -194,7 +194,11 @@ async def import_account_from_six_parts(
     
     from ..db.store import SqlAxolotlStore
     store = SqlAxolotlStore(phone, account_id, session_maker)
+    await store.setup()
+
     axolotl_manager = AxolotlManager(store, phone)
+    await axolotl_manager.initialize()
+
     
     pub_raw = base64.b64decode(pk2)
     if len(pub_raw) == 32:

@@ -17,12 +17,12 @@ class GroupCipher:
         self.senderKeyStore = senderKeyStore
         self.senderKeyName = senderKeyName
 
-    def encrypt(self, paddedPlaintext):
+    async def encrypt(self, paddedPlaintext):
         """
         :type paddedPlaintext: bytes
         """
         try:
-            record = self.senderKeyStore.loadSenderKey(self.senderKeyName)
+            record = await self.senderKeyStore.loadSenderKey(self.senderKeyName)
             senderKeyState = record.getSenderKeyState()
             senderKey = senderKeyState.getSenderChainKey().getSenderMessageKey()
             ciphertext = self.getCipherText(senderKey.getIv(), senderKey.getCipherKey(), paddedPlaintext)
@@ -33,18 +33,18 @@ class GroupCipher:
                                                 senderKeyState.getSigningKeyPrivate())
 
             senderKeyState.setSenderChainKey(senderKeyState.getSenderChainKey().getNext())
-            self.senderKeyStore.storeSenderKey(self.senderKeyName, record)
+            await self.senderKeyStore.storeSenderKey(self.senderKeyName, record)
 
             return senderKeyMessage.serialize()
         except InvalidKeyIdException as e:
             raise NoSessionException(str(e) if str(e) else "No session")
 
-    def decrypt(self, senderKeyMessageBytes):
+    async def decrypt(self, senderKeyMessageBytes):
         """
         :type senderKeyMessageBytes: bytearray
         """
         try:
-            record = self.senderKeyStore.loadSenderKey(self.senderKeyName)
+            record = await self.senderKeyStore.loadSenderKey(self.senderKeyName)
             if record.isEmpty():
                 raise NoSessionException("No sender key for: %s" % self.senderKeyName)
             senderKeyMessage = SenderKeyMessage(serialized = bytes(senderKeyMessageBytes))
@@ -56,7 +56,7 @@ class GroupCipher:
 
             plaintext = self.getPlainText(senderKey.getIv(), senderKey.getCipherKey(), senderKeyMessage.getCipherText())
 
-            self.senderKeyStore.storeSenderKey(self.senderKeyName, record)
+            await self.senderKeyStore.storeSenderKey(self.senderKeyName, record)
 
             return plaintext
         except (InvalidKeyException, InvalidKeyIdException) as e:

@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-import asyncio
 from ..protocol.senderkeydistributionmessage import SenderKeyDistributionMessage
 from ..invalidkeyidexception import InvalidKeyIdException
 from ..invalidkeyexception import InvalidKeyException
@@ -9,32 +8,32 @@ class GroupSessionBuilder:
     def __init__(self, senderKeyStore):
         self.senderKeyStore = senderKeyStore
 
-    def process(self, senderKeyName, senderKeyDistributionMessage):
+    async def process(self, senderKeyName, senderKeyDistributionMessage):
         """
         :type senderKeyName: SenderKeyName
         :type senderKeyDistributionMessage: SenderKeyDistributionMessage
         """
-        senderKeyRecord = self.senderKeyStore.loadSenderKey(senderKeyName)
+        senderKeyRecord = await self.senderKeyStore.loadSenderKey(senderKeyName)
         senderKeyRecord.addSenderKeyState(senderKeyDistributionMessage.getId(),
                                           senderKeyDistributionMessage.getIteration(),
                                           senderKeyDistributionMessage.getChainKey(),
                                           senderKeyDistributionMessage.getSignatureKey())
-        self.senderKeyStore.storeSenderKey(senderKeyName, senderKeyRecord)
+        await self.senderKeyStore.storeSenderKey(senderKeyName, senderKeyRecord)
 
 
-    def create(self, senderKeyName):
+    async def create(self, senderKeyName):
         """
         :type senderKeyName: SenderKeyName
         """
         try:
-            senderKeyRecord = self.senderKeyStore.loadSenderKey(senderKeyName);
+            senderKeyRecord = await self.senderKeyStore.loadSenderKey(senderKeyName);
 
             if senderKeyRecord.isEmpty() :
                 senderKeyRecord.setSenderKeyState(KeyHelper.generateSenderKeyId(),
                                                 0,
                                                 KeyHelper.generateSenderKey(),
                                                 KeyHelper.generateSenderSigningKey());
-                self.senderKeyStore.storeSenderKey(senderKeyName, senderKeyRecord);
+                await self.senderKeyStore.storeSenderKey(senderKeyName, senderKeyRecord);
 
             state = senderKeyRecord.getSenderKeyState();
 

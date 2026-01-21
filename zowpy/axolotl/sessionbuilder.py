@@ -32,7 +32,7 @@ class SessionBuilder:
         self.deviceId = deviceId
         
 
-    def process(self, sessionRecord, message):
+    async def process(self, sessionRecord, message):
         """
         :param sessionRecord:
         :param message:
@@ -40,19 +40,18 @@ class SessionBuilder:
         """
 
         theirIdentityKey = message.getIdentityKey()
-        if not self.identityKeyStore.isTrustedIdentity(self.recipientId,self.deviceId, theirIdentityKey):
+        if not await self.identityKeyStore.isTrustedIdentity(self.recipientId,self.deviceId, theirIdentityKey):
             raise UntrustedIdentityException(self.recipientId, theirIdentityKey)
 
 
-        unsignedPreKeyId = self.processV3(sessionRecord, message)     
+        unsignedPreKeyId = await self.processV3(sessionRecord, message)     
 
 
-        self.identityKeyStore.saveIdentity(self.recipientId,self.deviceId, theirIdentityKey)
-
+        await self.identityKeyStore.saveIdentity(self.recipientId,self.deviceId, theirIdentityKey)
 
         return unsignedPreKeyId
 
-    def processV3(self, sessionRecord, message):
+    async def processV3(self, sessionRecord, message):
         """
         :param sessionRecord:
         :param message:
@@ -67,18 +66,20 @@ class SessionBuilder:
             return None
         
 
-        ourSignedPreKey = self.signedPreKeyStore.loadSignedPreKey(message.getSignedPreKeyId()).getKeyPair()
+        ourSignedPreKeyRecord = await self.signedPreKeyStore.loadSignedPreKey(message.getSignedPreKeyId())
+        ourSignedPreKey = ourSignedPreKeyRecord.getKeyPair()
 
         
         parameters = BobAxolotlParameters.newBuilder()
         parameters.setTheirBaseKey(message.getBaseKey())\
             .setTheirIdentityKey(message.getIdentityKey())\
-            .setOurIdentityKey(self.identityKeyStore.getIdentityKeyPair())\
+            .setOurIdentityKey(await self.identityKeyStore.getIdentityKeyPair())\
             .setOurSignedPreKey(ourSignedPreKey)\
             .setOurRatchetKey(ourSignedPreKey)
 
         if message.getPreKeyId() is not None and message.getPreKeyId()!=0:
-            parameters.setOurOneTimePreKey(self.preKeyStore.loadPreKey(message.getPreKeyId()).getKeyPair())
+            preKeyRecord = await self.preKeyStore.loadPreKey(message.getPreKeyId())
+            parameters.setOurOneTimePreKey(preKeyRecord.getKeyPair())
         else:
             parameters.setOurOneTimePreKey(None)
 
@@ -87,7 +88,7 @@ class SessionBuilder:
             sessionRecord.archiveCurrentState()
 
         RatchetingSession.initializeSessionAsBob(sessionRecord.getSessionState(), parameters.create())
-        sessionRecord.getSessionState().setLocalRegistrationId(self.identityKeyStore.getLocalRegistrationId())
+        sessionRecord.getSessionState().setLocalRegistrationId(await self.identityKeyStore.getLocalRegistrationId())
         sessionRecord.getSessionState().setRemoteRegistrationId(message.getRegistrationId())
         sessionRecord.getSessionState().setAliceBaseKey(message.getBaseKey().serialize())
 
@@ -98,12 +99,12 @@ class SessionBuilder:
         else:
             return None
 
-    def processPreKeyBundle(self, preKey):
+    async def processPreKeyBundle(self, preKey):
         """
         :type preKey: PreKeyBundle
         """
         
-        if not self.identityKeyStore.isTrustedIdentity(self.recipientId, self.deviceId, preKey.getIdentityKey()):
+        if not await self.identityKeyStore.isTrustedIdentity(self.recipientId, self.deviceId, preKey.getIdentityKey()):
             raise UntrustedIdentityException(self.recipientId, preKey.getIdentityKey())
 
         if preKey.getSignedPreKey() is not None and\
@@ -115,7 +116,7 @@ class SessionBuilder:
         if preKey.getSignedPreKey() is None:
             raise InvalidKeyException("No signed prekey!!")
 
-        sessionRecord = self.sessionStore.loadSession(self.recipientId, self.deviceId)
+        sessionRecord = await self.sessionStore.loadSession(self.recipientId, self.deviceId)
         ourBaseKey = Curve.generateKeyPair()
         theirSignedPreKey = preKey.getSignedPreKey()
         theirOneTimePreKey = preKey.getPreKey()
@@ -124,7 +125,7 @@ class SessionBuilder:
         parameters = AliceAxolotlParameters.newBuilder()
 
         parameters.setOurBaseKey(ourBaseKey)\
-            .setOurIdentityKey(self.identityKeyStore.getIdentityKeyPair())\
+            .setOurIdentityKey(await self.identityKeyStore.getIdentityKeyPair())\
             .setTheirIdentityKey(preKey.getIdentityKey())\
             .setTheirSignedPreKey(theirSignedPreKey)\
             .setTheirRatchetKey(theirSignedPreKey)\
@@ -138,32 +139,32 @@ class SessionBuilder:
         sessionRecord.getSessionState().setUnacknowledgedPreKeyMessage(theirOneTimePreKeyId,
                                                                        preKey.getSignedPreKeyId(),
                                                                        ourBaseKey.getPublicKey())
-        sessionRecord.getSessionState().setLocalRegistrationId(self.identityKeyStore.getLocalRegistrationId())
+        sessionRecord.getSessionState().setLocalRegistrationId(await self.identityKeyStore.getLocalRegistrationId())
         sessionRecord.getSessionState().setRemoteRegistrationId(preKey.getRegistrationId())
         sessionRecord.getSessionState().setAliceBaseKey(ourBaseKey.getPublicKey().serialize())
 
 
         
-        self.sessionStore.storeSession(self.recipientId, self.deviceId, sessionRecord)
-        self.identityKeyStore.saveIdentity(self.recipientId,self.deviceId, preKey.getIdentityKey())
+        await self.sessionStore.storeSession(self.recipientId, self.deviceId, sessionRecord)
+        await self.identityKeyStore.saveIdentity(self.recipientId,self.deviceId, preKey.getIdentityKey())
 
-    def processKeyExchangeMessage(self, keyExchangeMessage):
+    async def processKeyExchangeMessage(self, keyExchangeMessage):
 
-        if not self.identityKeyStore.isTrustedIdentity(self.recipientId,self.deviceId, keyExchangeMessage.getIdentityKey()):
+        if not await self.identityKeyStore.isTrustedIdentity(self.recipientId,self.deviceId, keyExchangeMessage.getIdentityKey()):
             raise UntrustedIdentityException(self.recipientId, keyExchangeMessage.getIdentityKey())
 
         responseMessage = None
 
         if keyExchangeMessage.isInitiate():
-            responseMessage = self.processInitiate(keyExchangeMessage)
+            responseMessage = await self.processInitiate(keyExchangeMessage)
         else:
-            self.processResponse(keyExchangeMessage)
+            await self.processResponse(keyExchangeMessage)
 
         return responseMessage
 
-    def processInitiate(self, keyExchangeMessage):
+    async def processInitiate(self, keyExchangeMessage):
         flags = KeyExchangeMessage.RESPONSE_FLAG
-        sessionRecord = self.sessionStore.loadSession(self.recipientId, self.deviceId)
+        sessionRecord = await self.sessionStore.loadSession(self.recipientId, self.deviceId)
 
         if not Curve.verifySignature(
                 keyExchangeMessage.getIdentityKey().getPublicKey(),
@@ -173,7 +174,7 @@ class SessionBuilder:
 
         builder = SymmetricAxolotlParameters.newBuilder()
         if not sessionRecord.getSessionState().hasPendingKeyExchange():
-            builder.setOurIdentityKey(self.identityKeyStore.getIdentityKeyPair())\
+            builder.setOurIdentityKey(await self.identityKeyStore.getIdentityKeyPair())\
                 .setOurBaseKey(Curve.generateKeyPair())\
                 .setOurRatchetKey(Curve.generateKeyPair())
         else:
@@ -193,8 +194,8 @@ class SessionBuilder:
 
         RatchetingSession.initializeSession(sessionRecord.getSessionState(), parameters)
 
-        self.sessionStore.storeSession(self.recipientId, self.deviceId, sessionRecord)
-        self.identityKeyStore.saveIdentity(self.recipientId, self.deviceId,keyExchangeMessage.getIdentityKey())
+        await self.sessionStore.storeSession(self.recipientId, self.deviceId, sessionRecord)
+        await self.identityKeyStore.saveIdentity(self.recipientId, self.deviceId,keyExchangeMessage.getIdentityKey())
 
         baseKeySignature = Curve.calculateSignature(parameters.getOurIdentityKey().getPrivateKey(),
                                                     parameters.getOurBaseKey().getPublicKey().serialize())
@@ -205,8 +206,8 @@ class SessionBuilder:
                                   baseKeySignature, parameters.getOurRatchetKey().getPublicKey(),
                                   parameters.getOurIdentityKey().getPublicKey())
 
-    def processResponse(self, keyExchangeMessage):
-        sessionRecord = self.sessionStore.loadSession(self.recipientId, self.deviceId)
+    async def processResponse(self, keyExchangeMessage):
+        sessionRecord = await self.sessionStore.loadSession(self.recipientId, self.deviceId)
         sessionState = sessionRecord.getSessionState()
         hasPendingKeyExchange = sessionState.hasPendingKeyExchange()
         isSimultaneousInitiateResponse = keyExchangeMessage.isResponseForSimultaneousInitiate()
@@ -240,21 +241,21 @@ class SessionBuilder:
                 keyExchangeMessage.getBaseKeySignature()):
             raise InvalidKeyException("Base key signature doesn't match!")
 
-        self.sessionStore.storeSession(self.recipientId, self.deviceId, sessionRecord)
-        self.identityKeyStore.saveIdentity(self.recipientId, self.deviceId,keyExchangeMessage.getIdentityKey())
+        await self.sessionStore.storeSession(self.recipientId, self.deviceId, sessionRecord)
+        await self.identityKeyStore.saveIdentity(self.recipientId, self.deviceId,keyExchangeMessage.getIdentityKey())
 
-    def processInitKeyExchangeMessage(self):
+    async def processInitKeyExchangeMessage(self):
         try:
             sequence = KeyHelper.getRandomSequence(65534) + 1
             flags = KeyExchangeMessage.INITIATE_FLAG
             baseKey = Curve.generateKeyPair()
             ratchetKey = Curve.generateKeyPair()
-            identityKey = self.identityKeyStore.getIdentityKeyPair()
+            identityKey = await self.identityKeyStore.getIdentityKeyPair()
             baseKeySignature = Curve.calculateSignature(identityKey.getPrivateKey(), baseKey.getPublicKey().serialize())
-            sessionRecord = self.sessionStore.loadSession(self.recipientId, self.deviceId)
+            sessionRecord = await self.sessionStore.loadSession(self.recipientId, self.deviceId)
 
             sessionRecord.getSessionState().setPendingKeyExchange(sequence, baseKey, ratchetKey, identityKey)
-            self.sessionStore.storeSession(self.recipientId, self.deviceId, sessionRecord)
+            await self.sessionStore.storeSession(self.recipientId, self.deviceId, sessionRecord)
 
             return KeyExchangeMessage(CiphertextMessage.CURRENT_VERSION, sequence, flags, baseKey.getPublicKey(), baseKeySignature,
                                       ratchetKey.getPublicKey(), identityKey.getPublicKey())

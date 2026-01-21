@@ -197,7 +197,7 @@ class AxolotlManager(object):
         recipientId,a,deviceid = WATools.jidDecode(username)
 
         cipher = self._get_session_cipher(recipientId,deviceid)
-        return  cipher.encrypt(message + self._generate_random_padding())
+        return await cipher.encrypt(message + self._generate_random_padding())
     
     async def decrypt_pkmsg(self, senderid, data, unpad):
         logger.debug(f"decrypt_pkmsg(senderid={senderid}, data=(omitted), unpad={unpad})")
@@ -206,7 +206,7 @@ class AxolotlManager(object):
         recipientId,a,deviceid = WATools.jidDecode(senderid)
         try:
             cipher = self._get_session_cipher(recipientId,deviceid)
-            plaintext = await asyncio.to_thread(lambda: cipher.decryptPkmsg(pkmsg))
+            plaintext = await cipher.decryptPkmsg(pkmsg)
             return self._unpad(plaintext) if unpad else plaintext
         except NoSessionException as e:
             raise exceptions.NoSessionException(str(e) if str(e) else "No session")
@@ -226,7 +226,7 @@ class AxolotlManager(object):
 
         try:
             cipher = self._get_session_cipher(recipientId,deviceid)
-            plaintext = await asyncio.to_thread(lambda: cipher.decryptMsg(msg))
+            plaintext = await cipher.decryptMsg(msg)
 
             return self._unpad(plaintext) if unpad else plaintext
         except NoSessionException as e:
@@ -255,7 +255,7 @@ class AxolotlManager(object):
         logger.debug(f"group_encrypt(groupid={groupid}, message=[omitted])")
         group_cipher = self._get_group_cipher(groupid, self._username)
         try:
-            return await asyncio.to_thread(lambda: group_cipher.encrypt(message + self._generate_random_padding()))
+            return await group_cipher.encrypt(message + self._generate_random_padding())
         except NoSessionException as e:
             raise exceptions.NoSessionException(str(e) if str(e) else "No sender key for group")
 
@@ -263,7 +263,7 @@ class AxolotlManager(object):
         logger.debug(f"group_decrypt(groupid={groupid}, participantid={participantid}, data=[omitted])")
         group_cipher = self._get_group_cipher(groupid, participantid)
         try:
-            plaintext = await asyncio.to_thread(lambda: group_cipher.decrypt(data))
+            plaintext = await group_cipher.decrypt(data)
             plaintext = self._unpad(plaintext)
             return plaintext
         except NoSessionException as e:
@@ -276,7 +276,7 @@ class AxolotlManager(object):
     async def group_create_skmsg(self, groupid):
         logger.debug(f"group_create_skmsg(groupid={groupid})")
         senderKeyName = SenderKeyName(groupid, AxolotlAddress(self._username, 0))
-        return await asyncio.to_thread(lambda: self._group_session_builder.create(senderKeyName))
+        return await self._group_session_builder.create(senderKeyName)
 
     async def group_create_session(self, groupid, participantid, skmsgdata):
         """
@@ -292,7 +292,7 @@ class AxolotlManager(object):
         logger.debug(f"group_create_session(groupid={groupid}, participantid={participantid}, skmsgdata=[omitted])")
         senderKeyName = SenderKeyName(groupid, AxolotlAddress(participantid, 0))
         senderkeydistributionmessage = SenderKeyDistributionMessage(serialized=skmsgdata)
-        await asyncio.to_thread(lambda: self._group_session_builder.process(senderKeyName, senderkeydistributionmessage))
+        await self._group_session_builder.process(senderKeyName, senderkeydistributionmessage)
 
     async def create_session(self, username, prekeybundle, autotrust=False):
         """
@@ -307,12 +307,12 @@ class AxolotlManager(object):
 
         recipient,a,deviceid = WATools.jidDecode(username)
 
-        # Usa wrapper síncrono para SessionBuilder
+        # SessionBuilder agora é async
         session_builder = SessionBuilder(self._store, self._store, 
                                             self._store, self._store, 
                                             recipient, deviceid)
         try:
-            session_builder.processPreKeyBundle(prekeybundle)
+            await session_builder.processPreKeyBundle(prekeybundle)
         except UntrustedIdentityException as ex:
             if autotrust:
                 await self.trust_identity(ex.getName(), ex.getIdentityKey())
