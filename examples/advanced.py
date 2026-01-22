@@ -20,7 +20,7 @@ async def main():
     # Adiciona contas
     account1 = await manager.add_account("201208868278")
     account2 = await manager.add_account("201212270497")
-    account3 = await manager.add_account("201228276695")
+    # account3 = await manager.add_account("201228276695")
     
     # Eventos para account1
     @account1.on_message
@@ -41,13 +41,13 @@ async def main():
 
         await account1.join_group_with_link("IkUXAl5oMK5I0ZXp9dauhy")
         await account2.join_group_with_link("IkUXAl5oMK5I0ZXp9dauhy")
-        await account3.join_group_with_link("IkUXAl5oMK5I0ZXp9dauhy")
+        # await account3.join_group_with_link("IkUXAl5oMK5I0ZXp9dauhy")
 
 
         # Envia mensagens
         msg_id1 = await account1.send_text(to, "Hello from account1!")
         msg_id2 = await account2.send_text(to, "Hello from account2!")
-        msg_id3 = await account3.send_text(to, "Hello from account3!")
+        # msg_id3 = await account3.send_text(to, "Hello from account3!")
         
         await account1.send_image(to, "https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png")
 

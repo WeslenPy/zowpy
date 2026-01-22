@@ -13,6 +13,7 @@ from .message import (
     MessageMetaAttributes as MessageMetaAttributesSimple,  # Renomeado para evitar conflito
 )
 from .iq import IqProtocolEntity, GetKeysIqProtocolEntity, SetKeysIqProtocolEntity
+from .iq_wmex import WmexQueryIqProtocolEntity, WmexResultIqProtocolEntity
 from .presence import PresenceProtocolEntity
 from .receipt import ReceiptProtocolEntity, RetryOutgoingReceiptProtocolEntity
 from .ack import AckProtocolEntity
@@ -56,6 +57,8 @@ __all__ = [
     "IqProtocolEntity",
     "GetKeysIqProtocolEntity",
     "SetKeysIqProtocolEntity",
+    "WmexQueryIqProtocolEntity",
+    "WmexResultIqProtocolEntity",
     "PresenceProtocolEntity",
     "ReceiptProtocolEntity",
     "RetryOutgoingReceiptProtocolEntity",

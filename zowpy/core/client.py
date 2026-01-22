@@ -65,6 +65,7 @@ from .handlers.group_handler import GroupHandler
 from .handlers.contact_handler import ContactHandler
 from .handlers.presence_handler import PresenceHandler
 from .handlers.profile_handler import ProfileHandler
+from .handlers.integrity_handler import IntegrityHandler
 
 # Builders
 from .builders.prekey_builder import PrekeyBuilder
@@ -1114,6 +1115,11 @@ class WhatsAppClient:
         )
         
         self.profile_handler = ProfileHandler(
+            send_iq_fn=send_iq_fn,
+            iq_response_processor=self._iq_response_processor
+        )
+        
+        self.integrity_handler = IntegrityHandler(
             send_iq_fn=send_iq_fn,
             iq_response_processor=self._iq_response_processor
         )

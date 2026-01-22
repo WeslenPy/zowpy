@@ -117,7 +117,8 @@ async def main():
         to = "120363423929565689@g.us"
         text = "Hello! Esta é uma mensagem de teste do ZowPy."
         print(f"📤 Enviando mensagem para {to}...")
-        msg_id = await client.send_text(to, text)
+        contacts = await client.integrity_check(["559885700260"])
+        logger.debug(contacts)
 
 
         await client.join_group_with_link("IkUXAl5oMK5I0ZXp9dauhy")

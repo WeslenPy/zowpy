@@ -5,6 +5,7 @@ Baseado em IqProtocolEntity, GetKeysIqProtocolEntity, SetKeysIqProtocolEntity do
 """
 
 from typing import Optional, List, Dict, Any
+
 from .base import ProtocolEntity
 
 
@@ -22,7 +23,10 @@ class IqProtocolEntity(ProtocolEntity):
         iq_id: Optional[str] = None,
         to: Optional[str] = None,
         from_jid: Optional[str] = None,
-        children: Optional[List[ProtocolEntity]] = None
+        children: Optional[List[ProtocolEntity]] = None,
+        tag="iq",
+        smax_id=None,
+        target=None,
     ):
         """
         Cria entidade de IQ.
@@ -59,6 +63,22 @@ class IqProtocolEntity(ProtocolEntity):
         self.iq_id = iq_id
         self.iq_type = iq_type
         self.xmlns = xmlns
+
+        self.smax_id = smax_id
+        self.target = target
+
+
+    @classmethod
+    def from_protocol_node_iq_entity(cls, node):
+        return cls(xmlns=node.get_attribute("xmlns"), 
+                    iq_type=node.get_attribute("type"), 
+                    iq_id=node.get_attribute("id"), 
+                    to=node.get_attribute("to"), 
+                    from_jid=node.get_attribute("from"), 
+                    smax_id=node.get_attribute("smax_id"), 
+                    target=node.get_attribute("target"))
+
+
 
 
 class GetKeysIqProtocolEntity(IqProtocolEntity):

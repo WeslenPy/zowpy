@@ -369,6 +369,18 @@ class ZowPyClient:
     
     # ========== Contatos ==========
     
+
+
+  
+    async def filter_exists(self, numbers: list, mode: str = "full", context: str = "interactive") -> dict:
+        """Sincroniza contatos."""
+        if not self._client or not self._client.contact_handler:
+            raise ConnectionError("Cliente não conectado")
+
+        result = await self._client.contact_handler.sync_contacts(numbers, mode, context)
+        return result
+
+
     async def sync_contacts(self, numbers: list, mode: str = "full", context: str = "interactive") -> dict:
         """Sincroniza contatos."""
         if not self._client or not self._client.contact_handler:
@@ -388,6 +400,25 @@ class ZowPyClient:
             return result
 
         return {}
+
+    async def integrity_check(self, phones: list) -> dict:
+        """
+        Verifica integridade de números de telefone.
+        
+        Args:
+            phones: Lista de números de telefone para verificar (ex: ["5511999999999", "5511888888888"])
+        
+        Returns:
+            Dict com resultados da verificação de integridade
+        
+        Example:
+            client.integrity_check(["5511999999999", "5511888888888"])
+        """
+        if not self._client or not self._client.integrity_handler:
+            raise ConnectionError("Cliente não conectado")
+        
+        result = await self._client.integrity_handler.integrity_check(phones)
+        return result
 
 
     async def sync_devices(self, jids: list, mode: str = "full", context: str = "interactive") -> list:
