@@ -38,7 +38,7 @@ class TrustedContact(Model,BaseModel):
     account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
 
     jid = Column(String(255), nullable=False)
-    incoming_tc_token = Column(LargeBinary, nullable=False)
+    incoming_tc_token = Column(LargeBinary(length=4294967295), nullable=False)
     timestamp = Column(BigInteger, nullable=False)
 
     account = relationship("Account", back_populates="trusted_contacts", lazy="raise")

@@ -42,7 +42,7 @@ class PreKey(Model,BaseModel):
 
     prekey_id = Column(Integer, nullable=False)
     sent_to_server = Column(Boolean, nullable=True)
-    record = Column(LargeBinary, nullable=False)
+    record = Column(LargeBinary(length=4294967295), nullable=False)
 
     account = relationship("Account", back_populates="prekeys", lazy="raise")
 

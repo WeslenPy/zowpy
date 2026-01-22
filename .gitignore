@@ -20,6 +20,7 @@ wheels/
 .installed.cfg
 *.egg
 
+migrations/
 .venv/
 
 poetry.lock

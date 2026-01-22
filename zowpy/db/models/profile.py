@@ -33,7 +33,7 @@ class ProfileConfig(Model,BaseModel):
     account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
 
     name = Column(String(128), nullable=False)  # e.g. \"config.json\"
-    data = Column(LargeBinary, nullable=False)
+    data = Column(LargeBinary(length=4294967295), nullable=False)
     created_at = Column(DateTime, nullable=False, default=dt.datetime.utcnow)
     updated_at = Column(
         DateTime,

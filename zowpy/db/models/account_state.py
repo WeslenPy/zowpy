@@ -18,6 +18,8 @@ from sqlalchemy import (
     UniqueConstraint,
     Index,
 )
+from sqlalchemy.dialects.mysql import LONGTEXT,LONGBLOB
+
 from sqlalchemy.orm import relationship
 from zowpy.db.common.model import BaseModel
 from zowpy.db.config.base import Model

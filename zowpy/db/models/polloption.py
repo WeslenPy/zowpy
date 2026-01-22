@@ -31,10 +31,8 @@ class PollOption(Model,BaseModel):
     poll_id = Column(Integer, ForeignKey("polls.id", ondelete="CASCADE"), nullable=False, index=True)
 
     option_name = Column(String(255), nullable=False)
-    option_sha256 = Column(LargeBinary, nullable=False)
+    option_sha256 = Column(LargeBinary(length=4294967295), nullable=False)
 
     poll = relationship("Poll", back_populates="options", lazy="raise")
 
-    __table_args__ = (
-        Index("ix_poll_options_poll_sha", "poll_id", "option_sha256", unique=True),
-    )
+   

@@ -40,7 +40,7 @@ class SignedPreKey(Model,BaseModel):
 
     prekey_id = Column(Integer, nullable=False)
     timestamp = Column(BigInteger, nullable=True)
-    record = Column(LargeBinary, nullable=False)
+    record = Column(LargeBinary(length=4294967295), nullable=False)
 
     account = relationship("Account", back_populates="signed_prekeys", lazy="raise")
 

@@ -37,16 +37,12 @@ class Identity(Model,BaseModel):
     recipient_type = Column(Integer, nullable=False, default=0)
     device_id = Column(Integer, nullable=False, default=0)
     registration_id = Column(Integer, nullable=True)
-    public_key = Column(LargeBinary, nullable=True)
-    private_key = Column(LargeBinary, nullable=True)
+    public_key = Column(LargeBinary(length=4294967295), nullable=True)
+    private_key = Column(LargeBinary(length=4294967295), nullable=True)
     next_prekey_id = Column(Integer, nullable=True)
     timestamp = Column(BigInteger, nullable=True)
 
     account = relationship("Account", back_populates="identities", lazy="raise")
-
-    __table_args__ = (
-        Index("ix_identity_account_recipient_device", "account_id", "recipient_id", "device_id"),
-    )
 
     @classmethod
     async def get_identity_key_pair(cls, session: AsyncSession, account_id: int):

@@ -25,6 +25,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 from zowpy.db.common.model import BaseModel
 from zowpy.db.config.base import Model
+from sqlalchemy.dialects.mysql import LONGTEXT,LONGBLOB
 
 
 class AppStateKey(Model,BaseModel):
@@ -36,16 +37,12 @@ class AppStateKey(Model,BaseModel):
 
     account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
 
-    key_id = Column(LargeBinary, nullable=False)
-    key_data = Column(LargeBinary, nullable=False)
-    fingerprint = Column(LargeBinary, nullable=True)
+    key_id = Column(LargeBinary(length=4294967295), nullable=False)
+    key_data = Column(LargeBinary(length=4294967295), nullable=False)
+    fingerprint = Column(LargeBinary(length=4294967295), nullable=True)
     timestamp = Column(BigInteger, nullable=False)
 
     account = relationship("Account", back_populates="app_state_keys", lazy="raise")
-
-    __table_args__ = (
-        Index("ix_app_state_keys_account_key_id", "account_id", "key_id", unique=True),
-    )
 
     @classmethod
     async def add_app_state_keys(cls, session: AsyncSession, account_id: int, keys):

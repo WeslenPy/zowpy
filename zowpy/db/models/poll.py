@@ -35,7 +35,7 @@ class Poll(Model,BaseModel):
     account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
 
     poll_msg_id = Column(BigInteger, nullable=False)
-    enc_key = Column(LargeBinary, nullable=False)
+    enc_key = Column(LargeBinary(length=4294967295), nullable=False)
     name = Column(String(255), nullable=True)
 
     account = relationship("Account", back_populates="polls", lazy="raise")
@@ -46,9 +46,7 @@ class Poll(Model,BaseModel):
         lazy="raise_on_sql",
     )
 
-    __table_args__ = (
-        Index("ix_polls_account_poll_msg", "account_id", "poll_msg_id", unique=True),
-    )
+   
 
     @classmethod
     async def delete_poll(cls, session: AsyncSession, account_id: int, poll_msg_id: int):

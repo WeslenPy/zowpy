@@ -35,7 +35,7 @@ class BaseModel:
 
     updated_at = Column(
         DateTime,
-        name='update_at',
+        name='updated_at',
         nullable=False,
         default=datetime.now,
         onupdate=datetime.now,

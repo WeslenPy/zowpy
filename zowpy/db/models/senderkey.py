@@ -35,7 +35,7 @@ class SenderKey(Model,BaseModel):
 
     group_id = Column(String(255), nullable=False)
     sender_id = Column(String(255), nullable=False)
-    record = Column(LargeBinary, nullable=False)
+    record = Column(LargeBinary(length=4294967295), nullable=False)
 
     account = relationship("Account", back_populates="sender_keys", lazy="raise")
 

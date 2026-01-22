@@ -37,7 +37,7 @@ class SessionKey(Model,BaseModel):
     recipient_id = Column(BigInteger, nullable=False)
     recipient_type = Column(Integer, nullable=False, default=0)
     device_id = Column(Integer, nullable=False)
-    record = Column(LargeBinary, nullable=False)
+    record = Column(LargeBinary(length=4294967295), nullable=False)
     timestamp = Column(BigInteger, nullable=True)
 
     account = relationship("Account", back_populates="sessions", lazy="raise")
