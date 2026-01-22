@@ -14,9 +14,6 @@ class Settings(BaseSettings):
     # Database
     zowpy_db_url: str = "sqlite+aiosqlite:///zowpy.db"
     
-    # Account Path
-    zowpy_account_path: str = "./accounts"
-    
     # Default Device Environment
     zowpy_default_device_env: str = "android"
 
