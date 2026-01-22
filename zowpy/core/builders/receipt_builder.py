@@ -174,10 +174,11 @@ class ReceiptBuilder:
         
         if receipt_type:
             attributes["type"] = receipt_type
-        
+
+            
         if participant:
             attributes["participant"] = participant
-        
+    
         node = ProtocolNode(
             tag="ack",
             attributes=attributes,

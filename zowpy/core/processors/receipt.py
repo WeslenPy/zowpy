@@ -82,13 +82,12 @@ class ReceiptProcessor(BaseProcessor):
         await self._events.emit("msg_log", {"status": status, **receipt_data})
         
 
-        if receipt_type is None:
-            await self._send_ack_for_receipt(
-                message_id=receipt_id,
-                to=from_jid,
-                receipt_type=None,
-                participant=None,
-            )
+        await self._send_ack_for_receipt(
+            message_id=receipt_id,
+            to=from_jid,
+            receipt_type=receipt_type,
+            participant=participant,
+        )
 
 
         return receipt_data

@@ -30,6 +30,10 @@ class GroupProcessor(BaseProcessor):
             event_emitter: EventEmitter para emitir eventos (opcional)
         """
         self._event_emitter = event_emitter
+
+    def get_priority(self) -> int:
+        """Maior que NotificationProcessor (5) para processar w:gp2 antes."""
+        return 6
     
     async def can_handle(self, node: ProtocolNode) -> bool:
         """

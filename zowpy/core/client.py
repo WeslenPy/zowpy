@@ -278,7 +278,7 @@ class WhatsAppClient:
             
             # 6. Inicia bridge TCP ↔ Stream (CRÍTICO: ANTES do handshake)
             logger.info("Iniciando bridge TCP ↔ Stream (ANTES do handshake)...")
-            self.bridge = TCPStreamBridge(self.connection, self.stream)
+            self.bridge = TCPStreamBridge(self.connection, self.stream, events=self.events)
             self._bridge_task = asyncio.create_task(self.bridge.start())
             # Pequeno delay para garantir que bridge está rodando
             await asyncio.sleep(0.1)
@@ -386,6 +386,10 @@ class WhatsAppClient:
         
         # IQ Response Processor
         self._iq_response_processor = IQResponseProcessor()
+
+        # Ping queue (IQ_FLOW: waitPong / gotPong, timeout 60s, 3+ pendentes → disconnect)
+        self._ping_queue: Dict[str, float] = {}
+        self._ping_lock = asyncio.Lock()
         
         # Encryption layer
         self._encryption_receiver = EncryptionReceiver(
@@ -583,8 +587,12 @@ class WhatsAppClient:
         async def handle_stream_error(_data: dict) -> None:
             if not self._running:
                 return
-            logger.warning("stream:error recebido; desconectando conta")
-            asyncio.create_task(self.disconnect())
+
+            if _data.get("code") == "503" or _data.get("type") == "conflict":
+                logger.warning("stream:error recebido; desconectando conta")
+                asyncio.create_task(self.disconnect())
+                return
+
 
         self.events.on("stream:error", handle_stream_error)
 
@@ -596,11 +604,14 @@ class WhatsAppClient:
         async def send_node_fn(node: ProtocolNode):
             await self._send_protocol_node(node)
         
-        self._node_router.register(IQProcessor(
-            self.events, 
+        iq_processor = IQProcessor(
+            self.events,
             self._iq_response_processor,
-            send_node_fn=send_node_fn
-        ))
+            send_node_fn=send_node_fn,
+            got_pong_fn=None,  # configurado em _initialize_handlers
+        )
+        self._node_router.register(iq_processor)
+        self._iq_processor = iq_processor
         
         # NotificationProcessor precisa de funções do client
         # Será configurado após conexão quando _send_ack estiver disponível
@@ -1153,6 +1164,21 @@ class WhatsAppClient:
             self._encryption_receiver._send_retry_receipt_fn = self._send_retry_receipt
             self._encryption_receiver._send_receipt_on_error_fn = self._send_receipt_on_error
             self._encryption_receiver._get_registration_id_fn = self._get_registration_id
+
+        # Atualiza NotificationProcessor com funções disponíveis (send_ack, flush_prekeys, get_keys)
+        if self._notification_processor:
+            async def _send_ack_notification(
+                nid: str, _cls: str, ntype: str, from_jid: str, participant: Optional[str] = None
+            ) -> None:
+                await self._send_ack(nid, _cls, ntype, from_jid, participant=participant)
+
+            self._notification_processor._send_ack = _send_ack_notification
+            self._notification_processor._flush_prekeys = self._check_and_flush_prekeys
+            self._notification_processor._get_keys = self._get_keys_for_recipient
+
+        # IQProcessor: got_pong para pongs w:p não registrados (opcional)
+        if self._iq_processor:
+            self._iq_processor._got_pong_fn = self._got_pong
     
     async def _handle_iq(self, node: ProtocolNode) -> None:
         """Processa IQ recebido."""
@@ -1171,34 +1197,71 @@ class WhatsAppClient:
                 # Por enquanto, apenas loga
                 logger.debug(f"IQ error não processado: {iq_id}")
     
+    async def _got_pong(self, ping_id: str) -> None:
+        """Remove ping da fila (IQ_FLOW gotPong)."""
+        async with self._ping_lock:
+            if ping_id in self._ping_queue:
+                del self._ping_queue[ping_id]
+                logger.debug("Pong recebido para ping %s, removido da fila. Restantes: %d", ping_id, len(self._ping_queue))
+            else:
+                logger.warning("Pong recebido para ping %s que não está na fila", ping_id)
+
+    async def _wait_pong(self, ping_id: str) -> None:
+        """Registra ping na fila e verifica timeout (IQ_FLOW waitPong). 3+ pendentes após remover antigos >60s → disconnect."""
+        import time
+        now = time.time()
+        async with self._ping_lock:
+            self._ping_queue[ping_id] = now
+            queue_size = len(self._ping_queue)
+            old_pings = [pid for pid, ts in self._ping_queue.items() if ts and (now - ts) > 60]
+            if old_pings:
+                for pid in old_pings:
+                    del self._ping_queue[pid]
+                queue_size = len(self._ping_queue)
+            logger.debug("Ping queue: %d (ping %s adicionado)", queue_size, ping_id)
+            if queue_size >= 3 and old_pings:
+                logger.warning("Ping timeout: %d pendentes, %d antigos. Desconectando.", queue_size, len(old_pings))
+                asyncio.create_task(self.disconnect())
+
     async def _keepalive_loop(self) -> None:
-        """Loop de keepalive."""
+        """Loop de keepalive (IQ_FLOW: intervalo 50s, waitPong/gotPong, timeout disconnect)."""
+        interval = 50
         while self._running:
             try:
-                await asyncio.sleep(20)
-                if self._connected and self._authenticated:
-                    await self._send_keepalive()
+                await asyncio.sleep(interval)
+                if not (self._connected and self._authenticated):
+                    continue
+                await self._send_keepalive()
+            except asyncio.CancelledError:
+                break
             except Exception as e:
-                logger.error(f"Erro no keepalive: {e}")
-    
+                logger.error("Erro no keepalive: %s", e)
+
     async def _send_keepalive(self) -> None:
-        """Envia keepalive."""
+        """Envia ping w:p, registra callback (gotPong), waitPong na fila (IQ_FLOW)."""
+        iq_id = ProtocolNode._generateId()
+        # await self._wait_pong(iq_id)
+
+        async def on_pong(node: ProtocolNode) -> None:
+            await self._got_pong(iq_id)
+            logger.debug("Keepalive pong recebido para %s", iq_id)
+
+        # self._iq_response_processor.register_callback(iq_id, on_pong, timeout=65.0)
         keepalive_node = ProtocolNode(
             tag="iq",
-            attributes={
-                "id":ProtocolNode._generateId(),
-                "type": "get",
-                "xmlns": "w:p",
-            }
+            attributes={"id": iq_id, "type": "get", "xmlns": "w:p"},
+            children=[]
         )
         await self._send_protocol_node(keepalive_node)
+        logger.debug("Keepalive ping enviado: %s", iq_id)
     
     async def _send_ack(
         self,
         message_id: str,
         message_type: str,
         notification_type: str,
-        from_jid: str
+        from_jid: str,
+        participant: Optional[str] = None
     ) -> None:
         """
         Envia ACK para notification ou message.
@@ -1210,17 +1273,17 @@ class WhatsAppClient:
             message_type: Tipo da mensagem (notification, message, etc.)
             notification_type: Tipo da notification (encrypt, etc.)
             from_jid: JID do remetente
+            participant: Participante (para grupos), opcional
         """
-        ack_node = ProtocolNode(
-            tag="ack",
-            attributes={
-                "id": message_id,
-                "class": message_type,
-                "type": notification_type,
-                "to": from_jid
-            },
-            children=[]
-        )
+        attributes: Dict[str, str] = {
+            "id": message_id,
+            "class": message_type,
+            "type": notification_type,
+            "to": from_jid
+        }
+        if participant:
+            attributes["participant"] = participant
+        ack_node = ProtocolNode(tag="ack", attributes=attributes, children=[])
         await self._send_protocol_node(ack_node)
         logger.debug(f"ACK enviado: id={message_id}, type={notification_type}, to={from_jid}")
     
@@ -3596,6 +3659,8 @@ class WhatsAppClient:
         self._sent_messages_queue.clear()
         self._pending_messages.clear()
         self._unsent_prekeys.clear()
+        async with self._ping_lock:
+            self._ping_queue.clear()
         self._pending_keys_retry = None
         self._last_sync_time.clear()
         self._last_message_time.clear()

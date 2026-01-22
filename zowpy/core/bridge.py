@@ -7,7 +7,7 @@ Dois loops paralelos: TCP→Stream e Stream→TCP
 
 import asyncio
 import struct
-from typing import Optional
+from typing import Optional, Any
 from loguru import logger
 
 from .connection import AsyncConnection
@@ -27,16 +27,23 @@ class TCPStreamBridge:
     - Stream → TCP: pega dados do stream, segmenta (3 bytes + dados), envia via TCP
     """
     
-    def __init__(self, connection: AsyncConnection, stream: AsyncSegmentedStream):
+    def __init__(
+        self,
+        connection: AsyncConnection,
+        stream: AsyncSegmentedStream,
+        events: Optional[Any] = None
+    ):
         """
         Inicializa bridge.
         
         Args:
             connection: Conexão TCP
             stream: Stream segmentado
+            events: Event emitter para emitir eventos (opcional)
         """
         self._connection = connection
         self._stream = stream
+        self._events = events
         self._running = False
         self._read_task: Optional[asyncio.Task] = None
         self._write_task: Optional[asyncio.Task] = None
@@ -114,6 +121,12 @@ class TCPStreamBridge:
                         # EOF - conexão fechada
                         logger.info("Bridge: EOF recebido do TCP, encerrando loop")
                         await self._stream.cancel()
+                        # Emite evento de disconnect se events disponível
+                        if self._events:
+                            try:
+                                await self._events.emit("disconnected", {"reason": "EOF", "source": "bridge"})
+                            except Exception as e:
+                                logger.warning(f"Erro ao emitir evento disconnected: {e}")
                         break
                     
                     logger.debug(f"Bridge: recebidos {len(data)} bytes do TCP")
@@ -237,6 +250,12 @@ class TCPStreamBridge:
                     break
                 except ConnectionError as e:
                     logger.error(f"Bridge: erro de conexão no loop Stream→TCP: {e}")
+                    # Emite evento de disconnect se events disponível
+                    if self._events:
+                        try:
+                            await self._events.emit("disconnected", {"reason": "connection_error", "error": str(e), "source": "bridge"})
+                        except Exception as emit_err:
+                            logger.warning(f"Erro ao emitir evento disconnected: {emit_err}")
                     break
                 except Exception as e:
                     logger.error(f"Bridge: erro no loop Stream→TCP: {e}", exc_info=True)

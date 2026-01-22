@@ -84,13 +84,9 @@ class StreamErrorProcessor(BaseProcessor):
         is_conflict = self._is_conflict(node, error_type, attrs)
 
         logger.info(
-            "Stream error recebido: code=%s, type=%s, reason=%s, is_conflict=%s",
-            code,
-            error_type,
-            reason,
-            is_conflict,
+            f"Stream error recebido: code={code}, type={error_type}, reason={reason}, is_conflict={is_conflict}",
         )
-        logger.debug("Stream error node attributes=%s, error_data=%s", attrs, error_data)
+        logger.debug(f"Stream error node attributes={attrs}, error_data={error_data}")
 
         payload: Dict[str, Any] = {
             "node": node,
