@@ -38,11 +38,7 @@ class AsyncWANoiseTransport:
             plaintext: Dados para enviar
         """
         # Criptografia pode ser pesada, executa em thread pool
-        ciphertext = await asyncio.to_thread(
-            self._send_cipherstate.encrypt_with_ad,
-            b'',
-            plaintext
-        )
+        ciphertext = self._send_cipherstate.encrypt_with_ad(b'', plaintext)
         
         # Envia - await, não bloqueia
         await self._stream.write_segment(ciphertext)
@@ -65,11 +61,7 @@ class AsyncWANoiseTransport:
         ciphertext = await self._stream.read_segment(timeout=timeout)
         
         # Descriptografia em thread pool se necessário
-        plaintext = await asyncio.to_thread(
-            self._recv_cipherstate.decrypt_with_ad,
-            b'',
-            ciphertext
-        )
+        plaintext =self._recv_cipherstate.decrypt_with_ad(b'', ciphertext)
         
         return bytearray(plaintext)
 

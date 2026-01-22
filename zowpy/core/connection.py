@@ -300,6 +300,8 @@ class AsyncConnection:
                 sock.connect((self.host, self.port))
                 return sock
             
+
+            logger.info(f"Conectando via proxy SOCKS5 (PySocks) {proxy_host}:{proxy_port}")
             # Conecta em thread pool
             sock = await asyncio.wait_for(
                 asyncio.to_thread(_connect_sync),

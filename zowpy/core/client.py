@@ -3597,6 +3597,23 @@ class WhatsAppClient:
         except Exception as e:
             logger.warning(f"Erro ao emitir evento de desconexão: {e}")
         
+        # 10. Finaliza emitter (encerra executor e evita threads órfãs)
+        try:
+            self.events.shutdown()
+        except Exception as e:
+            logger.warning(f"Erro ao finalizar events: {e}")
+        
+        # 11. Finaliza conexões do engine (fecha pool de conexões do banco)
+        # Nota: O engine é compartilhado globalmente. Fechar o pool aqui garante
+        # que não há conexões órfãs. Se houver outros clients ativos, eles
+        # recriarão conexões automaticamente quando necessário.
+        try:
+            from zowpy.db.config.engine import engine
+            await engine.dispose(close=True)
+            logger.debug("Engine do banco de dados finalizado")
+        except Exception as e:
+            logger.warning(f"Erro ao finalizar engine: {e}")
+        
         logger.info("Desconectado e todos os recursos finalizados")
     
     async def reconnect(self) -> None:

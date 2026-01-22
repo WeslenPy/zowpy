@@ -22,6 +22,7 @@ class AsyncEventEmitter:
         self._handlers: Dict[str, List[Callable]] = {}
         self._once_handlers: Dict[str, List[Callable]] = {}
         self._lock = asyncio.Lock()
+        self._shutdown = False
 
         self.executor = ThreadPoolExecutor(
             max_workers=4,
@@ -64,6 +65,8 @@ class AsyncEventEmitter:
         Emite evento de forma NÃO-BLOQUEANTE (fire-and-forget).
         Nunca aguarda handlers.
         """
+        if self._shutdown:
+            return
 
         async with self._lock:
             handlers = self._handlers.get(event, []).copy()
@@ -78,6 +81,7 @@ class AsyncEventEmitter:
                         self._run_async_handler(handler, event, *args, **kwargs)
                     )
                 else:
+                    logger.info(f"Executando handler sync do evento '{event}'")
                     self.loop.run_in_executor(
                         self._run_sync_handler(handler, event, *args, **kwargs)
                     )
@@ -134,3 +138,19 @@ class AsyncEventEmitter:
             len(self._handlers.get(event, [])) +
             len(self._once_handlers.get(event, []))
         )
+
+    def shutdown(self) -> None:
+        """
+        Finaliza o emitter: para o executor e impede novos emits.
+        Deve ser chamado ao desconectar para evitar threads órfãs.
+        """
+        if self._shutdown:
+            return
+        self._shutdown = True
+        try:
+            self.executor.shutdown(wait=True, cancel_futures=True)
+        except TypeError:
+            self.executor.shutdown(wait=True)  # Python < 3.9
+        self._handlers.clear()
+        self._once_handlers.clear()
+        logger.debug("AsyncEventEmitter finalizado")

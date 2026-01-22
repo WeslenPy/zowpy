@@ -127,12 +127,22 @@ class AccountManager:
         """
         Encerra o manager completamente.
         Desconecta todas as contas, limpa referências e impede uso posterior.
+        Finaliza o engine do banco de dados quando todas as contas são desconectadas.
         """
         if self._shutdown:
             return
         await self.disconnect_all()
         async with self._lock:
             self._clients.clear()
+        
+        # Finaliza engine do banco de dados (fecha pool de conexões)
+        try:
+            from zowpy.db.config.engine import engine
+            await engine.dispose(close=True)
+            logger.info("Engine do banco de dados finalizado")
+        except Exception as e:
+            logger.warning(f"Erro ao finalizar engine: {e}")
+        
         self._shutdown = True
         logger.info("AccountManager encerrado")
 

@@ -42,6 +42,7 @@ class AsyncIQHandler:
                 if asyncio.iscoroutinefunction(callback):
                     await callback(iq)
                 else:
+                    logger.info(f"Callback não é assíncrono: {callback}")
                     await asyncio.to_thread(callback(iq))
         
         # Emite evento

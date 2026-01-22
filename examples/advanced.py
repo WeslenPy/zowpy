@@ -7,7 +7,8 @@ Demonstra uso de múltiplas contas e eventos.
 import asyncio
 from zowpy import AccountManager
 from zowpy.core.import_account import import_account_from_six_parts
-
+from loguru import logger
+logger.add("logs/advanced.log", level="DEBUG")
 
 async def main():
     """Exemplo avançado com múltiplas contas"""
@@ -63,9 +64,13 @@ async def main():
         # Aguarda um pouco
         await asyncio.sleep(10)
         
+        await account2.disconnect()
+        await account1.send_image(to, "https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png")
+
     finally:
+        pass
         # Desconecta todas
-        await manager.shutdown()
+        # await manager.shutdown()
 
 
 if __name__ == "__main__":

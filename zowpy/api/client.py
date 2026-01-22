@@ -576,9 +576,13 @@ class ZowPyClient:
             raise ZowPyError(f"Erro ao aguardar mensagem: {e}") from e
     
     async def disconnect(self) -> None:
-        """Desconecta de forma assíncrona"""
+        """Desconecta de forma assíncrona e finaliza todos os recursos (incl. emitter)."""
         if self._client:
             await self._client.disconnect()
+        try:
+            self._events.shutdown()
+        except Exception:
+            pass
 
     
     def on_message(self, handler: Callable) -> None:
