@@ -15,14 +15,6 @@ from loguru import logger
 # Configura logging
 logger.add("logs/basic.log", level="DEBUG")
 
-# Flag global para controle de desconexão
-running = True
-
-def signal_handler(sig, frame):
-    """Handler para SIGINT (Ctrl+C)"""
-    global running
-    print("\n🛑 Recebido sinal de interrupção, desconectando...")
-    running = False
 
 async def main():
     """
@@ -44,10 +36,7 @@ async def main():
     - Reconexão automática em caso de desconexão
     - Tratamento de sinais para desconexão limpa (Ctrl+C)
     """
-    global running
     
-    # Configura handler para Ctrl+C
-    signal.signal(signal.SIGINT, signal_handler)
     
     # Importa conta (se necessário)
     # six_parts = "201288305948,gehExdJAhPTAkqd5LDQ0zsBmUuuvP837jAQHNgndgnk=,+I0r7c+ZSZl6HmmY9uUI8E3ki4+ZRQ3trbYGISvLem0=,HiqT5eRDdur33fCRLW/UmUi8Sm/c+mEL+ajC/pIE/nk=,AAOlZ9VKgYuEvIetCouS+BS2DXCLd5XS2PispXKClkw=,MjAxMjg4MzA1OTQ4I6EaQHqQklbEQ2Klo9w0kEh1yPOB"
@@ -85,25 +74,6 @@ async def main():
         account_id = data.get('account_id', 'unknown') if data else 'unknown'
         print(f"❌ Desconectado do WhatsApp. Account: {account_id}")
         
-        # Reconecta automaticamente se ainda estiver rodando
-        if running:
-            print("🔄 Tentando reconectar automaticamente...")
-            try:
-                # Aguarda um pouco antes de reconectar
-                await asyncio.sleep(2)
-                await client.reconnect()
-                print("✅ Reconectado com sucesso!")
-            except Exception as e:
-                logger.error(f"Erro ao reconectar: {e}", exc_info=True)
-                print(f"❌ Erro ao reconectar: {e}")
-                # Tenta novamente após 5 segundos
-                await asyncio.sleep(5)
-                if running:
-                    try:
-                        await client.reconnect()
-                    except Exception as reconnect_error:
-                        logger.error(f"Erro na segunda tentativa de reconexão: {reconnect_error}", exc_info=True)
-    
     try:
         # Conecta (fluxo linear: conexão → handshake → autenticação)
         print("🔄 Conectando ao WhatsApp...")
@@ -146,33 +116,23 @@ async def main():
         # Mantém o cliente online indefinidamente
         # O keepalive é enviado automaticamente a cada 20 segundos
         # A reconexão automática é tratada no handler on_disconnected
-        while running:
-            await asyncio.sleep(1)
+        await asyncio.sleep(10)
         
+
+        await client.disconnect()
         print("\n🔄 Desconectando...")
     
     except KeyboardInterrupt:
         print("\n🛑 Interrupção recebida, desconectando...")
-        running = False
     
     except Exception as e:
         print(f"❌ Erro: {e}")
         logger.exception("Erro no exemplo básico")
-        running = False
     
-    finally:
-        # Desconecta apenas se running foi desativado
-        if not running:
-            print("🔄 Desconectando...")
-            try:
-                await client.disconnect()
-                print("✅ Desconectado com sucesso!")
-            except Exception as e:
-                logger.error(f"Erro ao desconectar: {e}", exc_info=True)
-
-
+ 
 if __name__ == "__main__":
     asyncio.run(main())
+    logger.info("Fim do exemplo básico")
 
 
 

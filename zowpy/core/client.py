@@ -3494,22 +3494,59 @@ class WhatsAppClient:
         return self._connected and self._authenticated
     
     async def disconnect(self) -> None:
-        """Desconecta de forma assíncrona."""
-        logger.info("Desconectando...")
+        """
+        Desconecta completamente e finaliza todos os recursos da instância.
+        
+        Finaliza todas as tasks, limpa filas, cancela futures pendentes
+        e desconecta todos os componentes de forma limpa.
+        """
+        logger.info("Desconectando e finalizando todos os recursos...")
         
         self._running = False
         self._connected = False
         self._authenticated = False
         
-        # Para bridge
+        # 1. Cancela futures pendentes (evita deadlocks)
+        async def _cancel_pending_futures() -> None:
+            async with self._pending_keys_lock:
+                for jid, fut in list(self._pending_keys_requests.items()):
+                    if not fut.done():
+                        fut.cancel()
+                        try:
+                            await fut
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                self._pending_keys_requests.clear()
+            async with self._pending_pkmsg_sync_lock:
+                for jid, fut in list(self._pending_pkmsg_sync_requests.items()):
+                    if not fut.done():
+                        fut.cancel()
+                        try:
+                            await fut
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                self._pending_pkmsg_sync_requests.clear()
+        
+        try:
+            await _cancel_pending_futures()
+        except Exception as e:
+            logger.warning(f"Erro ao cancelar futures pendentes: {e}")
+        
+        # 2. Para bridge
         if self.bridge:
-            await self.bridge.stop()
+            try:
+                await self.bridge.stop()
+            except Exception as e:
+                logger.warning(f"Erro ao parar bridge: {e}")
         
-        # Cancela stream
+        # 3. Cancela stream
         if self.stream:
-            await self.stream.cancel()
+            try:
+                await self.stream.cancel()
+            except Exception as e:
+                logger.warning(f"Erro ao cancelar stream: {e}")
         
-        # Cancela tasks
+        # 4. Cancela tasks principais
         tasks = []
         if self._message_loop_task:
             tasks.append(self._message_loop_task)
@@ -3517,22 +3554,50 @@ class WhatsAppClient:
             tasks.append(self._keepalive_task)
         if self._bridge_task:
             tasks.append(self._bridge_task)
-        
         for task in tasks:
             if task and not task.done():
                 task.cancel()
-        
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            try:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            except Exception as e:
+                logger.warning(f"Erro ao aguardar cancelamento de tasks: {e}")
         
-        # Desconecta TCP
+        # 5. Finaliza IQResponseProcessor (cleanup task + callbacks)
+        if self._iq_response_processor:
+            try:
+                await self._iq_response_processor.shutdown()
+            except Exception as e:
+                logger.warning(f"Erro ao finalizar IQResponseProcessor: {e}")
+        
+        # 6. Limpa filas e recursos
+        self._sent_messages_queue.clear()
+        self._pending_messages.clear()
+        self._unsent_prekeys.clear()
+        self._pending_keys_retry = None
+        self._last_sync_time.clear()
+        self._last_message_time.clear()
+        self._daily_message_count = 0
+        
+        # 7. Desconecta TCP
         if self.connection:
-            await self.connection.disconnect()
+            try:
+                await self.connection.disconnect()
+            except Exception as e:
+                logger.warning(f"Erro ao desconectar TCP: {e}")
         
-        # Emite evento de desconexão
-        await self.events.emit("disconnected", {"account_id": self.account_id})
+        # 8. Limpa referências de tasks
+        self._message_loop_task = None
+        self._keepalive_task = None
+        self._bridge_task = None
         
-        logger.info("Desconectado")
+        # 9. Emite evento de desconexão
+        try:
+            await self.events.emit("disconnected", {"account_id": self.account_id})
+        except Exception as e:
+            logger.warning(f"Erro ao emitir evento de desconexão: {e}")
+        
+        logger.info("Desconectado e todos os recursos finalizados")
     
     async def reconnect(self) -> None:
         """

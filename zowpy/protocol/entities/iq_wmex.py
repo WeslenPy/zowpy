@@ -243,9 +243,9 @@ class WmexResultIqProtocolEntity(IqProtocolEntity):
         if result_node is None:
             return None
         
-        format_xml = result_node.get_attribute("format")
+        format = result_node.get_attribute("format")
         
-        if format_xml == "argo":
+        if format == "argo":
             data = result_node.data
             query_name = WmexResultIqProtocolEntity.idNameMap.pop(iq_id, None)
             

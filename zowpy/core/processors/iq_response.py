@@ -156,4 +156,22 @@ class IQResponseProcessor:
         """Remove todos os callbacks"""
         self._callbacks.clear()
         logger.debug("Todos os callbacks removidos")
+    
+    async def shutdown(self) -> None:
+        """
+        Finaliza o processor completamente.
+        
+        Cancela a cleanup task e limpa todos os callbacks.
+        """
+        if self._cleanup_task and not self._cleanup_task.done():
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.debug(f"Erro ao cancelar cleanup task: {e}")
+        self._cleanup_task = None
+        self.clear_all()
+        logger.debug("IQResponseProcessor finalizado")
 
