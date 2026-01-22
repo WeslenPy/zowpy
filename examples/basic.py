@@ -121,12 +121,15 @@ async def main():
         # O keepalive é enviado automaticamente a cada 20 segundos
         # A reconexão automática é tratada no handler on_disconnected
         await asyncio.sleep(10)
+
+        while True:
+            await asyncio.sleep(1)
         
 
-        await client.disconnect()
         print("\n🔄 Desconectando...")
     
     except KeyboardInterrupt:
+        await client.disconnect()
         print("\n🛑 Interrupção recebida, desconectando...")
     
     except Exception as e:

@@ -9,8 +9,13 @@ from typing import Dict, Optional
 from loguru import logger
 
 from zowpy.db.config.engine import AsyncSessionMaker
+from zowpy.db.models import Account
 
 from .client import ZowPyClient
+
+
+class AccountNotImportedError(ValueError):
+    """Conta não foi importada. Use import_account_from_six_parts antes de add_account."""
 
 
 class AccountManager:
@@ -33,24 +38,35 @@ class AccountManager:
     async def add_account(self, account_id: str) -> ZowPyClient:
         """
         Adiciona conta de forma totalmente assíncrona.
-        
+        Só permite contas que tenham sido importadas previamente via
+        import_account_from_six_parts.
+
         Args:
-            account_id: ID da conta
-        
+            account_id: ID da conta (número de telefone, ex: 5511999999999)
+
         Returns:
             ZowPyClient: Cliente da conta
-        
+
         Raises:
             RuntimeError: Se o manager já foi encerrado (shutdown)
+            AccountNotImportedError: Se a conta não foi importada
         """
         self._raise_if_shutdown()
         async with self._lock:
             if account_id in self._clients:
                 return self._clients[account_id]
-            
+
+            async with self.session_maker() as session:
+                account = await Account.get_by_phone(session, account_id)
+            if account is None:
+                raise AccountNotImportedError(
+                    f"Conta {account_id} não importada. "
+                    "Use import_account_from_six_parts para importar a conta antes de adicioná-la."
+                )
+
             client = ZowPyClient(account_id, self.session_maker)
             self._clients[account_id] = client
-            
+
             logger.info(f"Conta {account_id} adicionada")
             return client
     

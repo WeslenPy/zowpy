@@ -52,6 +52,7 @@ from .processors.presence import PresenceProcessor
 from .processors.iq import IQProcessor
 from .processors.notification import NotificationProcessor
 from .processors.group import GroupProcessor
+from .processors.stream_error import StreamErrorProcessor
 from .processors.iq_response import IQResponseProcessor
 from .encryption.receiver import EncryptionReceiver
 from .encryption.sender import EncryptionSender
@@ -578,7 +579,16 @@ class WhatsAppClient:
                 await self._send_protocol_node(ack_node)
         
         self.events.on("ack:send", handle_ack_send)
-        
+
+        async def handle_stream_error(_data: dict) -> None:
+            if not self._running:
+                return
+            logger.warning("stream:error recebido; desconectando conta")
+            asyncio.create_task(self.disconnect())
+
+        self.events.on("stream:error", handle_stream_error)
+
+        self._node_router.register(StreamErrorProcessor(self.events))
         self._node_router.register(AckProcessor(self.events))
         self._node_router.register(PresenceProcessor(self.events))
         # IQProcessor precisa do IQResponseProcessor para chamar callbacks

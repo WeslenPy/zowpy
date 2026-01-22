@@ -67,6 +67,8 @@ async def main():
         await account2.disconnect()
         await account1.send_image(to, "https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png")
 
+
+
     finally:
         pass
         # Desconecta todas
