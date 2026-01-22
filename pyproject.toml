@@ -80,9 +80,12 @@ dev = [
 ]
 
 
+
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["zowpy*"]
+include = ["*"]
+namespaces = true
+
 
 
 [tool.black]
