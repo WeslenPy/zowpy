@@ -6,6 +6,10 @@ Baseado em WmexQueryIqProtocolEntity e WmexResultIqProtocolEntity do zowsuplib.
 
 import json
 import base64
+import zipfile
+import tempfile
+import os
+import shutil
 from pathlib import Path
 from typing import Optional, Dict, Any
 from loguru import logger
@@ -191,28 +195,125 @@ class WmexResultIqProtocolEntity(IqProtocolEntity):
     @staticmethod
     def _get_schema_file() -> str:
         """
-        Obtém caminho do arquivo schema .argo.
+        Obtém caminho do arquivo schema .argo extraído do .zip.
+        
+        Extrai o arquivo .zip para evitar bits corrompidos, igual ao zowsuplib.
         
         Returns:
-            Caminho do arquivo schema
+            Caminho do arquivo schema extraído
         """
         if WmexResultIqProtocolEntity._schema_file_cache:
             cached_path = Path(WmexResultIqProtocolEntity._schema_file_cache)
             if cached_path.exists():
                 return str(cached_path.resolve())
         
-        # Obtém caminho do arquivo proto/argo-wire-type-store.argo
+        # Obtém caminho do arquivo .zip
         current_dir = Path(__file__).parent.parent.parent  # zowpy/
-        schema_file = current_dir / "proto" / "argo-wire-type-store.argo"
+        zip_file = current_dir / "proto" / "argo-wire-type-store.zip"
         
-        if not schema_file.exists():
+        if not zip_file.exists():
             raise FileNotFoundError(
-                f"Arquivo argo-wire-type-store.argo não encontrado em: {schema_file}"
+                f"Arquivo argo-wire-type-store.zip não encontrado em: {zip_file}"
             )
         
-        schema_path = str(schema_file.resolve())
-        WmexResultIqProtocolEntity._schema_file_cache = schema_path
-        return schema_path
+        # Extrai o arquivo .zip para um diretório temporário
+        # Usa extração individual para evitar problemas com bits corrompidos
+        temp_dir = Path(tempfile.gettempdir()) / "zowpy_argo_schema"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        
+        extracted_file = temp_dir / "argo-wire-type-store.argo"
+        
+        # Se já foi extraído e existe, usa o cache
+        if extracted_file.exists():
+            schema_path = str(extracted_file.resolve())
+            WmexResultIqProtocolEntity._schema_file_cache = schema_path
+            logger.debug(f"Usando arquivo schema extraído do cache: {schema_path}")
+            return schema_path
+        
+        # Extrai do .zip
+        try:
+            with zipfile.ZipFile(zip_file, 'r') as zip_ref:
+                # Testa o ZIP antes de extrair para detectar corrupção
+                bad_file = zip_ref.testzip()
+                if bad_file:
+                    logger.warning(f"Arquivo corrompido detectado no ZIP: {bad_file}")
+                
+                # Lista arquivos no zip
+                file_list = zip_ref.namelist()
+                
+                # Procura o arquivo .argo dentro do zip
+                argo_file_in_zip = None
+                for name in file_list:
+                    # Remove caminhos de diretório e verifica o nome do arquivo
+                    base_name = os.path.basename(name)
+                    if base_name.endswith('.argo') or base_name == 'argo-wire-type-store.argo':
+                        argo_file_in_zip = name
+                        break
+                
+                if not argo_file_in_zip:
+                    # Se não encontrou, tenta o primeiro arquivo
+                    if file_list:
+                        argo_file_in_zip = file_list[0]
+                        logger.debug(f"Usando primeiro arquivo do ZIP: {argo_file_in_zip}")
+                    else:
+                        raise ValueError("Nenhum arquivo encontrado no ZIP")
+                
+                # Extrai individualmente para evitar problemas com bits corrompidos
+                # Usa extract() em vez de extractall() para melhor controle
+                try:
+                    # Extrai para o diretório temporário
+                    zip_ref.extract(argo_file_in_zip, temp_dir)
+                    
+                    # O arquivo extraído pode ter o caminho completo do zip
+                    extracted_path = temp_dir / argo_file_in_zip
+                    
+                    # Se o arquivo foi extraído em um subdiretório, move para o diretório raiz
+                    if extracted_path.exists():
+                        # Se já está no nome esperado, ok
+                        if extracted_path == extracted_file:
+                            pass
+                        else:
+                            # Move ou copia para o nome esperado
+                            if extracted_path.is_file():
+                                shutil.move(str(extracted_path), str(extracted_file))
+                            else:
+                                # Se é um diretório, procura o arquivo dentro
+                                for argo_file in extracted_path.rglob('*.argo'):
+                                    shutil.move(str(argo_file), str(extracted_file))
+                                    break
+                    else:
+                        # Procura recursivamente pelo arquivo .argo
+                        found = False
+                        for argo_file in temp_dir.rglob('*.argo'):
+                            shutil.move(str(argo_file), str(extracted_file))
+                            found = True
+                            break
+                        
+                        if not found:
+                            raise FileNotFoundError(
+                                f"Arquivo .argo não encontrado após extração do ZIP"
+                            )
+                    
+                except zipfile.BadZipFile as e:
+                    logger.error(f"Erro ao extrair arquivo do ZIP (arquivo corrompido?): {e}")
+                    raise
+                except Exception as e:
+                    logger.error(f"Erro ao extrair {argo_file_in_zip} do ZIP: {e}")
+                    raise
+            
+            if not extracted_file.exists():
+                raise FileNotFoundError(
+                    f"Arquivo argo-wire-type-store.argo não foi extraído corretamente do ZIP"
+                )
+            
+            schema_path = str(extracted_file.resolve())
+            WmexResultIqProtocolEntity._schema_file_cache = schema_path
+            logger.debug(f"Arquivo schema extraído do ZIP: {schema_path}")
+            return schema_path
+            
+        except Exception as e:
+            logger.error(f"Erro ao extrair arquivo do ZIP {zip_file}: {e}")
+            raise
     
     @staticmethod
     def from_protocol_node(node: ProtocolNode) -> Optional['WmexResultIqProtocolEntity']:
