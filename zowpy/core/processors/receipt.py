@@ -138,10 +138,10 @@ class ReceiptProcessor(BaseProcessor):
                 receipt_type=receipt_type,  # Usa "retry" (mesmo tipo do receipt recebido), não "ack"
                 participant=participant
             )
-            
+            logger.info(f"ACK construído: {ack_node}")
             # Envia ACK automaticamente (igual zowsup: self.toLower(retryReceiptEntity.ack().toProtocolTreeNode()))
             # Emite evento para que o client envie o ACK
-            await self._events.emit("ack:send", {"node": ack_node})
+            # await self._events.emit("ack:send", {"node": ack_node})
             logger.info(f"ACK automático do retry enviado: id={receipt_id}, type={receipt_type}, to={from_jid}")
         except Exception as e:
             logger.error(f"Erro ao criar/enviar ACK do retry: {e}", exc_info=True)
