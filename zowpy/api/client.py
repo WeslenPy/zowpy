@@ -49,6 +49,8 @@ class ZowPyClient:
         self._session_cipher: Optional[SessionCipher] = None
         self._message_handler: Optional[AsyncMessageHandler] = None
         self._client: Optional[WhatsAppClient] = None
+
+        self.proxy: Optional[dict] = None
         
         # Eventos
         self._events = AsyncEventEmitter()
@@ -72,6 +74,7 @@ class ZowPyClient:
                 # endpoint=None,  # Seleciona aleatoriamente da lista do zowsuplib
                 session_maker=self.session_maker,
                 device_config=self.device_env,
+                proxy=self.proxy,
             )
             
             # Conecta eventos do cliente aos eventos públicos
@@ -470,6 +473,36 @@ class ZowPyClient:
         if not self._client or not self._client.presence_handler_public:
             raise ConnectionError("Cliente não conectado")
         return await self._client.presence_handler_public.set_status(status)
+    
+
+    # ========== Proxy ==========
+    
+    async def set_proxy(self, proxy_string:str,proxy_type:str="http") -> bool:
+        """Define proxy."""
+
+        self.proxy  = await WhatsAppClient.new_proxy(proxy_string=proxy_string,proxy_type=proxy_type)
+        if not self.proxy:
+            self.proxy = None
+            return False
+
+        self.proxy = self.proxy.to_dict()
+
+        if self._client:
+            return await self._client.set_proxy(proxy_string=proxy_string,proxy_type=proxy_type)
+
+        return None
+    
+    async def get_proxy(self) -> str:
+        """Obtém proxy."""
+        return await self._client.get_proxy()
+    
+    async def remove_proxy(self) -> bool:
+        """Remove proxy."""
+        return await self._client.remove_proxy()
+    
+    async def get_proxy_status(self) -> bool:
+        """Obtém status do proxy."""
+        return await self._client.get_proxy_status()
     
     # ========== Perfil ==========
     

@@ -248,11 +248,22 @@ class WhatsAppClient:
                     logger.warning(f"Erro ao verificar prekeys não enviadas (não crítico): {e}")
                     self._unsent_prekeys = []
             
+
+            self.proxy = self.proxy or (await self.get_proxy())
             # 3. Conecta TCP socket
-            logger.info("Conectando TCP socket...")
+            if self.proxy:
+                proxy_type = self.proxy.get("type", "http")
+                proxy_host = self.proxy.get("host", "unknown")
+                proxy_port = self.proxy.get("port", "unknown")
+                logger.info(f" Conectando TCP socket via PROXY {proxy_type.upper()} ({proxy_host}:{proxy_port})...")
+            else:
+                logger.info("Conectando TCP socket (conexão direta, sem proxy)...")
             self.connection = AsyncConnection(self.endpoint, proxy=self.proxy)
             await self.connection.connect()
-            logger.info("✓ TCP socket conectado")
+            if self.proxy:
+                logger.info("✓ TCP socket conectado via PROXY")
+            else:
+                logger.info("✓ TCP socket conectado (direto)")
             
             # 4. Envia header WA\x06\x03
             logger.info("Enviando header WA\\x06\\x03...")
@@ -4372,10 +4383,41 @@ class WhatsAppClient:
     # Métodos de Proxy (API pública moderna)
     # ============================================================
     
+    @classmethod
+    async def new_proxy(cls, proxy_string: str, proxy_type: str = "http", test_url: str = "https://www.google.com") -> bool:
+        """
+        Cria novo proxy.
+        Args:
+            proxy_string: String de proxy no formato:
+                         - "host:port" (sem autenticação)
+                         - "host:port:username:password" (com autenticação)
+                         - "DIRECT" (desativa proxy)
+            proxy_type: Tipo de proxy ("socks5" ou "http"), padrão "socks5"
+            test_url: URL para testar proxy antes de configurar
+            
+        Returns:
+            bool: True se criado com sucesso, False se falhou
+
+        """
+
+        try:
+            proxy_config = ProxyConfig.from_string(proxy_string, proxy_type=proxy_type)
+        except ValueError as e:
+            logger.error(f"Erro no formato do proxy: {e}")
+            raise
+        
+        # 2. Testa proxy (async)
+        if not await cls._test_proxy(proxy_config, test_url):
+            logger.warning(f"Proxy {proxy_config} falhou no teste, mas será configurado")
+            # Não retorna False, permite configurar mesmo se teste falhar
+            return False
+
+        return proxy_config
+
     async def set_proxy(
         self,
         proxy_string: str,
-        proxy_type: str = "socks5",
+        proxy_type: str = "http",
         test_url: str = "https://www.google.com"
     ) -> bool:
         """
@@ -4415,20 +4457,14 @@ class WhatsAppClient:
             self.network_config = NetworkConfig.direct()
             self.proxy = None
             await self._remove_proxy_from_db()
-            logger.info(f"Proxy desativado - conexão direta")
+            logger.info(f"PROXY desativado - conexão direta (conta: {self.account_id})")
             return True
         
-        try:
-            proxy_config = ProxyConfig.from_string(proxy_string, proxy_type=proxy_type)
-        except ValueError as e:
-            logger.error(f"Erro no formato do proxy: {e}")
-            raise
-        
-        # 2. Testa proxy (async)
-        if not await self._test_proxy(proxy_config, test_url):
-            logger.warning(f"Proxy {proxy_config} falhou no teste, mas será configurado")
-            # Não retorna False, permite configurar mesmo se teste falhar
-        
+
+        proxy_config = await self.new_proxy(proxy_string=proxy_string,proxy_type=proxy_type,test_url=test_url)
+        if not proxy_config:
+            return False
+
         # 3. Configura na instância
         self.network_config = NetworkConfig.proxy_config(proxy_config)
         self.proxy = proxy_config.to_dict()
@@ -4436,7 +4472,7 @@ class WhatsAppClient:
         # 4. Salva no banco
         await self._save_proxy_to_db(proxy_config)
         
-        logger.info(f"Proxy configurado: {proxy_config}")
+        logger.info(f"PROXY configurado: {proxy_config.proxy_type.upper()} {proxy_config.host}:{proxy_config.port} (conta: {self.account_id})")
         return True
     
     async def get_proxy(self) -> Optional[str]:
@@ -4448,14 +4484,21 @@ class WhatsAppClient:
         """
         # Primeiro tenta obter da instância atual
         if self.network_config and self.network_config.type == "proxy" and self.network_config.proxy:
-            return self.network_config.proxy.to_string()
+            return self.network_config.proxy.to_dict()
         
         # Se não tem na instância, carrega do banco
         proxy_config = await self._load_proxy_from_db()
         if proxy_config:
-            return proxy_config.to_string()
+            return proxy_config.to_dict()
         
         return None
+    
+
+    async def get_proxy_status(self) -> bool:
+        """Obtém status do proxy."""
+        if not self.network_config or not self.network_config.proxy:
+            return False
+        return True
     
     async def remove_proxy(self) -> bool:
         """
@@ -4467,7 +4510,7 @@ class WhatsAppClient:
         self.network_config = NetworkConfig.direct()
         self.proxy = None
         await self._remove_proxy_from_db()
-        logger.info("Proxy removido")
+        logger.info(f"PROXY removido - conexão direta (conta: {self.account_id})")
         return True
     
     async def _load_proxy_from_db(self) -> Optional[ProxyConfig]:
@@ -4498,7 +4541,7 @@ class WhatsAppClient:
                     self.network_config = NetworkConfig.proxy_config(proxy_config)
                     self.proxy = proxy_config.to_dict()
                     
-                    logger.info(f"Proxy carregado do banco: {proxy_config}")
+                    logger.info(f"PROXY carregado do banco de dados: {proxy_config.proxy_type.upper()} {proxy_config.host}:{proxy_config.port} (conta: {self.account_id})")
                     return proxy_config
         except Exception as e:
             logger.warning(f"Erro ao carregar proxy do banco: {e}")
@@ -4531,7 +4574,7 @@ class WhatsAppClient:
                         account.proxy_type = proxy_config.proxy_type
                     
                     await session.commit()
-                    logger.info(f"Proxy salvo no banco de dados")
+                    logger.info(f" PROXY salvo no banco de dados: {proxy_config.proxy_type.upper()} {proxy_config.host}:{proxy_config.port} (conta: {self.account_id})")
                 else:
                     logger.warning(f"Account {self.account_id} não encontrado no banco")
         except Exception as e:
@@ -4561,11 +4604,13 @@ class WhatsAppClient:
                         account.proxy_type = None
                     
                     await session.commit()
-                    logger.info("Proxy removido do banco de dados")
+                    logger.info(f"🌐 PROXY removido do banco de dados (conta: {self.account_id})")
         except Exception as e:
             logger.warning(f"Erro ao remover proxy do banco: {e}")
     
-    async def _test_proxy(self, proxy_config: ProxyConfig, test_url: str) -> bool:
+
+    @classmethod
+    async def _test_proxy(cls, proxy_config: ProxyConfig, test_url: str) -> bool:
         """Testa proxy fazendo requisição HTTP."""
         import urllib.request
         import urllib.error

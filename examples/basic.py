@@ -77,6 +77,10 @@ async def main():
     try:
         # Conecta (fluxo linear: conexão → handshake → autenticação)
         print("🔄 Conectando ao WhatsApp...")
+
+        await client.set_proxy("104.238.36.70:6077:mwqfvavl:iggqj6pm1ptt")
+
+        
         await client.connect()
         print("✅ Cliente conectado e autenticado!")
         print("🟢 Cliente online - Mantendo conexão ativa indefinidamente...")

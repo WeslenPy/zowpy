@@ -59,11 +59,17 @@ class AsyncConnection:
             ConnectionError: Se conexão falhar
         """
         try:
-            logger.info(f"Conectando TCP socket a {self.host}:{self.port}")
+            if self.proxy:
+                proxy_type = self.proxy.get("type", "http")
+                proxy_host = self.proxy.get("host", "unknown")
+                proxy_port = self.proxy.get("port", "unknown")
+                logger.info(f"Conectando TCP socket a {self.host}:{self.port} via PROXY {proxy_type.upper()} ({proxy_host}:{proxy_port})")
+            else:
+                logger.info(f"Conectando TCP socket a {self.host}:{self.port} (conexão direta)")
             
             # Conecta TCP socket - await, não bloqueia
             if self.proxy:
-                # Conecta via proxy SOCKS5
+                # Conecta via proxy SOCKS5 ou HTTP
                 self.reader, self.writer = await self._connect_via_proxy(timeout)
             else:
                 # Conexão direta
@@ -91,6 +97,10 @@ class AsyncConnection:
             Tuple[StreamReader, StreamWriter]: Reader e writer da conexão
         """
         proxy_type = self.proxy.get("type", "socks5")
+        proxy_host = self.proxy.get("host", "unknown")
+        proxy_port = self.proxy.get("port", "unknown")
+        
+        logger.info(f"Iniciando conexão via PROXY {proxy_type.upper()} ({proxy_host}:{proxy_port}) -> {self.host}:{self.port}")
         
         if proxy_type == "socks5":
             return await self._connect_via_socks5(timeout)
