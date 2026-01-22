@@ -63,9 +63,27 @@ dev = [
     "mypy>=1.7.0",
 ]
 
+
+[tool.setuptools.package-data]
+"zowpy" = [
+
+    # Arquivos protobuf (.proto) - necessários para referência e geração de código
+    "proto/*",
+    "*.proto",
+    "*.argo",
+    
+    # Arquivos de tipos MIME - usado por MimeTools.getMIME()
+    "*.types",
+    
+    # Templates JSON (se houver)
+    "*.json"
+]
+
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["zowpy*"]
+
 
 [tool.black]
 line-length = 100
