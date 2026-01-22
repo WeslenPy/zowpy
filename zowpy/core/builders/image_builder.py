@@ -71,32 +71,28 @@ class ImageBuilder:
         Returns:
             ImageBuilder: Builder pronto para build_protobuf()
         """
-        # Normaliza: se for URL, baixa temporariamente
-        filepath, is_temporary = await normalize_file_path_or_url(
-            file_path_or_url,
-            default_extension=".jpg",
-            prefix="image"
-        )
-        
+        filepath = None
+        is_temporary = False
         try:
-            # Processa imagem
+            filepath, is_temporary = await normalize_file_path_or_url(
+                file_path_or_url,
+                default_extension=".jpg",
+                prefix="image"
+            )
             image_metadata = ImageTools.process_image(filepath)
-            
-            # Cria builder
             builder = cls(media_cipher, media_uploader, media_connection)
             builder._filepath = filepath
             builder._is_temporary = is_temporary
             builder._image_metadata = image_metadata
             builder._caption = caption
             builder._progress_callback = progress_callback
-            
             return builder
         except Exception as e:
-            # Limpa arquivo temporário em caso de erro
-            if is_temporary:
+            logger.exception("Erro em media_tools ao processar imagem (ImageBuilder.from_filepath): %s", e)
+            if is_temporary and filepath:
                 try:
                     os.unlink(filepath)
-                except:
+                except Exception:
                     pass
             raise
     

@@ -46,32 +46,25 @@ class AudioBuilder:
         progress_callback: Optional[callable] = None
     ) -> 'AudioBuilder':
         """Cria AudioBuilder a partir de arquivo ou URL."""
-        # Normaliza: se for URL, baixa temporariamente
-        filepath, is_temporary = await normalize_file_path_or_url(
-            file_path_or_url,
-            default_extension=".mp3",
-            prefix="audio"
-        )
-        
-        # Processa áudio
-        mimetype = AudioTools.get_mimetype(filepath)
-        # Aplica conversão custom do zowsup: todos os áudios são "audio/ogg; codecs=opus"
-        if "audio" in mimetype:
-            mimetype = "audio/ogg; codecs=opus"
-        duration = AudioTools.get_duration(filepath)
-        
-        with open(filepath, 'rb') as f:
-            file_data = f.read()
-        
-        file_length = len(file_data)
-        file_sha256 = hashlib.sha256(file_data).digest()  # Bytes raw (32 bytes) - protobuf espera bytes, não base64
-        
-        # Gera waveform se PTT
-        waveform = None
-        if ptt:
-            waveform = AudioTools.generate_waveform(filepath, duration)
-        
+        filepath = None
+        is_temporary = False
         try:
+            filepath, is_temporary = await normalize_file_path_or_url(
+                file_path_or_url,
+                default_extension=".mp3",
+                prefix="audio"
+            )
+            mimetype = AudioTools.get_mimetype(filepath)
+            if "audio" in mimetype:
+                mimetype = "audio/ogg; codecs=opus"
+            duration = AudioTools.get_duration(filepath)
+            with open(filepath, 'rb') as f:
+                file_data = f.read()
+            file_length = len(file_data)
+            file_sha256 = hashlib.sha256(file_data).digest()
+            waveform = None
+            if ptt:
+                waveform = AudioTools.generate_waveform(filepath, duration)
             builder = cls(media_cipher, media_uploader, media_connection)
             builder._filepath = filepath
             builder._is_temporary = is_temporary
@@ -82,14 +75,13 @@ class AudioBuilder:
             builder._ptt = ptt
             builder._waveform = waveform
             builder._progress_callback = progress_callback
-            
             return builder
         except Exception as e:
-            # Limpa arquivo temporário em caso de erro
-            if is_temporary:
+            logger.exception("Erro em media_tools ao processar áudio (AudioBuilder.from_filepath): %s", e)
+            if is_temporary and filepath:
                 try:
                     os.unlink(filepath)
-                except:
+                except Exception:
                     pass
             raise
     

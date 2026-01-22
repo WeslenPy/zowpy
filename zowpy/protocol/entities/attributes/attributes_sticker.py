@@ -199,11 +199,12 @@ class StickerAttributes:
         """
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"Arquivo não encontrado: {filepath}")
-        
-        # Obtém dimensões se não fornecidas
-        if not dimensions:
-            dimensions = ImageTools.get_dimensions(filepath)
-        
+        try:
+            if not dimensions:
+                dimensions = ImageTools.get_dimensions(filepath)
+        except Exception as e:
+            logger.exception("Erro em media_tools ao processar sticker (from_filepath): %s", e)
+            raise
         width, height = dimensions if dimensions else (512, 512)  # Default para stickers
         
         # Gera thumbnail PNG se não fornecido (sticker usa PNG, não JPEG)
@@ -248,34 +249,30 @@ class StickerAttributes:
         Returns:
             StickerAttributes
         """
-        # Baixa arquivo temporariamente
-        filepath, is_temporary = await normalize_file_path_or_url(
-            url, default_extension=".webp", prefix="sticker"
-        )
-        
+        filepath = None
+        is_temporary = False
         try:
-            # Obtém dimensões se não fornecidas
+            filepath, is_temporary = await normalize_file_path_or_url(
+                url, default_extension=".webp", prefix="sticker"
+            )
             if not dimensions:
                 dimensions = ImageTools.get_dimensions(filepath)
-            
             width, height = dimensions if dimensions else (512, 512)  # Default para stickers
-            
-            # Gera thumbnail PNG se não fornecido
             if not png_thumbnail:
                 png_thumbnail = None
-            
             downloadable_attrs = await DownloadableMediaMessageAttributes.from_file(
                 filepath, media_type, result_request_media_conn_iq
             )
-            
             return StickerAttributes(
                 downloadable_attrs, width, height, png_thumbnail, is_animated, None, is_avatar, is_ai_sticker, is_lottie
             )
+        except Exception as e:
+            logger.exception("Erro em media_tools ao processar sticker (from_url): %s", e)
+            raise
         finally:
-            # Remove arquivo temporário
-            if is_temporary:
+            if is_temporary and filepath:
                 try:
                     os.unlink(filepath)
-                except Exception as e:
-                    logger.warning(f"Erro ao remover arquivo temporário {filepath}: {e}")
+                except Exception as ex:
+                    logger.warning("Erro ao remover arquivo temporário %s: %s", filepath, ex)
 

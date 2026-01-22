@@ -174,9 +174,11 @@ class AudioAttributes:
         """
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"Arquivo de áudio não encontrado: {filepath}")
-        
-        seconds = audio_properties or AudioTools.get_duration(filepath)
-        
+        try:
+            seconds = audio_properties or AudioTools.get_duration(filepath)
+        except Exception as e:
+            logger.exception("Erro em media_tools ao processar áudio (from_filepath): %s", e)
+            raise
         # Se waveform não foi fornecido e é PTT, gera um waveform aleatório
         if waveform is None and ptt:
             waveform = AudioAttributes.generate_waveform()
@@ -214,30 +216,28 @@ class AudioAttributes:
         Returns:
             AudioAttributes
         """
-        # Baixa arquivo temporariamente
-        filepath, is_temporary = await normalize_file_path_or_url(
-            url, default_extension=".ogg", prefix="audio"
-        )
-        
+        filepath = None
+        is_temporary = False
         try:
+            filepath, is_temporary = await normalize_file_path_or_url(
+                url, default_extension=".ogg", prefix="audio"
+            )
             seconds = audio_properties or AudioTools.get_duration(filepath)
-            
-            # Se waveform não foi fornecido e é PTT, gera um waveform aleatório
             if waveform is None and ptt:
                 waveform = AudioAttributes.generate_waveform()
-            
             downloadable_attrs = await DownloadableMediaMessageAttributes.from_file(
                 filepath, media_type or "audio", result_request_media_conn_iq
             )
-            
             return AudioAttributes(
                 downloadable_attrs, seconds, ptt, streaming_sidecar, waveform
             )
+        except Exception as e:
+            logger.exception("Erro em media_tools ao processar áudio (from_url): %s", e)
+            raise
         finally:
-            # Remove arquivo temporário
-            if is_temporary:
+            if is_temporary and filepath:
                 try:
                     os.unlink(filepath)
-                except Exception as e:
-                    logger.warning(f"Erro ao remover arquivo temporário {filepath}: {e}")
+                except Exception as ex:
+                    logger.warning("Erro ao remover arquivo temporário %s: %s", filepath, ex)
 

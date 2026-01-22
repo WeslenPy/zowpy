@@ -43,17 +43,15 @@ class StickerBuilder:
         progress_callback: Optional[callable] = None
     ) -> 'StickerBuilder':
         """Cria StickerBuilder a partir de arquivo ou URL."""
-        # Normaliza: se for URL, baixa temporariamente
-        filepath, is_temporary = await normalize_file_path_or_url(
-            file_path_or_url,
-            default_extension=".png",
-            prefix="sticker"
-        )
-        
+        filepath = None
+        is_temporary = False
         try:
-            # Processa sticker (tratado como imagem)
+            filepath, is_temporary = await normalize_file_path_or_url(
+                file_path_or_url,
+                default_extension=".png",
+                prefix="sticker"
+            )
             image_metadata = ImageTools.process_image(filepath)
-            
             builder = cls(media_cipher, media_uploader, media_connection)
             builder._filepath = filepath
             builder._is_temporary = is_temporary
@@ -63,14 +61,13 @@ class StickerBuilder:
             builder._is_ai_sticker = is_ai_sticker
             builder._is_lottie = is_lottie
             builder._progress_callback = progress_callback
-            
             return builder
         except Exception as e:
-            # Limpa arquivo temporário em caso de erro
-            if is_temporary:
+            logger.exception("Erro em media_tools ao processar sticker (StickerBuilder.from_filepath): %s", e)
+            if is_temporary and filepath:
                 try:
                     os.unlink(filepath)
-                except:
+                except Exception:
                     pass
             raise
     

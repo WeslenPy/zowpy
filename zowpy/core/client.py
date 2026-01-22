@@ -579,7 +579,7 @@ class WhatsAppClient:
                 await self._send_protocol_node(ack_node)
         
         self.events.on("ack:send", handle_ack_send)
-
+        
         async def handle_stream_error(_data: dict) -> None:
             if not self._running:
                 return
@@ -1151,6 +1151,7 @@ class WhatsAppClient:
             self._encryption_receiver._process_pending = self._process_pending_messages
             self._encryption_receiver._send_pkmsg_for_invalid_message = self._send_pkmsg_for_invalid_message
             self._encryption_receiver._send_retry_receipt_fn = self._send_retry_receipt
+            self._encryption_receiver._send_receipt_on_error_fn = self._send_receipt_on_error
             self._encryption_receiver._get_registration_id_fn = self._get_registration_id
     
     async def _handle_iq(self, node: ProtocolNode) -> None:
@@ -1320,7 +1321,7 @@ class WhatsAppClient:
         if not normalized_jid:
             logger.error(f"assure_contacts_and_send: falha ao normalizar JID: {to}")
             raise ValueError(f"JID inválido: {to}")
-
+        
         phone = normalized_jid.split('@')[0] if '@' in normalized_jid else normalized_jid
 
         # 5. Verifica se contato é novo
@@ -3040,8 +3041,8 @@ class WhatsAppClient:
                     except Exception as iq_error:
                         logger.error(f"Erro ao obter participantes via IQ request: {iq_error}")
                         # Fallback final: envia sem distribution
-                        await self._send_to_group_with_sessions(message_node, [], retry_count=0)
-                        return
+                    await self._send_to_group_with_sessions(message_node, [], retry_count=0)
+                    return
             else:
                 logger.warning("GroupHandler não disponível, tentando IQ request direto...")
                 try:
@@ -3052,8 +3053,8 @@ class WhatsAppClient:
                 except Exception as iq_error:
                     logger.error(f"Erro ao obter participantes via IQ request: {iq_error}")
                     # Fallback final: envia sem distribution
-                    await self._send_to_group_with_sessions(message_node, [], retry_count=0)
-                    return
+                await self._send_to_group_with_sessions(message_node, [], retry_count=0)
+                return
         else:
             # Sender key existe, verifica retry
             logger.debug("Sender key encontrado, verificando retry...")
@@ -3076,21 +3077,21 @@ class WhatsAppClient:
                             retry_count = int(retry_count_attr)
                         except (ValueError, TypeError):
                             retry_count = 0
-                
-                if hasattr(retry_receipt_entity, 'getRetryJid'):
-                    try:
-                        retry_jid = retry_receipt_entity.getRetryJid()
-                        if retry_jid:
-                            jids_need_sender_key = [retry_jid]
-                            logger.debug(f"Retry detectado (via método): count={retry_count}, jid={retry_jid}")
-                    except Exception:
-                        pass
-                else:
-                    retry_jid_attr = retry_receipt_entity.get_attribute("retry_jid")
+                    
+                    if hasattr(retry_receipt_entity, 'getRetryJid'):
+                        try:
+                            retry_jid = retry_receipt_entity.getRetryJid()
+                            if retry_jid:
+                                jids_need_sender_key = [retry_jid]
+                                logger.debug(f"Retry detectado (via método): count={retry_count}, jid={retry_jid}")
+                        except Exception:
+                            pass
+                    else:
+                        retry_jid_attr = retry_receipt_entity.get_attribute("retry_jid")
                     if retry_jid_attr:
                         jids_need_sender_key = [retry_jid_attr]
                         logger.debug(f"Retry detectado (via atributo): count={retry_count}, jid={retry_jid_attr}")
-            
+                
             # Envia com sender key distribution se necessário
             await self._send_to_group_with_sessions(message_node, jids_need_sender_key, retry_count=retry_count)
     
@@ -3283,9 +3284,9 @@ class WhatsAppClient:
             )
             
             enc_entities.append(skmsg_node)
-            
+                
         except exceptions.NoSessionException as e:
-            # Se sender key não existe, criar antes
+        # Se sender key não existe, criar antes
             logger.warning(f"Sender key não encontrado para grupo {group_jid}, criando...")
             await self.axolotl_manager.group_create_skmsg(group_jid)
             # Tentar criptografar novamente
@@ -3583,7 +3584,7 @@ class WhatsAppClient:
                 await asyncio.gather(*tasks, return_exceptions=True)
             except Exception as e:
                 logger.warning(f"Erro ao aguardar cancelamento de tasks: {e}")
-        
+    
         # 5. Finaliza IQResponseProcessor (cleanup task + callbacks)
         if self._iq_response_processor:
             try:
@@ -3819,7 +3820,7 @@ class WhatsAppClient:
             """Callback de erro"""
             logger.info(f"Callback flush keys de erro: {node}")
             await self._on_sent_keys_error(node, iq_node, signed_prekey, prekeys, reboot_connection, retry_count)
-        
+
         async def on_success(node):
             await self._on_keys_flushed(prekeys, reboot_connection=reboot_connection)
 
@@ -3845,7 +3846,7 @@ class WhatsAppClient:
         
         async with self._keys_retry_lock:
             self._pending_keys_retry = None
-      
+        
         await self.axolotl_manager.set_prekeys_as_sent(prekeys)
         
         logger.info(f"[ZOWPY] Prekeys marcadas como enviadas: {len(prekeys)} prekeys")
@@ -4303,6 +4304,24 @@ class WhatsAppClient:
         except Exception as e:
             logger.error(f"Erro ao enviar retry receipt: {e}", exc_info=True)
     
+    async def _send_receipt_on_error(
+        self, message_id: str, from_jid: str, participant: Optional[str]
+    ) -> None:
+        """
+        Envia OutgoingReceipt (delivered) em erros de descriptografia.
+        Fluxo zowsuplib: InvalidKeyId, Duplicate, Unknown type, InvalidMessage após 2 retries.
+        """
+        from .builders.receipt_builder import ReceiptBuilder
+
+        receipt_node = ReceiptBuilder.build_receipt(
+            message_id=message_id,
+            from_jid=from_jid,
+            receipt_type=ReceiptBuilder.TYPE_DELIVERED,
+            participant=participant,
+        )
+        await self._send_protocol_node(receipt_node)
+        logger.debug(f"Receipt de erro enviado: id={message_id}, to={from_jid}")
+
     async def _get_registration_id(self) -> Optional[int]:
         """
         Obtém registration ID do cliente.
@@ -4423,7 +4442,7 @@ class WhatsAppClient:
             return False
 
         return proxy_config
-
+    
     async def set_proxy(
         self,
         proxy_string: str,
@@ -4474,7 +4493,7 @@ class WhatsAppClient:
         proxy_config = await self.new_proxy(proxy_string=proxy_string,proxy_type=proxy_type,test_url=test_url)
         if not proxy_config:
             return False
-
+        
         # 3. Configura na instância
         self.network_config = NetworkConfig.proxy_config(proxy_config)
         self.proxy = proxy_config.to_dict()

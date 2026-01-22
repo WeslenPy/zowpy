@@ -87,6 +87,10 @@ class MessageProcessor(BaseProcessor):
             # 1. Verifica se está criptografada
             enc_node = node.get_child("enc")
             proto_node = node.get_child("proto")
+
+                  
+            # 7. Envia receipt automático
+            await self._send_receipt(node)
             
             if enc_node:
                 # Mensagem criptografada - descriptografa
@@ -142,9 +146,7 @@ class MessageProcessor(BaseProcessor):
             # 6. Emite evento
             logger.info(f"Mensagem processada: id={message_id}, from={from_jid}, text={message_data.get('text', '')[:50]}")
             await self._events.emit("message", message_data)
-            
-            # 7. Envia receipt automático
-            await self._send_receipt(node)
+      
             
             return message_data
         
@@ -172,7 +174,7 @@ class MessageProcessor(BaseProcessor):
             receipt_node = self._receipt_builder.build_receipt(
                 message_id=message_id,
                 from_jid=from_jid,
-                receipt_type=self._receipt_builder.TYPE_DELIVERED,
+                receipt_type=None,
                 participant=participant
             )
             

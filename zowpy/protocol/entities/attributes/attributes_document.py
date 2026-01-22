@@ -208,16 +208,15 @@ class DocumentAttributes:
         Returns:
             DocumentAttributes
         """
-        # Baixa arquivo temporariamente
-        filepath, is_temporary = await normalize_file_path_or_url(
-            url, default_extension=".bin", prefix="document"
-        )
-        
+        filepath = None
+        is_temporary = False
         try:
+            filepath, is_temporary = await normalize_file_path_or_url(
+                url, default_extension=".bin", prefix="document"
+            )
             downloadable_attrs = await DownloadableMediaMessageAttributes.from_file(
                 filepath, media_type or "document", result_request_media_conn_iq
             )
-            
             return DocumentAttributes(
                 downloadable_attrs,
                 os.path.basename(filepath) if file_name is None else file_name,
@@ -227,11 +226,13 @@ class DocumentAttributes:
                 jpeg_thumbnail,
                 caption
             )
+        except Exception as e:
+            logger.exception("Erro em media_tools ao processar documento (from_url): %s", e)
+            raise
         finally:
-            # Remove arquivo temporário
-            if is_temporary:
+            if is_temporary and filepath:
                 try:
                     os.unlink(filepath)
-                except Exception as e:
-                    logger.warning(f"Erro ao remover arquivo temporário {filepath}: {e}")
+                except Exception as ex:
+                    logger.warning("Erro ao remover arquivo temporário %s: %s", filepath, ex)
 

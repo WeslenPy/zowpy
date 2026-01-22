@@ -65,32 +65,31 @@ async def main():
     async def handle_connected(data=None):
         """Handler de conexão estabelecida"""
         account_id = data.get('account_id', 'unknown') if data else 'unknown'
-        print(f"✅ Conectado ao WhatsApp! Account: {account_id}")
-        print("🟢 Cliente online - Mantendo conexão ativa...")
+        print(f"Conectado ao WhatsApp! Account: {account_id}")
+        print("Cliente online - Mantendo conexão ativa...")
     
     @client.on_disconnected
     async def handle_disconnected(data=None):
         """Handler de desconexão - Reconecta automaticamente"""
         account_id = data.get('account_id', 'unknown') if data else 'unknown'
-        print(f"❌ Desconectado do WhatsApp. Account: {account_id}")
+        print(f"Desconectado do WhatsApp. Account: {account_id}")
         
     try:
         # Conecta (fluxo linear: conexão → handshake → autenticação)
-        print("🔄 Conectando ao WhatsApp...")
+        print("Conectando ao WhatsApp...")
 
-        await client.set_proxy("104.238.36.70:6077:mwqfvavl:iggqj6pm1ptt")
+        # await client.remove_proxy()
 
         
         await client.connect()
-        print("✅ Cliente conectado e autenticado!")
-        print("🟢 Cliente online - Mantendo conexão ativa indefinidamente...")
-        print("💡 Pressione Ctrl+C para desconectar")
+        print("Cliente conectado e autenticado!")
+        print("Cliente online - Mantendo conexão ativa indefinidamente...")
         
         # Envia mensagem inicial (opcional)
         # to = "559885700260"
         to = "120363423929565689@g.us"
         text = "Hello! Esta é uma mensagem de teste do ZowPy."
-        print(f"📤 Enviando mensagem para {to}...")
+        print(f" Enviando mensagem para {to}...")
         contacts = await client.integrity_check(["559885700260"])
         logger.debug(contacts)
 
@@ -114,8 +113,6 @@ async def main():
         await client.send_audio(to, "https://s3-bucket-waconnect.s3.us-west-2.amazonaws.com/static/api/f5ba3d484c1f8a182648272831cdcbe6155f686c8600edc703c3a75965b2a7da924d69c8d9591e32c28a1b21ab2b9820f7ca06578420839f68996c76cd6090b1.ogg",ptt=True)
         
         await client.send_document(to, "https://s3-bucket-waconnect.s3.us-west-2.amazonaws.com/static/api/f5ba3d484c1f8a182648272831cdcbe6155f686c8600edc703c3a75965b2a7da924d69c8d9591e32c28a1b21ab2b9820f7ca06578420839f68996c76cd6090b1.ogg")
-        
-        # print(f"✅ Mensagem enviada! ID: {msg_id}")
         
         # Mantém o cliente online indefinidamente
         # O keepalive é enviado automaticamente a cada 20 segundos

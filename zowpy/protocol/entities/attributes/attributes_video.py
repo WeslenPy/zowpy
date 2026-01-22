@@ -196,20 +196,20 @@ class VideoAttributes:
         """
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"Arquivo de vídeo não encontrado: {filepath}")
-        
-        if not jpeg_thumbnail:
-            jpeg_thumbnail = VideoTools.generate_thumbnail(filepath)
-        
-        # Se video_properties não fornecido, tenta obter
-        if not video_properties:
-            # Tenta obter dimensões e duração
-            try:
-                width, height = VideoTools.get_dimensions(filepath)
-                seconds = VideoTools.get_duration(filepath)
-                video_properties = (width, height, None, seconds, None)
-            except Exception as e:
-                logger.warning(f"Erro ao obter propriedades do vídeo: {e}")
-                video_properties = None
+        try:
+            if not jpeg_thumbnail:
+                jpeg_thumbnail = VideoTools.generate_thumbnail(filepath)
+            if not video_properties:
+                try:
+                    width, height = VideoTools.get_dimensions(filepath)
+                    seconds = VideoTools.get_duration(filepath)
+                    video_properties = (width, height, None, seconds, None)
+                except Exception as e:
+                    logger.warning("Erro ao obter propriedades do vídeo: %s", e)
+                    video_properties = None
+        except Exception as e:
+            logger.exception("Erro em media_tools ao processar vídeo (from_filepath): %s", e)
+            raise
         
         if video_properties:
             width, height, bitrate, seconds, codec = video_properties
@@ -254,46 +254,41 @@ class VideoAttributes:
         Returns:
             VideoAttributes
         """
-        # Baixa arquivo temporariamente
-        filepath, is_temporary = await normalize_file_path_or_url(
-            url, default_extension=".mp4", prefix="video"
-        )
-        
+        filepath = None
+        is_temporary = False
         try:
+            filepath, is_temporary = await normalize_file_path_or_url(
+                url, default_extension=".mp4", prefix="video"
+            )
             if not jpeg_thumbnail:
                 jpeg_thumbnail = VideoTools.generate_thumbnail(filepath)
-            
-            # Se video_properties não fornecido, tenta obter
             if not video_properties:
-                # Tenta obter dimensões e duração
                 try:
                     width, height = VideoTools.get_dimensions(filepath)
                     seconds = VideoTools.get_duration(filepath)
                     video_properties = (width, height, None, seconds, None)
                 except Exception as e:
-                    logger.warning(f"Erro ao obter propriedades do vídeo: {e}")
+                    logger.warning("Erro ao obter propriedades do vídeo: %s", e)
                     video_properties = None
-            
             if video_properties:
                 width, height, bitrate, seconds, codec = video_properties
             else:
                 width, height, bitrate, seconds, codec = (None, None, None, None, None)
-            
             if not width or not height:
                 raise ValueError("Could not determine video properties, install VideoStream or pass video_properties")
-            
             downloadable_attrs = await DownloadableMediaMessageAttributes.from_file(
                 filepath, media_type or "video", result_request_media_conn_iq
             )
-            
             return VideoAttributes(
                 downloadable_attrs, width, height, seconds, caption, gif_playback, jpeg_thumbnail, gif_attribution
             )
+        except Exception as e:
+            logger.exception("Erro em media_tools ao processar vídeo (from_url): %s", e)
+            raise
         finally:
-            # Remove arquivo temporário
-            if is_temporary:
+            if is_temporary and filepath:
                 try:
                     os.unlink(filepath)
-                except Exception as e:
-                    logger.warning(f"Erro ao remover arquivo temporário {filepath}: {e}")
+                except Exception as ex:
+                    logger.warning("Erro ao remover arquivo temporário %s: %s", filepath, ex)
 

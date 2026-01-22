@@ -41,32 +41,26 @@ class DocumentBuilder:
         progress_callback: Optional[callable] = None
     ) -> 'DocumentBuilder':
         """Cria DocumentBuilder a partir de arquivo ou URL."""
-        # Normaliza: se for URL, baixa temporariamente
-        filepath, is_temporary = await normalize_file_path_or_url(
-            file_path_or_url,
-            default_extension=".bin",
-            prefix="document"
-        )
-        
+        filepath = None
+        is_temporary = False
         try:
-            # Processa documento
+            filepath, is_temporary = await normalize_file_path_or_url(
+                file_path_or_url,
+                default_extension=".bin",
+                prefix="document"
+            )
             mimetype = MimeTools.get_mime(filepath)
             file_name = filename or os.path.basename(filepath)
-            
             with open(filepath, 'rb') as f:
                 file_data = f.read()
-            
             file_length = len(file_data)
-            file_sha256 = hashlib.sha256(file_data).digest()  # Bytes raw (32 bytes) - protobuf espera bytes, não base64
-            
-            # Tenta gerar thumbnail se for imagem/PDF
+            file_sha256 = hashlib.sha256(file_data).digest()
             jpeg_thumbnail = None
             try:
                 if mimetype.startswith("image/"):
                     jpeg_thumbnail = ImageTools.generate_thumbnail(filepath) if hasattr(ImageTools, 'generate_thumbnail') else None
-            except Exception as e:
-                logger.debug(f"Erro ao gerar thumbnail para documento: {e}")
-            
+            except Exception as ex:
+                logger.debug("Erro ao gerar thumbnail para documento: %s", ex)
             builder = cls(media_cipher, media_uploader, media_connection)
             builder._filepath = filepath
             builder._is_temporary = is_temporary
@@ -77,14 +71,13 @@ class DocumentBuilder:
             builder._caption = caption
             builder._jpeg_thumbnail = jpeg_thumbnail
             builder._progress_callback = progress_callback
-            
             return builder
         except Exception as e:
-            # Limpa arquivo temporário em caso de erro
-            if is_temporary:
+            logger.exception("Erro em media_tools ao processar documento (DocumentBuilder.from_filepath): %s", e)
+            if is_temporary and filepath:
                 try:
                     os.unlink(filepath)
-                except:
+                except Exception:
                     pass
             raise
     

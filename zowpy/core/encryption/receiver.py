@@ -51,6 +51,7 @@ class EncryptionReceiver:
         self._process_pending = process_pending_fn
         self._send_pkmsg_for_invalid_message = None  # Será configurado pelo client
         self._send_retry_receipt_fn = None  # Será configurado pelo client
+        self._send_receipt_on_error_fn = None  # OutgoingReceipt (delivered) em erros
         self._get_registration_id_fn = None  # Será configurado pelo client
     
     async def decrypt_message(self, node: ProtocolNode) -> Optional[bytes]:
@@ -99,67 +100,67 @@ class EncryptionReceiver:
 
         real_target_jid = sender_jid if sender_jid else sender_pn
         
+        msg_id = node.get_attribute("id")
         try:
             # Descriptografa baseado no tipo
             if enc_type == self.TYPE_SKMSG:
-                # Mensagem de grupo
-                return await self._decrypt_skmsg(node, enc_data, real_target_jid)
+                out = await self._decrypt_skmsg(node, enc_data, real_target_jid)
+                self.reset_retries(msg_id)
+                return out
             elif enc_type == self.TYPE_PKMSG:
-                # Mensagem PreKey
-                return await self._decrypt_pkmsg(node, enc_data, real_target_jid, enc_version)
+                out = await self._decrypt_pkmsg(node, enc_data, real_target_jid, enc_version)
+                self.reset_retries(msg_id)
+                return out
             elif enc_type == self.TYPE_MSG:
-                # Mensagem normal (WhisperMessage)
-                return await self._decrypt_msg(node, enc_data, real_target_jid, enc_version)
+                out = await self._decrypt_msg(node, enc_data, real_target_jid, enc_version)
+                self.reset_retries(msg_id)
+                return out
             else:
                 logger.warning(f"Tipo de mensagem criptografada não suportado: {enc_type}")
+                await self._send_receipt_for_node(node)
                 return None
-        
+
         except exceptions.InvalidKeyIdException:
-            logger.warning(f"Invalid KeyId para {real_target_jid}, ignorando")
+            logger.warning(f"Invalid KeyId para {real_target_jid}, enviando receipt")
+            await self._send_receipt_for_node(node)
             return None
-        
+
         except exceptions.InvalidMessageException as e:
-            # Trata InvalidMessage (Bad MAC, sessão desincronizada, etc.)
             error_msg = str(e) if str(e) else "Invalid message (Bad MAC ou sessão desincronizada)"
             logger.warning(f"InvalidMessage para {real_target_jid}: {error_msg}")
-            
-            # Retry logic (máximo 2 tentativas)
-            message_id = node.get_attribute("id")
-            retry_count = self._retries.get(message_id, 0)
-            
-            logger.warning(f"InvalidMessage após 2 tentativas para {message_id}, enviando PKMSG para sincronização")
-            # Envia PKMSG para sincronização
-            # Prioriza sender_pn quando disponível (mais confiável que from_jid)
             from_jid = node.get_attribute("from")
-            sender_pn = node.get_attribute("sender_pn")
             participant = node.get_attribute("participant")
-            
-            # Prioriza sender_pn sobre from_jid
-            if not real_target_jid:
-                logger.error(f"Não foi possível determinar real_target_jid para PKMSG: sender_pn={sender_pn}, from_jid={real_target_jid}")
+            retry_count = self._retries.get(msg_id, 0)
+            if retry_count >= 2:
+                logger.warning(f"InvalidMessage após 2 tentativas para {msg_id}, enviando receipt e desistindo")
+                await self._send_receipt_for_node(node)
                 return None
-            
-            if sender_pn:
-                logger.debug(f"Usando sender_pn={sender_pn} para PKMSG (priorizado sobre from_jid={from_jid})")
-            else:
-                logger.debug(f"Usando from_jid={from_jid} para PKMSG (sender_pn não disponível)")
-            
-            if self._send_pkmsg_for_invalid_message:
+            self._retries[msg_id] = retry_count + 1
+            logger.debug(f"Enviando retry para {msg_id} (tentativa {retry_count + 1}/2)")
+            reg_id = None
+            if self._get_registration_id_fn:
                 try:
-                    # CORREÇÃO: Executa _send_pkmsg_for_invalid_message em task separada para evitar deadlock
-                    # O worker não pode bloquear esperando por _get_keys_for_recipient, que precisa processar
-                    # respostas IQ que estão na fila. Se o worker está bloqueado, as respostas IQ não podem
-                    # ser processadas, causando deadlock circular.
-                    import asyncio
-                    # asyncio.create_task(self._send_pkmsg_for_invalid_message(real_target_jid, message_id, participant))
-                except Exception as e:
-                    logger.error(f"Erro ao criar task para PKMSG de sincronização: {e}", exc_info=True)
+                    reg_id = await self._get_registration_id_fn()
+                except Exception:
+                    pass
+            t = node.get_attribute("t")
+            ts = int(t) if t and str(t).isdigit() else None
+            retry_entity = self.create_retry_receipt(
+                message_id=msg_id,
+                to=from_jid,
+                retry_count=retry_count + 1,
+                from_jid=node.get_attribute("to"),
+                timestamp=ts,
+                retry_jid=participant or from_jid,
+                registration_id=reg_id,
+            )
+            if self._send_retry_receipt_fn:
+                # await self._send_retry_receipt_fn(retry_entity)
+                logger.warning(f"Retry receipt: {retry_entity}")
             else:
-                logger.warning("_send_pkmsg_for_invalid_message não configurada")
-
-
+                logger.warning("_send_retry_receipt_fn não configurada")
             return None
-          
+
         except exceptions.NoSessionException:
             logger.warning(f"No session para {sender_jid}, armazenando mensagem pendente")
             # Armazena mensagem pendente
@@ -194,8 +195,8 @@ class EncryptionReceiver:
             return None
         
         except exceptions.DuplicateMessageException:
-            logger.debug(f"Mensagem duplicada recebida de {sender_jid}")
-            # Mensagem já foi processada, retorna None
+            logger.debug(f"Mensagem duplicada recebida de {sender_jid}, enviando receipt")
+            await self._send_receipt_for_node(node)
             return None
         
         except Exception as e:
@@ -285,13 +286,30 @@ class EncryptionReceiver:
     def reset_retries(self, message_id: str) -> None:
         """
         Reseta contador de retries para uma mensagem.
-        
+
         Args:
             message_id: ID da mensagem
         """
         if message_id in self._retries:
             del self._retries[message_id]
-    
+
+    async def _send_receipt_for_node(self, node: ProtocolNode) -> None:
+        """
+        Envia OutgoingReceipt (delivered) para erros de descriptografia.
+        Fluxo zowsuplib: InvalidKeyId, Duplicate, Unknown type, InvalidMessage após 2 retries.
+        """
+        if not self._send_receipt_on_error_fn:
+            return
+        message_id = node.get_attribute("id")
+        from_jid = node.get_attribute("from")
+        participant = node.get_attribute("participant")
+        if not message_id or not from_jid:
+            return
+        try:
+            await self._send_receipt_on_error_fn(message_id, from_jid, participant)
+        except Exception as e:
+            logger.error(f"Erro ao enviar receipt de erro: {e}", exc_info=True)
+
     def create_retry_receipt(
         self,
         message_id: str,

@@ -133,10 +133,13 @@ class ImageAttributes:
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"Arquivo de imagem não encontrado: {filepath}")
         
-        if not jpeg_thumbnail:
-            jpeg_thumbnail = ImageTools.generate_thumbnail(filepath)
-        
-        dimensions = dimensions or ImageTools.get_dimensions(filepath)
+        try:
+            if not jpeg_thumbnail:
+                jpeg_thumbnail = ImageTools.generate_thumbnail(filepath)
+            dimensions = dimensions or ImageTools.get_dimensions(filepath)
+        except Exception as e:
+            logger.exception("Erro em media_tools ao processar imagem (from_filepath): %s", e)
+            raise
         width, height = dimensions if dimensions else (None, None)
         
         if not width or not height:
@@ -173,33 +176,31 @@ class ImageAttributes:
         Returns:
             ImageAttributes
         """
-        # Baixa arquivo temporariamente
-        filepath, is_temporary = await normalize_file_path_or_url(
-            url, default_extension=".jpg", prefix="image"
-        )
-        
+        filepath = None
+        is_temporary = False
         try:
+            filepath, is_temporary = await normalize_file_path_or_url(
+                url, default_extension=".jpg", prefix="image"
+            )
             if not jpeg_thumbnail:
                 jpeg_thumbnail = ImageTools.generate_thumbnail(filepath)
-            
             dimensions = dimensions or ImageTools.get_dimensions(filepath)
             width, height = dimensions if dimensions else (None, None)
-            
             if not width or not height:
                 raise ValueError("Could not determine image dimensions, install pillow or pass dimensions")
-            
             downloadable_attrs = await DownloadableMediaMessageAttributes.from_file(
                 filepath, media_type or "image", result_request_media_conn_iq
             )
-            
             return ImageAttributes(
                 downloadable_attrs, width, height, caption, jpeg_thumbnail
             )
+        except Exception as e:
+            logger.exception("Erro em media_tools ao processar imagem (from_url): %s", e)
+            raise
         finally:
-            # Remove arquivo temporário
-            if is_temporary:
+            if is_temporary and filepath:
                 try:
                     os.unlink(filepath)
-                except Exception as e:
-                    logger.warning(f"Erro ao remover arquivo temporário {filepath}: {e}")
+                except Exception as ex:
+                    logger.warning("Erro ao remover arquivo temporário %s: %s", filepath, ex)
 
