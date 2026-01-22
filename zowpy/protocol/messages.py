@@ -99,11 +99,13 @@ class AsyncMessageHandler:
             await self.events.emit("message", message_dict)
             
             # Envia ack de delivery se send_ack_fn estiver disponível
-            if from_jid and message_id and self.send_ack_fn:
-                await self.send_delivery_ack(
-                    message_id=message_id,
-                    to_jid=from_jid
-                )
+            # if from_jid and message_id and self.send_ack_fn:
+            #     await self.send_delivery_ack(
+            #         message_id=message_id,
+            #         to_jid=from_jid
+            #     )
+
+            logger.info(f"Mensagem processada: {message_dict}")
         except Exception as e:
             logger.error(f"Erro ao processar mensagem: {e}")
             # Emite evento de erro
