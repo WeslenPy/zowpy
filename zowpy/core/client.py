@@ -259,6 +259,8 @@ class WhatsAppClient:
                 logger.info(f" Conectando TCP socket via PROXY {proxy_type.upper()} ({proxy_host}:{proxy_port})...")
             else:
                 logger.info("Conectando TCP socket (conexão direta, sem proxy)...")
+
+
             self.connection = AsyncConnection(self.endpoint, proxy=self.proxy)
             await self.connection.connect()
             if self.proxy:
@@ -593,8 +595,13 @@ class WhatsAppClient:
                 asyncio.create_task(self.disconnect())
                 return
 
+        async def disconnect_handler(*args, **kwargs):
+            await self.disconnect()
+
 
         self.events.on("stream:error", handle_stream_error)
+        self.events.on("disconnected", disconnect_handler)
+
 
         self._node_router.register(StreamErrorProcessor(self.events))
         self._node_router.register(AckProcessor(self.events))
@@ -1378,6 +1385,9 @@ class WhatsAppClient:
             ValueError: Se JID é inválido ou número está na lista de inválidos
         """
         
+        # Normaliza e corrige JID de grupo se necessário antes da normalização
+        to = self._normalize_and_fix_group_jid(to)
+        
         # 3. Normaliza JID
         from ..utils.jid import normalize
         normalized_jid = normalize(to)
@@ -1448,7 +1458,9 @@ class WhatsAppClient:
         if not self._authenticated:
             raise RuntimeError("Not authenticated")
         
-        is_group = to.endswith(f"@{YowConstants.WHATSAPP_GROUP_SERVER}")
+        # Normaliza e corrige JID de grupo se necessário
+        to = self._normalize_and_fix_group_jid(to)
+        is_group = self._is_group_jid(to)
         to_jid = to_whatsapp_jid(to, is_group)
         
         # Incrementa contador de mensagens diárias
@@ -1662,9 +1674,8 @@ class WhatsAppClient:
         if not message_id:
             message_id = self._message_builder._generate_message_id()
         
-        # Garante que 'to' tenha formato correto
-        if "@" not in to:
-            to = f"{to}@{YowConstants.WHATSAPP_SERVER}"
+        # Normaliza e corrige JID de grupo se necessário
+        to = self._normalize_and_fix_group_jid(to)
         
         # Importa classes necessárias
         from ..protocol.entities.attributes import (
@@ -1819,9 +1830,8 @@ class WhatsAppClient:
         if not message_id:
             message_id = self._message_builder._generate_message_id()
         
-        # Garante que 'to' tenha formato correto
-        if "@" not in to:
-            to = f"{to}@{YowConstants.WHATSAPP_SERVER}"
+        # Normaliza e corrige JID de grupo se necessário
+        to = self._normalize_and_fix_group_jid(to)
         
         # Cria DownloadableMediaMessageAttributes
         downloadable_attrs = DownloadableMediaMessageAttributes(
@@ -1991,9 +2001,8 @@ class WhatsAppClient:
         if not message_id:
             message_id = self._message_builder._generate_message_id()
         
-        # Garante que 'to' tenha formato correto
-        if "@" not in to:
-            to = f"{to}@{YowConstants.WHATSAPP_SERVER}"
+        # Normaliza e corrige JID de grupo se necessário
+        to = self._normalize_and_fix_group_jid(to)
         
         # Importa classes necessárias
         from ..protocol.entities.attributes import (
@@ -2116,9 +2125,8 @@ class WhatsAppClient:
         if not message_id:
             message_id = self._message_builder._generate_message_id()
         
-        # Garante que 'to' tenha formato correto
-        if "@" not in to:
-            to = f"{to}@{YowConstants.WHATSAPP_SERVER}"
+        # Normaliza e corrige JID de grupo se necessário
+        to = self._normalize_and_fix_group_jid(to)
         
         # Importa classes necessárias
         from ..protocol.entities.attributes import (
@@ -2249,9 +2257,8 @@ class WhatsAppClient:
         if not message_id:
             message_id = self._message_builder._generate_message_id()
         
-        # Garante que 'to' tenha formato correto
-        if "@" not in to:
-            to = f"{to}@{YowConstants.WHATSAPP_SERVER}"
+        # Normaliza e corrige JID de grupo se necessário
+        to = self._normalize_and_fix_group_jid(to)
         
         # Importa classes necessárias
         from ..protocol.entities.attributes import (
@@ -2322,8 +2329,55 @@ class WhatsAppClient:
         return message_id
     
     def _is_group_jid(self, jid: str) -> bool:
-        """Verifica se JID é de grupo"""
-        return "-" in jid.split("@")[0] or "@g.us" in jid or "broadcast" in jid
+        """
+        Verifica se JID é de grupo.
+        
+        Um JID é considerado grupo se:
+        - Contém "@g.us" OU
+        - Tem >= 15 caracteres
+        """
+        return "-" in jid or ("." not in jid and ":" not in jid and len(jid) >= 15) or f"@{YowConstants.WHATSAPP_GROUP_SERVER}" in jid
+    
+    def _normalize_and_fix_group_jid(self, jid: str) -> str:
+        """
+        Normaliza e corrige JID de grupo se necessário.
+        
+        Usa _is_group_jid() para detectar grupos e aplica o sufixo correto:
+        - Se não tiver "@", adiciona "@g.us" para grupos ou "@s.whatsapp.net" para contatos
+        - Se já tiver "@" mas for grupo sem "@g.us", corrige para "@g.us"
+        
+        Args:
+            jid: JID do usuário (pode ser número puro ou JID completo)
+        
+        Returns:
+            JID corrigido com sufixo apropriado
+        """
+        if not jid:
+            return jid
+        
+        # Remove espaços
+        jid = jid.strip()
+        
+        # Se já tem "@", verifica se precisa corrigir
+        if "@" in jid:
+            # Se já tem "@g.us", retorna como está
+            if f"@{YowConstants.WHATSAPP_GROUP_SERVER}" in jid:
+                return jid
+            
+            # Se tem outro sufixo mas é grupo, corrige para "@g.us"
+            if self._is_group_jid(jid):
+                # Extrai o número/ID antes do "@"
+                jid_part = jid.split("@")[0]
+                return f"{jid_part}@{YowConstants.WHATSAPP_GROUP_SERVER}"
+            
+            # Se não é grupo, mantém como está
+            return jid
+        
+        # Se não tem "@", detecta se é grupo e adiciona sufixo apropriado
+        if self._is_group_jid(jid):
+            return f"{jid}@{YowConstants.WHATSAPP_GROUP_SERVER}"
+        else:
+            return f"{jid}@{YowConstants.WHATSAPP_SERVER}"
     
     async def _check_account_restriction(self) -> bool:
         """
@@ -3264,8 +3318,9 @@ class WhatsAppClient:
         
         # CORREÇÃO: Normaliza group_jid para garantir que seja @g.us
         # O atributo 'to' deve sempre ser o JID do grupo, não do participante
-        if not group_jid or not group_jid.endswith("@g.us") or len(group_jid) >= 15:
-            # Se não termina com @g.us, pode ser que o to esteja incorreto
+        # Verifica se é grupo usando a função de detecção atualizada
+        if not group_jid or not self._is_group_jid(group_jid):
+            # Se não é grupo válido, pode ser que o to esteja incorreto
             # Tenta extrair o ID do grupo ou usar o to original
             # Se o to for um JID individual, isso é um erro - mas vamos tentar corrigir
             if group_jid and ("@s.whatsapp.net" in group_jid or "@lid" in group_jid):
@@ -3680,7 +3735,7 @@ class WhatsAppClient:
         
         # 9. Emite evento de desconexão
         try:
-            await self.events.emit("disconnected", {"account_id": self.account_id})
+            await self.events.emit("disconnected", {"account_id": self.account_id, "reason": "disconnect"})
         except Exception as e:
             logger.warning(f"Erro ao emitir evento de desconexão: {e}")
         

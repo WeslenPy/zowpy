@@ -88,7 +88,8 @@ class GroupHandler:
                 
                 # Tenta obter do atributo "from" se for de g.us
                 from_jid = node.get_attribute("from")
-                if from_jid and from_jid.endswith("@g.us"):
+                # Detecta grupo: contém "@g.us" OU tem >= 15 caracteres
+                if from_jid and ("@g.us" in from_jid or len(from_jid) >= 15):
                     logger.info(f"Grupo criado com sucesso: {from_jid}")
                     future.set_result(from_jid)
                     return
@@ -715,7 +716,8 @@ class GroupHandler:
                 
                 # Tenta obter do atributo "from"
                 from_jid = node.get_attribute("from")
-                if from_jid and from_jid.endswith("@g.us"):
+                # Detecta grupo: contém "@g.us" OU tem >= 15 caracteres
+                if from_jid and ("@g.us" in from_jid or len(from_jid) >= 15):
                     logger.info(f"Entrou no grupo com sucesso: {from_jid}")
                     future.set_result(from_jid)
                     return

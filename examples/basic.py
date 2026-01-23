@@ -87,7 +87,7 @@ async def main():
         
         # Envia mensagem inicial (opcional)
         # to = "559885700260"
-        to = "120363423929565689@g.us"
+        to = "120363423929565689"
         text = "Hello! Esta é uma mensagem de teste do ZowPy."
         print(f" Enviando mensagem para {to}...")
         contacts = await client.integrity_check(["559885700260"])

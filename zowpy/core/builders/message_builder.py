@@ -9,6 +9,8 @@ import uuid
 from typing import Optional
 from loguru import logger
 
+from zowpy.utils.constants import YowConstants
+
 from ...protocol.structs import ProtocolNode
 from ...core.encryption.sender import EncryptionSender
 
@@ -186,11 +188,16 @@ class MessageBuilder:
         """
         Verifica se JID é de grupo.
         
+        Um JID é considerado grupo se:
+        - Contém "@g.us" OU
+        - Tem >= 15 caracteres
+        
         Args:
             jid: JID a verificar
         
         Returns:
             True se é grupo, False caso contrário
         """
-        return "-" in jid.split("@")[0] or "@g.us" in jid or "broadcast" in jid
+        return "-" in jid or ("." not in jid and ":" not in jid and len(jid) >= 15) or f"@{YowConstants.WHATSAPP_GROUP_SERVER}" in jid
+
 
