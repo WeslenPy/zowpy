@@ -4577,6 +4577,17 @@ class WhatsAppClient:
         return None
     
 
+    async def get_status_account(self) -> bool:
+        """Obtém status da conta."""
+        return {
+            "running": self.running,
+            "connected": self.connected,
+            "authenticated": self.authenticated,
+            "proxy": self.proxy.to_dict(),
+        }
+
+
+
     async def get_proxy_status(self) -> bool:
         """Obtém status do proxy."""
         if not self.network_config or not self.network_config.proxy:

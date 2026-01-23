@@ -173,6 +173,14 @@ class ZowPyClient:
         
         return message_id
     
+
+    async def get_status_account(self) -> bool:
+        """Obtém status da conta."""
+        if not self._client or not self._client.is_connected():
+            raise ConnectionError("Not connected")
+        return await self._client.get_status_account()
+
+
     async def send_audio(
         self,
         to: str,
