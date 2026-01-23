@@ -100,7 +100,14 @@ class WATools:
        return "%s.%d:%d@%s" % (i,t,d,s)
     
     @staticmethod
-    def jidDecode(jid):
+    def jidDecode(jid)->list[str,int,int]:
+        """
+        Decodifica um JID em um recipientId, recipientType e deviceId.
+        :param jid: JID a ser decodificado
+        :type jid: str
+        :return: Lista contendo recipientId, recipientType e deviceId
+        :rtype: list[str,int,int]
+        """
         username = jid.split("@")[0]
         nps = re.split(':|\\.',username)
         recipientId = nps[0]

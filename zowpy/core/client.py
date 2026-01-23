@@ -18,7 +18,7 @@ from zowpy.db.factory import AxolotlManagerFactory
 from zowpy.db.models import Account
 from zowpy.profile.profile import AsyncProfile
 from zowpy.config.v1.config import Config
-from zowpy.utils.tools import WATools
+from zowpy.utils.tools import Jid, WATools
 from zowpy.config.bot_env import BotEnv
 from zowpy.config.network import NetworkConfig, ProxyConfig
 
@@ -1388,6 +1388,9 @@ class WhatsAppClient:
         # Normaliza e corrige JID de grupo se necessário antes da normalização
         to = self._normalize_and_fix_group_jid(to)
         
+        if self._is_group_jid(to):
+            return await self.send_to_group(to, text, message_id)
+
         # 3. Normaliza JID
         from ..utils.jid import normalize
         normalized_jid = normalize(to)
@@ -1427,12 +1430,10 @@ class WhatsAppClient:
                 logger.warning("ContactHandler não disponível, enviando sem sincronizar")
                 # Atualiza timestamp mesmo sem sincronizar
                 self._last_sync_time[normalized_jid] = time.time()
-                await self._check_rate_limit(normalized_jid, min_delay_seconds=2.0)
                 return await self._send_text_direct(to, text, message_id)
         else:
             logger.debug(f"Contato {normalized_jid} já existe nos contatos")
             # Aplica rate limiting mesmo para contatos conhecidos
-            await self._check_rate_limit(normalized_jid, min_delay_seconds=2.0)
             return await self._send_text_direct(to, text, message_id)
 
     
@@ -1462,9 +1463,6 @@ class WhatsAppClient:
         to = self._normalize_and_fix_group_jid(to)
         is_group = self._is_group_jid(to)
         to_jid = to_whatsapp_jid(to, is_group)
-        
-        # Incrementa contador de mensagens diárias
-        self._daily_message_count += 1
         
         # 1. Gera ID se não fornecido
         if not message_id:
@@ -1551,28 +1549,9 @@ class WhatsAppClient:
                 # Envia para grupo
                 await self._send_to_group(node, proto_bytes, retry_receipt_entity)
             else:
-                # Contato individual
-                if ":" in account:
-                    # Device específico (ex: 123456789:0)
-                    jids = [to_jid]
-                    await self.ensure_sessions_and_send_to_contacts(node, jids)
-                elif "lid" in to_jid:
-                    # LID (Linked ID)
-                    jids = [to_jid]
-                    await self.ensure_sessions_and_send_to_contacts(node, jids)
-                else:
-                    # Precisa sincronizar dispositivos primeiro
-                    # Obtém todas as sessões existentes para este recipient
-                    recipient_id = account
-                    session_jids = await self.axolotl_manager.get_all_session_usernames(recipient_id)
-                    
-                    if session_jids:
-                        # Tem sessões, envia para elas
-                        await self.ensure_sessions_and_send_to_contacts(node, session_jids)
-                    else:
-                        # Não tem sessão, sincroniza dispositivos e obtém chaves
-                        await self._sync_devices_and_send(node, proto_bytes, to_jid)
-    
+                jids = [to_jid]
+                await self.ensure_sessions_and_send_to_contacts(node, jids)
+              
     async def send_text(
         self,
         to: str,
@@ -2463,30 +2442,23 @@ class WhatsAppClient:
             return
         
         # Contato individual - continua fluxo normal
-        account = to_jid.split('@')[0]
-        
-        # Verifica se tem dispositivo específico (ex: 123456789:0)
-        if ":" in account:
-            # Dispositivo específico
-            jids = [to_jid]
-            await self._send_to_contacts_with_sessions(message_node, jids)
-        elif "lid" in to_jid:
-            # LID (Linked ID)
-            jids = [to_jid]
-            await self._send_to_contacts_with_sessions(message_node, jids)
-        else:
-            # Precisa sincronizar dispositivos primeiro
-            recipient_id = account
+        jids = [to_jid]
+        jid = Jid.normalize(to_jid)
+        phone = jid.split('@')[0] if '@' in jid else jid
+
+        isNewContact = self.axolotl_manager._store.isNewContact(jid)
+        if isNewContact:
+            await self.axolotl_manager._store.addContact(jid)
+
+
+        return await self.ensure_sessions_and_send_to_contacts(message_node, jids)
             
-            # Obtém todas as sessões existentes para este recipient
-            session_jids = await self.axolotl_manager.get_all_session_usernames(recipient_id)
-            
-            if session_jids:
-                # Tem sessões, envia para elas
-                await self._send_to_contacts_with_sessions(message_node, session_jids)
-            else:
-                # Não tem sessão, sincroniza dispositivos e obtém chaves
-                await self._sync_devices_and_send(message_node, proto_bytes, to_jid)
+        #     if session_jids:
+        #         # Tem sessões, envia para elas
+        #         await self._send_to_contacts_with_sessions(message_node, session_jids)
+        #     else:
+        #         # Não tem sessão, sincroniza dispositivos e obtém chaves
+        #         await self._sync_devices_and_send(message_node, proto_bytes, to_jid)
     
     async def ensure_sessions_and_send_to_contacts(
         self, 
@@ -2514,16 +2486,14 @@ class WhatsAppClient:
         proto_bytes = proto_node.data
         
         # Separa JIDs com sessão dos sem sessão
-        all_jids = []
-        jids_no_session = []
-        
-        for jid in jids:
-            recipient_id = jid.split('@')[0]
-            if await self.axolotl_manager.session_exists(recipient_id):
-                all_jids.append(jid)
-            else:
-                jids_no_session.append(jid)
-        
+
+
+        jids_maps = await self.axolotl_manager.session_exists_bulk(jids)
+        all_jids = [f"{recipient_id}@{YowConstants.WHATSAPP_SERVER}" for recipient_id, deviceid in jids_maps]
+        jids_no_session = [jid for jid in jids if jid not in all_jids]
+  
+
+
         async def on_get_keys_success(node, success_jids, errors):
             """Callback quando chaves são obtidas com sucesso"""
             if errors:
@@ -2576,16 +2546,11 @@ class WhatsAppClient:
         Returns:
             Tuple[List[str], Dict[str, Exception]]: (success_jids, error_jids)
         """
-        all_success = []
-        all_errors = {}
+        recipients_ids = [jid.split('@')[0] for jid in jids]
+
+        success_jids, error_jids = await self._get_keys_for_recipient(recipients_ids, reason=reason)
         
-        for jid in jids:
-            recipient_id = jid.split('@')[0]
-            success_jids, error_jids = await self._get_keys_for_recipient(recipient_id, reason=reason)
-            all_success.extend(success_jids)
-            all_errors.update(error_jids)
-        
-        return all_success, all_errors
+        return success_jids, error_jids
     
     async def _send_to_contacts_with_sessions(
         self, 
@@ -2644,7 +2609,7 @@ class WhatsAppClient:
                 # Extrai apenas o recipient_id (parte antes do primeiro ponto)
                 recipient_id = jid.split('.')[0]
                 # Converte para JID completo no formato do zowsuplib
-                to_jid_for_node = f"{recipient_id}@s.whatsapp.net"
+                to_jid_for_node = f"{recipient_id}@{YowConstants.WHATSAPP_SERVER}"
             
             # Criptografa para este dispositivo (usa recipient_id interno)
             ciphertext = await self.axolotl_manager.encrypt(recipient_id, proto_bytes)
@@ -2860,7 +2825,7 @@ class WhatsAppClient:
     
     async def _get_keys_for_recipient(
         self,
-        recipient_id: str,
+        recipient_ids: list[str] | str,
         reason: Optional[str] = None
     ) -> Tuple[List[str], Dict[str, Exception]]:
         """
@@ -2876,14 +2841,12 @@ class WhatsAppClient:
         Returns:
             Tuple[List[str], Dict[str, Exception]]: (success_jids, error_jids)
         """
-        if "@" not in recipient_id:
-            recipient_jid = f"{recipient_id}@{YowConstants.WHATSAPP_SERVER}"
-        else:
-            recipient_jid = recipient_id
+        if isinstance(recipient_ids, str):
+            recipient_ids = [recipient_ids]
+
+        jids = [f"{recipient_id.split('@')[0]}@{YowConstants.WHATSAPP_SERVER}" for recipient_id in recipient_ids]
         
-        jids = [recipient_jid]
-        
-        logger.debug(f"Obtendo chaves para {recipient_jid}, reason={reason}")
+        logger.debug(f"Obtendo chaves para {jids}, reason={reason}")
         
         # Cria IQ para obter chaves
         iq_node = PrekeyBuilder.build_get_keys_iq(
@@ -2999,9 +2962,13 @@ class WhatsAppClient:
                 else:
                     logger.debug(f"Future já resolvida para IQ {iq_id}, ignorando set_exception")
    
+
+        pending_keys = ",".join(jids)
+
+
         async with self._pending_keys_lock:
             # Cria e registra future na fila
-            self._pending_keys_requests[recipient_jid] = future
+            self._pending_keys_requests[pending_keys] = future
         
         timeout = 120
         
@@ -3014,11 +2981,11 @@ class WhatsAppClient:
             
             # CORREÇÃO: Remove da fila após sucesso
             async with self._pending_keys_lock:
-                if recipient_jid in self._pending_keys_requests:
+                if pending_keys in self._pending_keys_requests:
                     # Verifica se é o mesmo future (pode ter sido substituído)
-                    if self._pending_keys_requests[recipient_jid] == future:
-                        del self._pending_keys_requests[recipient_jid]
-                        logger.debug(f"PKMSG concluído para {recipient_jid}, removido da fila")
+                    if self._pending_keys_requests[pending_keys] == future:
+                        del self._pending_keys_requests[pending_keys]
+                        logger.debug(f"PKMSG concluído para {pending_keys}, removido da fila")
             
             return result
             
@@ -3026,35 +2993,35 @@ class WhatsAppClient:
             self._iq_response_processor.unregister_callback(iq_id)
             
             async with self._pending_keys_lock:
-                if recipient_jid in self._pending_keys_requests:
-                    if self._pending_keys_requests[recipient_jid] == future:
-                        del self._pending_keys_requests[recipient_jid]
-                        logger.debug(f"PKMSG timeout para {recipient_jid}, removido da fila")
+                if pending_keys in self._pending_keys_requests:
+                    if self._pending_keys_requests[pending_keys] == future:
+                        del self._pending_keys_requests[pending_keys]
+                        logger.debug(f"PKMSG timeout para {pending_keys}, removido da fila")
             
             logger.error(f"Timeout ao obter chaves para {recipient_jid}")
             
             if not future.done():
-                error_result = ([], {recipient_jid: Exception("Timeout ao obter chaves")})
+                error_result = ([], {pending_keys: Exception("Timeout ao obter chaves")})
                 future.set_result(error_result)
             
-            return ([], {recipient_jid: Exception("Timeout ao obter chaves")})
+            return ([], {pending_keys: Exception("Timeout ao obter chaves")})
             
         except Exception as e:
             self._iq_response_processor.unregister_callback(iq_id)
             
             async with self._pending_keys_lock:
-                if recipient_jid in self._pending_keys_requests:
-                    if self._pending_keys_requests[recipient_jid] == future:
-                        del self._pending_keys_requests[recipient_jid]
-                        logger.debug(f"PKMSG erro para {recipient_jid}, removido da fila")
+                if pending_keys in self._pending_keys_requests:
+                    if self._pending_keys_requests[pending_keys] == future:
+                        del self._pending_keys_requests[pending_keys]
+                        logger.debug(f"PKMSG erro para {pending_keys}, removido da fila")
             
-            logger.error(f"Erro ao obter chaves para {recipient_jid}: {e}")
+            logger.error(f"Erro ao obter chaves para {pending_keys}: {e}")
             
             if not future.done():
-                error_result = ([], {recipient_jid: e})
+                error_result = ([], {pending_keys: e})
                 future.set_result(error_result)
             
-            return ([], {recipient_jid: e})
+            return ([], {pending_keys: e})
     
     async def _send_to_group(
         self,
@@ -3082,86 +3049,76 @@ class WhatsAppClient:
         
         logger.debug(f"_send_to_group: group_jid={group_jid}, retry_receipt_entity={retry_receipt_entity is not None}")
         
-        # Verifica se sender key record existe
-        sender_key_record = await self.axolotl_manager.load_senderkey(group_jid)
+        # # Verifica se sender key record existe
+        # sender_key_record = await self.axolotl_manager.load_senderkey(group_jid)
         
-        # Verifica se está vazio (usa isEmpty() do SenderKeyRecord)
-        try:
-            is_empty = sender_key_record.isEmpty() if sender_key_record else True
-        except (AttributeError, TypeError):
-            # Se não tem método isEmpty ou é None, considera vazio
-            is_empty = True
+        # # Verifica se está vazio (usa isEmpty() do SenderKeyRecord)
+        # try:
+        #     is_empty = sender_key_record.isEmpty() if sender_key_record else True
+        # except (AttributeError, TypeError):
+        #     # Se não tem método isEmpty ou é None, considera vazio
+        #     is_empty = True
+
+        # logger.debug(f"is_empty={is_empty}")
+        # logger.debug(f"sender_key_record={sender_key_record}")
         
-        if is_empty:
-            # Sender key não existe, precisa criar e distribuir
-            logger.debug(f"Sender key não encontrado para grupo {group_jid}, criando e distribuindo...")
-            
-            # Casos especiais: status@broadcast e @broadcast
-            if group_jid == "status@broadcast":
-                # Para status@broadcast, obtém todos os contatos conhecidos
-                logger.debug("Tentando obter contatos para status@broadcast")
-                try:
-                    if hasattr(self.axolotl_manager, '_store') and hasattr(self.axolotl_manager._store, 'getAllContact'):
-                        jids = await self.axolotl_manager._store.getAllContact() if asyncio.iscoroutinefunction(self.axolotl_manager._store.getAllContact) else self.axolotl_manager._store.getAllContact()
-                        logger.info(f"Enviando status para {len(jids)} contatos via status@broadcast")
-                        await self.ensure_sessions_and_send_to_group(message_node, jids)
-                        return
-                    else:
-                        logger.warning("Store não tem método getAllContact, enviando sem destinatários específicos")
-                        await self.ensure_sessions_and_send_to_group(message_node, [])
-                        return
-                except Exception as e:
-                    logger.error(f"Erro ao obter contatos para status@broadcast: {e}")
+        # Sender key não existe, precisa criar e distribuir
+        logger.debug(f"Sender key não encontrado para grupo {group_jid}, criando e distribuindo...")
+        
+        # Casos especiais: status@broadcast e @broadcast
+        if group_jid == "status@broadcast":
+            # Para status@broadcast, obtém todos os contatos conhecidos
+            logger.debug("Tentando obter contatos para status@broadcast")
+            try:
+                if hasattr(self.axolotl_manager, '_store') and hasattr(self.axolotl_manager._store, 'getAllContact'):
+                    jids = await self.axolotl_manager._store.getAllContact() if asyncio.iscoroutinefunction(self.axolotl_manager._store.getAllContact) else self.axolotl_manager._store.getAllContact()
+                    logger.info(f"Enviando status para {len(jids)} contatos via status@broadcast")
+                    await self.ensure_sessions_and_send_to_group(message_node, jids)
+                    return
+                else:
+                    logger.warning("Store não tem método getAllContact, enviando sem destinatários específicos")
                     await self.ensure_sessions_and_send_to_group(message_node, [])
                     return
-            
-            elif group_jid.endswith("@broadcast"):
-                # Para @broadcast, obtém participantes por BCID
-                logger.debug(f"Obtendo participantes para broadcast: {group_jid}")
-                try:
-                    if hasattr(self.axolotl_manager, '_store') and hasattr(self.axolotl_manager._store, 'findParticipantsByBcid'):
-                        jids = await self.axolotl_manager._store.findParticipantsByBcid(group_jid) if asyncio.iscoroutinefunction(self.axolotl_manager._store.findParticipantsByBcid) else self.axolotl_manager._store.findParticipantsByBcid(group_jid)
-                        logger.debug(f"Participantes obtidos para broadcast: {len(jids)}")
-                        await self.ensure_sessions_and_send_to_group(message_node, jids)
-                        return
-                    else:
-                        logger.warning("Store não tem método findParticipantsByBcid, enviando sem participantes")
-                        await self.ensure_sessions_and_send_to_group(message_node, [])
-                        return
-                except Exception as e:
-                    logger.error(f"Erro ao obter participantes para broadcast: {e}")
+            except Exception as e:
+                logger.error(f"Erro ao obter contatos para status@broadcast: {e}")
+                await self.ensure_sessions_and_send_to_group(message_node, [])
+                return
+        
+        elif group_jid.endswith("@broadcast"):
+            # Para @broadcast, obtém participantes por BCID
+            logger.debug(f"Obtendo participantes para broadcast: {group_jid}")
+            try:
+                if hasattr(self.axolotl_manager, '_store') and hasattr(self.axolotl_manager._store, 'findParticipantsByBcid'):
+                    jids = await self.axolotl_manager._store.findParticipantsByBcid(group_jid) if asyncio.iscoroutinefunction(self.axolotl_manager._store.findParticipantsByBcid) else self.axolotl_manager._store.findParticipantsByBcid(group_jid)
+                    logger.debug(f"Participantes obtidos para broadcast: {len(jids)}")
+                    await self.ensure_sessions_and_send_to_group(message_node, jids)
+                    return
+                else:
+                    logger.warning("Store não tem método findParticipantsByBcid, enviando sem participantes")
                     await self.ensure_sessions_and_send_to_group(message_node, [])
                     return
-            
-            # Grupo normal (@g.us)
-            # Cria sender key
-            await self.axolotl_manager.group_create_skmsg(group_jid)
-            
-            # Obtém participantes do grupo
-            if self.group_handler:
-                try:
-                    participants = await self.group_handler.get_group_participants(group_jid, own_jid=own_jid)
-                    logger.debug(f"Participantes obtidos: {len(participants)}")
-                    
-                    # Garante sessões e envia
-                    await self.ensure_sessions_and_send_to_group(message_node, participants)
-                    return
-                except Exception as e:
-                    logger.error(f"Erro ao obter participantes do grupo via group_handler: {e}")
-                    # Fallback: tenta IQ request direto
-                    logger.debug("Tentando obter participantes via IQ request como fallback...")
-                    try:
-                        participants = await self._get_group_participants_via_iq(group_jid, own_jid)
-                        logger.debug(f"Participantes obtidos via IQ: {len(participants)}")
-                        await self.ensure_sessions_and_send_to_group(message_node, participants)
-                        return
-                    except Exception as iq_error:
-                        logger.error(f"Erro ao obter participantes via IQ request: {iq_error}")
-                        # Fallback final: envia sem distribution
-                    await self._send_to_group_with_sessions(message_node, [], retry_count=0)
-                    return
-            else:
-                logger.warning("GroupHandler não disponível, tentando IQ request direto...")
+            except Exception as e:
+                logger.error(f"Erro ao obter participantes para broadcast: {e}")
+                await self.ensure_sessions_and_send_to_group(message_node, [])
+                return
+        
+        # Grupo normal (@g.us)
+        # Cria sender key
+        await self.axolotl_manager.group_create_skmsg(group_jid)
+        
+        # Obtém participantes do grupo
+        if self.group_handler:
+            try:
+                participants = await self.group_handler.get_group_participants(group_jid, own_jid=own_jid)
+                logger.debug(f"Participantes obtidos: {len(participants)}")
+                
+                # Garante sessões e envia
+                await self.ensure_sessions_and_send_to_group(message_node, participants)
+                return
+            except Exception as e:
+                logger.error(f"Erro ao obter participantes do grupo via group_handler: {e}")
+                # Fallback: tenta IQ request direto
+                logger.debug("Tentando obter participantes via IQ request como fallback...")
                 try:
                     participants = await self._get_group_participants_via_iq(group_jid, own_jid)
                     logger.debug(f"Participantes obtidos via IQ: {len(participants)}")
@@ -3173,44 +3130,19 @@ class WhatsAppClient:
                 await self._send_to_group_with_sessions(message_node, [], retry_count=0)
                 return
         else:
-            # Sender key existe, verifica retry
-            logger.debug("Sender key encontrado, verificando retry...")
-            
-            retry_count = 0
-            jids_need_sender_key = []
-            
-            if retry_receipt_entity is not None:
-                # Extrai informações do retry
-                # Tenta usar métodos se disponíveis (compatibilidade com objetos)
-                if hasattr(retry_receipt_entity, 'getRetryCount'):
-                    try:
-                        retry_count = retry_receipt_entity.getRetryCount()
-                    except Exception:
-                        retry_count = 0
-                else:
-                    retry_count_attr = retry_receipt_entity.get_attribute("count")
-                    if retry_count_attr:
-                        try:
-                            retry_count = int(retry_count_attr)
-                        except (ValueError, TypeError):
-                            retry_count = 0
-                    
-                    if hasattr(retry_receipt_entity, 'getRetryJid'):
-                        try:
-                            retry_jid = retry_receipt_entity.getRetryJid()
-                            if retry_jid:
-                                jids_need_sender_key = [retry_jid]
-                                logger.debug(f"Retry detectado (via método): count={retry_count}, jid={retry_jid}")
-                        except Exception:
-                            pass
-                    else:
-                        retry_jid_attr = retry_receipt_entity.get_attribute("retry_jid")
-                    if retry_jid_attr:
-                        jids_need_sender_key = [retry_jid_attr]
-                        logger.debug(f"Retry detectado (via atributo): count={retry_count}, jid={retry_jid_attr}")
-                
-            # Envia com sender key distribution se necessário
-            await self._send_to_group_with_sessions(message_node, jids_need_sender_key, retry_count=retry_count)
+            logger.warning("GroupHandler não disponível, tentando IQ request direto...")
+            try:
+                participants = await self._get_group_participants_via_iq(group_jid, own_jid)
+                logger.debug(f"Participantes obtidos via IQ: {len(participants)}")
+                await self.ensure_sessions_and_send_to_group(message_node, participants)
+                return
+            except Exception as iq_error:
+                logger.error(f"Erro ao obter participantes via IQ request: {iq_error}")
+                # Fallback final: envia sem distribution
+            await self._send_to_group_with_sessions(message_node, [], retry_count=0)
+            return
+       
+        # await self._send_to_group_with_sessions(message_node, jids_need_sender_key, retry_count=retry_count)
     
     async def _get_group_participants_via_iq(
         self,
@@ -3487,15 +3419,15 @@ class WhatsAppClient:
             standard_jids.append(standard_jid)
         
         # Separa JIDs com sessão dos sem sessão
-        all_jids = []
-        jids_no_session = []
         
-        for jid in standard_jids:
-            recipient_id = jid.split('@')[0]
-            if await self.axolotl_manager.session_exists(recipient_id):
-                all_jids.append(jid)
-            else:
-                jids_no_session.append(jid)
+
+        jids_maps = await self.axolotl_manager.session_exists_bulk(standard_jids)
+        all_jids = [f"{recipient_id}@{YowConstants.WHATSAPP_SERVER}" for recipient_id, deviceid in jids_maps]
+
+        jids_no_session = [str(jid) for jid in standard_jids if str(jid) not in all_jids]
+
+        logger.debug(f"jids_maps: {jids_maps}")
+        logger.debug(f"jids_no_session: {jids_no_session}")
         
         async def on_get_keys_success(success_jids: List[str], errors: Dict[str, Exception]):
             """Callback quando chaves são obtidas"""
@@ -3513,6 +3445,8 @@ class WhatsAppClient:
         # Se há JIDs sem sessão, obtém chaves primeiro
         if len(jids_no_session) > 0:
             # Obtém chaves para JIDs sem sessão
+
+            logger.debug(f"Obtendo chaves para JIDs sem sessão: {jids_no_session}")
             success_jids, error_jids = await self._get_keys_for_jids(jids_no_session)
             await on_get_keys_success(success_jids, error_jids)
         else:

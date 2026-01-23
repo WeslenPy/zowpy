@@ -151,6 +151,9 @@ class SqlSessionStore(BaseStore):
     async def containsSession(self, session: AsyncSession, account_id: int, recipient: int, deviceId: int) -> bool:
         return await SessionKey.contains_session(session, account_id, recipient, deviceId)
 
+    async def containsSessionBulk(self, session: AsyncSession, account_id: int, usernames: list[tuple[int,int]]) -> List[bool]:
+        return await SessionKey.contains_session_bulk(session, account_id, usernames)
+
     async def deleteSession(self, session: AsyncSession, account_id: int, recipient: int, deviceId: int) -> None:
         return await SessionKey.delete_session(session, account_id, recipient, deviceId)
 
@@ -616,9 +619,14 @@ class SqlAxolotlStore(AxolotlStore):
             logger.debug(f"SqlAxolotlStore.storeSession: successfully stored session for account={account}, deviceId={deviceId}")
 
     async def containsSession(self, account, deviceId):
+        logger.debug(f"SqlAxolotlStore.containsSession: account={account}, deviceId={deviceId}")
         async with self._get_session() as db:
-
             return await self.sessionStore.containsSession(db, self._account_id, account, deviceId)
+
+
+    async def containsSessionBulk(self, usernames):
+        async with self._get_session() as db:
+            return await self.sessionStore.containsSessionBulk(db, self._account_id, usernames)
 
     async def deleteSession(self, account, deviceId):
         async with self._get_session() as db:

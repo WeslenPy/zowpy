@@ -319,6 +319,25 @@ class AxolotlManager(object):
             else:
                 raise exceptions.UntrustedIdentityException(ex.getName(), ex.getIdentityKey())
 
+
+    async def session_exists_bulk(self, usernames):
+        """
+        :param usernames:
+        :type usernames: list
+        :return:
+        :rtype:
+        """
+        logger.debug(f"session_exists_bulk(usernames={usernames})")
+
+
+        usernames_maps = []
+        for username in usernames:
+            jid = str(username).split('@')[0]
+            recipient,a,deviceid = WATools.jidDecode(str(jid))
+            usernames_maps.append((recipient,deviceid))
+
+        return await self._store.containsSessionBulk(usernames_maps)
+
     async def session_exists(self, username):
         """
         :param username:
@@ -328,6 +347,8 @@ class AxolotlManager(object):
         """
         logger.debug(f"session_exists({username})?")
         recipient,a,deviceid = WATools.jidDecode(username)
+
+        logger.debug(f"session_exists(recipient={recipient}, deviceid={deviceid})")
         return await self._store.containsSession(recipient, deviceid)
     
     async def get_all_session_usernames(self,username):

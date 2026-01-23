@@ -61,9 +61,9 @@ class ReceiptProcessor(BaseProcessor):
         logger.debug(f"Recebido receipt: {node}")
         logger.debug(f"Processando receipt: id={receipt_id}, type={receipt_type}, from={from_jid}")
 
-        if receipt_type == "retry":
-            await self._process_retry_receipt(node)
-            return None
+        # if receipt_type == "retry":
+        #     await self._process_retry_receipt(node)
+        #     return None
 
         items = self._parse_items(node)
         status = "read" if receipt_type == "read" else "received"

@@ -55,6 +55,11 @@ class NotificationProcessor(BaseProcessor):
         from_jid = node.get_attribute("from")
         participant = node.get_attribute("participant")
 
+
+        await self._send_ack_for_notification(
+            notification_id, notification_type or "", from_jid, participant
+        )
+
         logger.debug(
             "Processando notification: id=%s, type=%s, from=%s",
             notification_id, notification_type, from_jid
@@ -108,9 +113,7 @@ class NotificationProcessor(BaseProcessor):
             "timestamp": node.get_attribute("t"),
         }
         await self._events.emit("notification", notification_data)
-        await self._send_ack_for_notification(
-            notification_id, notification_type or "", from_jid, participant
-        )
+    
         return notification_data
 
     async def _send_ack_for_notification(

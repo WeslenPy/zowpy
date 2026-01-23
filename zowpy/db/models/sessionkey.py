@@ -20,6 +20,7 @@ from sqlalchemy import (
     delete,
     select,
     exists,
+    tuple_,
 )
 from sqlalchemy.orm import relationship
 from zowpy.db.common.model import BaseModel
@@ -101,6 +102,39 @@ class SessionKey(Model,BaseModel):
             logger.error(f"Error storing session: {e}")
             await session.rollback()
             raise
+
+
+    @classmethod
+    async def contains_session_bulk(cls, session: AsyncSession, account_id: int, usernames: list[tuple[int,int]]) -> list[tuple[int,int]]:
+        try:
+            stmt = select(
+                    cls.account_id,
+                    cls.recipient_id,
+                    cls.device_id,
+                ).where(
+                    cls.account_id == account_id,
+                ).where(
+                    tuple_(
+                        cls.recipient_id,
+                        cls.device_id,
+                    ).in_(usernames)
+                )
+
+            result = await session.execute(stmt)
+            rows = result.all()
+            logger.debug(f"rows: {rows}")
+
+            return {
+                (row.recipient_id, row.device_id)
+                for row in rows
+            }
+
+
+        except Exception as e:
+            logger.error(f"Error checking session existence bulk: {e}")
+            return []
+
+
 
     @classmethod
     async def contains_session(cls, session: AsyncSession, account_id: int, recipient_id: int, device_id: int):
