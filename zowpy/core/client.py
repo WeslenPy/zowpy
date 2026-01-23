@@ -1389,7 +1389,7 @@ class WhatsAppClient:
         to = self._normalize_and_fix_group_jid(to)
         
         if self._is_group_jid(to):
-            return await self.send_to_group(to, text, message_id)
+            return await self._send_to_group(to, text, message_id)
 
         # 3. Normaliza JID
         from ..utils.jid import normalize

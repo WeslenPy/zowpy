@@ -86,8 +86,8 @@ async def main():
         print("Cliente online - Mantendo conexão ativa indefinidamente...")
         
         # Envia mensagem inicial (opcional)
-        to = "559885700260"
-        # to = "120363425739599511@g.us"
+        # to = "559885700260"
+        to = "120363425739599511@g.us"
         text = "Hello! Esta é uma mensagem de teste do ZowPy."
         print(f" Enviando mensagem para {to}...")
         # contacts = await client.integrity_check(["559885700260"])
