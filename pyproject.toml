@@ -72,6 +72,7 @@ dev = [
     "proto/*",
     "*.proto",
     "*.argo",
+    "*.zip",
     
     # Arquivos de tipos MIME - usado por MimeTools.getMIME()
     "*.types",
