@@ -4580,10 +4580,10 @@ class WhatsAppClient:
     async def get_status_account(self) -> bool:
         """Obtém status da conta."""
         return {
-            "running": self.running,
-            "connected": self.connected,
-            "authenticated": self.authenticated,
-            "proxy": self.proxy.to_dict(),
+            "running": self._running,
+            "connected": self._connected,
+            "authenticated": self._authenticated,
+            "proxy": self.proxy.to_dict() if self.proxy else None,
         }
 
 
