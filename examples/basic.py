@@ -17,25 +17,6 @@ logger.add("logs/basic.log", level="DEBUG")
 
 
 async def main():
-    """
-    Exemplo básico usando o ZowPy Client - Mantendo online indefinidamente.
-    
-    O cliente implementa um fluxo completo baseado no zowsuplib:
-    1. Conecta TCP
-    2. Envia header WA\x06\x03
-    3. Carrega prekeys
-    4. Inicia bridge TCP ↔ Stream
-    5. Executa handshake (Noise Protocol)
-    6. Autentica (WAUTH-2)
-    7. Envia prekeys
-    8. Envia presence "available"
-    9. Cliente pronto!
-    
-    Mantém a conta online indefinidamente:
-    - Keepalive automático a cada 20 segundos
-    - Reconexão automática em caso de desconexão
-    - Tratamento de sinais para desconexão limpa (Ctrl+C)
-    """
     
     # Cria cliente
     account_id = "555555555555"
@@ -47,7 +28,7 @@ async def main():
         """Handler de mensagens recebidas"""
         await client.mark_as_read(message.get('id'), message.get('from'), message.get('participant'))
         logger.info(f"Mensagem recebida: {message}")
-        print(f"📨 Mensagem recebida de {message.get('from', 'unknown')}: {message.get('text', '')}")
+        print(f"Mensagem recebida de {message.get('from', 'unknown')}: {message.get('text', '')}")
     
     @client.on_connected
     async def handle_connected(data=None):
@@ -75,7 +56,7 @@ async def main():
         text = "Hello! Esta é uma mensagem de teste do ZowPy."
         print(f" Enviando mensagem para {to}...")
 
-        print(f"\n📤 Exemplo: Enviando mídia usando send_media_direct...")
+        print(f"\n Exemplo: Enviando mídia usando send_media_direct...")
         await client.send_text(to, text)
 
 
@@ -86,14 +67,14 @@ async def main():
             await asyncio.sleep(1)
         
 
-        print("\n🔄 Desconectando...")
+        print("\nDesconectando...")
     
     except KeyboardInterrupt:
         await client.disconnect()
-        print("\n🛑 Interrupção recebida, desconectando...")
+        print("\n Interrupção recebida, desconectando...")
     
     except Exception as e:
-        print(f"❌ Erro: {e}")
+        print(f"Erro: {e}")
         logger.exception("Erro no exemplo básico")
     
  
