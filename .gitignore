@@ -20,6 +20,10 @@ wheels/
 .installed.cfg
 *.egg
 
+basic.py
+advanced.py
+
+
 migrations/
 .venv/
 
