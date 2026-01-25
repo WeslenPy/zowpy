@@ -27,17 +27,17 @@ except ImportError:
     logger.warning("ArgoMessageDecoder não disponível. Respostas ARGO não serão decodificadas.")
 
 
+from zargo.utils.jid import Jid
+
+
 class BytesEncoder(json.JSONEncoder):
     """JSON encoder para bytes."""
     
     def default(self, obj):
         if isinstance(obj, bytes):
             if len(obj) > 0 and (obj[0] == 250 or obj[0] == 247):
-                # JID encoding - try to decode
                 try:
-                    # For zowpy, we'll just return base64 for now
-                    # If zargo is available, we could use Jid.readJid
-                    return base64.b64encode(obj).decode('utf-8')
+                    return Jid.readJid(obj)
                 except Exception:
                     return base64.b64encode(obj).decode('utf-8')
             else:
