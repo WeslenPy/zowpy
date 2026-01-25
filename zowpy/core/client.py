@@ -3011,7 +3011,7 @@ class WhatsAppClient:
                         del self._pending_keys_requests[pending_keys]
                         logger.debug(f"PKMSG timeout para {pending_keys}, removido da fila")
             
-            logger.error(f"Timeout ao obter chaves para {recipient_jid}")
+            logger.error(f"Timeout ao obter chaves para {pending_keys}")
             
             if not future.done():
                 error_result = ([], {pending_keys: Exception("Timeout ao obter chaves")})
