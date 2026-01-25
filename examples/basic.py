@@ -38,7 +38,7 @@ async def main():
     """
     
     # Cria cliente
-    account_id = "555555555555"
+    account_id = "201208868278"
     client = ZowPyClient(account_id)
     
     # Eventos
@@ -71,19 +71,17 @@ async def main():
         print("Cliente online - Mantendo conexão ativa indefinidamente...")
         
         # Envia mensagem inicial (opcional)
-        to = "555555555555"
+        to = "120363425739599511@g.us"
         text = "Hello! Esta é uma mensagem de teste do ZowPy."
         print(f" Enviando mensagem para {to}...")
 
         print(f"\n📤 Exemplo: Enviando mídia usando send_media_direct...")
-        await client.send_text(to, text)
 
-
-
-        await asyncio.sleep(10)
 
         while True:
-            await asyncio.sleep(1)
+            await client.send_text(to, text)
+            await asyncio.sleep(300)
+            print(f"Enviando mensagem para {to}...")
         
 
         print("\n🔄 Desconectando...")

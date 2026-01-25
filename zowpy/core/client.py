@@ -598,10 +598,12 @@ class WhatsAppClient:
         async def disconnect_handler(*args, **kwargs):
             await self.disconnect()
 
+        async def reconnect_handler(*args, **kwargs):
+            await self.reconnect()
 
         self.events.on("stream:error", handle_stream_error)
         self.events.on("disconnected", disconnect_handler)
-
+        self.events.on("reconnect", reconnect_handler)
 
         self._node_router.register(StreamErrorProcessor(self.events))
         self._node_router.register(AckProcessor(self.events))

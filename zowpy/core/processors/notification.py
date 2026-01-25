@@ -38,12 +38,11 @@ class NotificationProcessor(BaseProcessor):
 
     async def can_handle(self, node: ProtocolNode) -> bool:
         """False para tipos pass (contacts, subject, w:gp2, devices)."""
-        if node.tag != "notification":
-            return False
-        ntype = node.get_attribute("type")
-        if ntype in PASS_TYPES:
-            return False
-        return True
+        if node.tag == "notification":
+            return True
+        # ntype = node.get_attribute("type")
+        # if ntype in PASS_TYPES:
+        #     return False
 
     async def process(
         self,
@@ -57,7 +56,7 @@ class NotificationProcessor(BaseProcessor):
 
 
         await self._send_ack_for_notification(
-            notification_id, notification_type or "", from_jid, participant
+            notification_id, notification_type or "privacy_token", from_jid, participant
         )
 
         logger.debug(
@@ -98,9 +97,7 @@ class NotificationProcessor(BaseProcessor):
             if token_data:
                 notification_data["token_data"] = token_data
             await self._events.emit("notification", notification_data)
-            await self._send_ack_for_notification(
-                notification_id, notification_type or "privacy_token", from_jid, participant
-            )
+         
             return notification_data
 
         # Demais tipos: mex, account_sync, link_code_companion_reg, registration,

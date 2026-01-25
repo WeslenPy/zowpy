@@ -176,10 +176,25 @@ class TCPStreamBridge:
                     break
                 except ConnectionError as e:
                     logger.error(f"Bridge: erro de conexão no loop TCP→Stream: {e}")
+                    await self._stream.cancel()
+                    if self._events:
+                        try:
+                            await self._events.emit("reconnect", {"reason": "EOF", "source": "bridge"})
+                        except Exception as e:
+                            logger.warning(f"Erro ao emitir evento reconnect: {e}")
+
                     break
+
+                
                 except Exception as e:
                     logger.error(f"Bridge: erro no loop TCP→Stream: {e}", exc_info=True)
-                    await asyncio.sleep(0.1)  # Pequeno delay antes de tentar novamente
+                    await self._stream.cancel()
+                    if self._events:
+                        try:
+                            await self._events.emit("reconnect", {"reason": "EOF", "source": "bridge"})
+                        except Exception as e:
+                            logger.warning(f"Erro ao emitir evento reconnect: {e}")
+                    break
         
         except asyncio.CancelledError:
             logger.debug("Bridge: loop TCP→Stream cancelado")
