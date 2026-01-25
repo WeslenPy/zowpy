@@ -80,7 +80,7 @@ class GroupHandler:
                 # Procura node <group> com atributo jid
                 group_node = node.get_child("group")
                 if group_node:
-                    group_jid = group_node.get_attribute("jid")
+                    group_jid = group_node.get_attribute("id")
                     if group_jid:
                         logger.info(f"Grupo criado com sucesso: {group_jid}")
                         future.set_result(group_jid)

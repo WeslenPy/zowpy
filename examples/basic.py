@@ -71,20 +71,28 @@ async def main():
         print("Cliente online - Mantendo conexão ativa indefinidamente...")
         
         # Envia mensagem inicial (opcional)
-        to = "120363425739599511@g.us"
-        text = "Hello! Esta é uma mensagem de teste do ZowPy."
+        to = "120363403018982149@g.us"
         print(f" Enviando mensagem para {to}...")
 
         print(f"\n📤 Exemplo: Enviando mídia usando send_media_direct...")
 
 
-        while True:
-            await client.send_text(to, text)
-            await asyncio.sleep(300)
-            print(f"Enviando mensagem para {to}...")
+        text = "novo grupo teste"
+        
+        result=  await client.get_group_invite_code(to)
+        # result= await client.get_group_info(to)
+        
+        # result = await client.create_group(text, [])
+        print(f"Grupo criado com sucesso: {result}")
+
+        # while True:
+        #     await client.send_text(to, text)
+        #     await asyncio.sleep(300)
+        #     print(f"Enviando mensagem para {to}...")
         
 
         print("\n🔄 Desconectando...")
+        await client.disconnect()
     
     except KeyboardInterrupt:
         await client.disconnect()

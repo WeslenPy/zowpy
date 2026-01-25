@@ -66,7 +66,7 @@ class GroupBuilder:
             creator = creator.split('@')[0]
         
         # Cria key único para o grupo
-        key = f"{creator or 'unknown'}-{uuid.uuid4().hex}@temp"
+        key = ProtocolNode.generate_key()
         
         # Cria node base
         node = IQBuilder.build_base_iq(

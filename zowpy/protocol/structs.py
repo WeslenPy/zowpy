@@ -12,12 +12,17 @@ from typing import Optional, Dict, List, Any, Union
 from loguru import logger
 
 
+
+
+
 @dataclass
 class ProtocolNode:
     """
     Node de protocolo simples e moderno.
     Substitui ProtocolTreeNode com estrutura mais limpa.
     """
+    WEB_MESSAGE_ID_PREFIX = "3EB0"
+
     _STR_MAX_LEN_DATA = 500
     _STR_INDENT = '  '
     __ID_GEN = 0
@@ -64,6 +69,13 @@ class ProtocolNode:
         except Exception as e:
             logger.error(f"Error in ProtocolNode.__str__: {e}")
             return f"<{self.tag} />"
+
+
+    @classmethod
+    def generate_key(cls) -> str:
+        import secrets
+        return secrets.token_hex(8).upper()
+
 
     @staticmethod
     def _generateId(short: bool = False, type: int = ID_TYPE_ANDROID) -> str:
