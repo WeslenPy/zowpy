@@ -83,6 +83,7 @@ class GroupHandler:
                     group_jid = group_node.get_attribute("id")
                     if group_jid:
                         logger.info(f"Grupo criado com sucesso: {group_jid}")
+                        group_jid = group_jid if "@" in group_jid else f"{group_jid}@g.us"
                         future.set_result(group_jid)
                         return
                 
