@@ -633,7 +633,9 @@ class WhatsAppClient:
         self._node_router.register(notification_processor)
         self._notification_processor = notification_processor  # Guarda referência para atualizar depois
         
-        self._node_router.register(GroupProcessor(self.events))
+        group_processor = GroupProcessor(self.events)
+        self._node_router.register(group_processor)
+        self._group_processor = group_processor
         
         # Inicializa handlers públicos (serão configurados após conexão)
         # Os handlers precisam de send_iq_fn e send_presence_fn que só existem após conexão
@@ -1184,6 +1186,15 @@ class WhatsAppClient:
             self._notification_processor._send_ack = _send_ack_notification
             self._notification_processor._flush_prekeys = self._check_and_flush_prekeys
             self._notification_processor._get_keys = self._get_keys_for_recipient
+
+        # Atualiza GroupProcessor com send_ack
+        if self._group_processor:
+            async def _send_ack_group(
+                nid: str, _cls: str, ntype: str, from_jid: str, participant: Optional[str] = None
+            ) -> None:
+                await self._send_ack(nid, _cls, ntype, from_jid, participant=participant)
+
+            self._group_processor._send_ack = _send_ack_group
 
         # IQProcessor: got_pong para pongs w:p não registrados (opcional)
         if self._iq_processor:

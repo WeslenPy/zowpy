@@ -4,7 +4,7 @@ Group Processor - Processa notificações de grupo.
 Processa notificações de grupo e emite eventos.
 """
 
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Callable
 from loguru import logger
 
 from ...protocol.structs import ProtocolNode
@@ -22,14 +22,16 @@ class GroupProcessor(BaseProcessor):
     - etc.
     """
     
-    def __init__(self, event_emitter=None):
+    def __init__(self, event_emitter=None, send_ack_fn: Optional[Callable] = None):
         """
         Inicializa processor.
         
         Args:
             event_emitter: EventEmitter para emitir eventos (opcional)
+            send_ack_fn: Função para enviar ACK (opcional)
         """
         self._event_emitter = event_emitter
+        self._send_ack = send_ack_fn
 
     def get_priority(self) -> int:
         """Maior que NotificationProcessor (5) para processar w:gp2 antes."""
@@ -68,6 +70,16 @@ class GroupProcessor(BaseProcessor):
             Dict com informações da notificação ou None
         """
         try:
+            notification_id = node.get_attribute("id")
+            notification_type_attr = node.get_attribute("type")
+            from_jid_attr = node.get_attribute("from")
+            participant_attr = node.get_attribute("participant")
+
+            # Envia ACK para a notificação, tal qual NotificationProcessor
+            await self._send_ack_for_notification(
+                notification_id, notification_type_attr, from_jid_attr, participant_attr
+            )
+
             # Obtém node filho (subject, create, remove, add)
             child = node.get_child(0)
             if not child:
@@ -149,6 +161,28 @@ class GroupProcessor(BaseProcessor):
             logger.error(f"Erro ao processar notificação de grupo: {e}", exc_info=True)
             return None
     
+    async def _send_ack_for_notification(
+        self,
+        notification_id: str,
+        notification_type: str,
+        from_jid: str,
+        participant: Optional[str] = None
+    ) -> None:
+        """Envia ACK para notification processada (id, notification, type, to, participant)."""
+        if not self._send_ack or not from_jid or not notification_id:
+            return
+        ntype = notification_type or ""
+        try:
+            await self._send_ack(
+                notification_id,
+                "notification",
+                ntype,
+                from_jid,
+                participant=participant
+            )
+        except Exception as e:
+            logger.error(f"Erro ao enviar ACK de notificação de grupo: {e}")
+
     async def _emit_event(self, event_name: str, data: Dict[str, Any]) -> None:
         """
         Emite evento se event_emitter estiver disponível.
