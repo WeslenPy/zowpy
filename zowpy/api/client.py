@@ -9,6 +9,7 @@ import asyncio
 from typing import Optional, Callable, Dict, Any, Union
 from loguru import logger
 
+from zowpy.config.network import ProxyConfig
 from zowpy.db.config.engine import AsyncSessionMaker
 
 from ..core.client import WhatsAppClient

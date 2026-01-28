@@ -22,7 +22,7 @@ from zowpy.utils.tools import Jid, WATools
 from zowpy.config.bot_env import BotEnv
 from zowpy.config.network import NetworkConfig, ProxyConfig
 
-from .connection import AsyncConnection, ConnectionError
+from .connection import AsyncConnection
 from .bridge import TCPStreamBridge
 from .store import AsyncStateStore
 from .events import AsyncEventEmitter
