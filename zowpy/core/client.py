@@ -4641,7 +4641,7 @@ class WhatsAppClient:
                         port=account.proxy_port,
                         username=account.proxy_username,
                         password=account.proxy_password,
-                        proxy_type=getattr(account, 'proxy_type', None) or "socks5"
+                        proxy_type=account.proxy_type or "http"
                     )
                     
                     # Configura na instância
@@ -4676,9 +4676,7 @@ class WhatsAppClient:
                     account.proxy_port = proxy_config.port
                     account.proxy_username = proxy_config.username
                     account.proxy_password = proxy_config.password
-                    # Note: proxy_type não está no modelo Account ainda, mas não quebra
-                    if hasattr(account, 'proxy_type'):
-                        account.proxy_type = proxy_config.proxy_type
+                    account.proxy_type = proxy_config.proxy_type
                     
                     await session.commit()
                     logger.info(f" PROXY salvo no banco de dados: {proxy_config.proxy_type.upper()} {proxy_config.host}:{proxy_config.port} (conta: {self.account_id})")
@@ -4707,8 +4705,7 @@ class WhatsAppClient:
                     account.proxy_port = None
                     account.proxy_username = None
                     account.proxy_password = None
-                    if hasattr(account, 'proxy_type'):
-                        account.proxy_type = None
+                    account.proxy_type = None
                     
                     await session.commit()
                     logger.info(f"🌐 PROXY removido do banco de dados (conta: {self.account_id})")

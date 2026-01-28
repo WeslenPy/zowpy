@@ -71,7 +71,7 @@ async def main():
         print("Cliente online - Mantendo conexão ativa indefinidamente...")
         
         # Envia mensagem inicial (opcional)
-        to = "559885700260"
+        to = "120363405885727330"
         print(f" Enviando mensagem para {to}...")
 
         print(f"\n📤 Exemplo: Enviando mídia usando send_media_direct...")
@@ -79,7 +79,7 @@ async def main():
 
         text = "novo grupo teste"
         
-        result=  await client.integrity_check([to])
+        result=  await client.get_group_invite_code(to)
         # result= await client.get_group_info(to)
         
         # result = await client.create_group(text, [])

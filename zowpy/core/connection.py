@@ -122,39 +122,87 @@ class AsyncConnection:
         try:
             # Tenta usar socksio (assíncrono) se disponível
             try:
-                import socksio
+                import socksio.socks5 as socks5
                 
                 proxy_host = self.proxy.get("host")
                 proxy_port = self.proxy.get("port")
                 proxy_username = self.proxy.get("username")
                 proxy_password = self.proxy.get("password")
                 
-                # Cria cliente SOCKS5 assíncrono
-                socks_client = socksio.SOCKS5(
-                    proxy_host,
-                    proxy_port,
-                    username=proxy_username if proxy_username else None,
-                    password=proxy_password if proxy_password else None,
-                )
-                
-                # Conecta via proxy de forma assíncrona
-                sock = await asyncio.wait_for(
-                    socks_client.connect((self.host, self.port)),
-                    timeout=timeout
-                )
-                
-                # Cria StreamReader/Writer a partir do socket
+                # 1. Conecta ao servidor de proxy via TCP
                 reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection(sock=sock),
+                    asyncio.open_connection(proxy_host, proxy_port),
                     timeout=timeout
                 )
                 
-                logger.info(f"Conectado via proxy SOCKS5 (socksio) {proxy_host}:{proxy_port}")
-                return reader, writer
+                try:
+                    # 2. Inicia handshake SOCKS5
+                    conn = socks5.SOCKS5Connection()
+                    
+                    # Negocia métodos de autenticação
+                    # 0x00 = NO AUTH, 0x02 = USERNAME/PASSWORD
+                    methods = [0x00]
+                    if proxy_username and proxy_password:
+                        methods.append(0x02)
+                    
+                    conn.send(socks5.SOCKS5AuthMethodsRequest(methods=methods))
+                    writer.write(conn.data_to_send())
+                    await writer.drain()
+                    
+                    # Recebe resposta do método de autenticação
+                    data = await asyncio.wait_for(reader.read(1024), timeout=timeout)
+                    if not data:
+                        raise ConnectionError("Proxy fechou a conexão durante handshake SOCKS5")
+                    
+                    auth_reply = conn.receive_data(data)
+                    
+                    # 3. Trata autenticação de usuário/senha se necessário
+                    if auth_reply.method == 0x02:
+                        if not proxy_username or not proxy_password:
+                            raise ConnectionError("Proxy requer autenticação mas credenciais não foram fornecidas")
+                            
+                        conn.send(socks5.SOCKS5UsernamePasswordRequest(
+                            username=proxy_username.encode(),
+                            password=proxy_password.encode()
+                        ))
+                        writer.write(conn.data_to_send())
+                        await writer.drain()
+                        
+                        data = await asyncio.wait_for(reader.read(1024), timeout=timeout)
+                        if not data:
+                            raise ConnectionError("Proxy fechou a conexão durante autenticação SOCKS5")
+                        
+                        conn.receive_data(data) # Verifica SOCKS5UsernamePasswordReply
+                        
+                    # 4. Envia comando CONNECT para o destino final (WhatsApp)
+                    conn.send(socks5.SOCKS5CommandRequest.from_address(
+                        socks5.SOCKS5Command.CONNECT,
+                        (self.host, self.port)
+                    ))
+                    writer.write(conn.data_to_send())
+                    await writer.drain()
+                    
+                    # Recebe confirmação do CONNECT
+                    data = await asyncio.wait_for(reader.read(1024), timeout=timeout)
+                    if not data:
+                        raise ConnectionError("Proxy fechou a conexão aguardando resposta CONNECT SOCKS5")
+                    
+                    conn.receive_data(data) # Verifica SOCKS5Reply
+                    
+                    logger.info(f"Conectado via proxy SOCKS5 (socksio) {proxy_host}:{proxy_port} -> {self.host}:{self.port}")
+                    return reader, writer
+                    
+                except Exception as e:
+                    writer.close()
+                    try:
+                        await writer.wait_closed()
+                    except:
+                        pass
+                    raise e
                 
-            except ImportError:
+            except (ImportError, AttributeError):
                 # Fallback para PySocks síncrono em thread pool
-                logger.debug("socksio não disponível, usando PySocks síncrono")
+                logger.debug("socksio não disponível ou erro de API, usando PySocks síncrono")
                 return await self._connect_via_proxy_pysocks(timeout)
                 
         except ImportError:

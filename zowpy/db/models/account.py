@@ -45,6 +45,7 @@ class Account(Model,BaseModel):
 
     # Proxy configuration
     proxy_host = Column(String(255), nullable=True)
+    proxy_type = Column(String(255), nullable=True, default="http")
     proxy_port = Column(Integer, nullable=True)
     proxy_username = Column(String(255), nullable=True)
     proxy_password = Column(String(255), nullable=True)
