@@ -50,7 +50,7 @@ class ZowPyClient:
         self._message_handler: Optional[AsyncMessageHandler] = None
         self._client: Optional[WhatsAppClient] = None
 
-        self.proxy: Optional[dict] = None
+        self.proxy: Optional[ProxyConfig] = None
         
         # Eventos
         self._events = AsyncEventEmitter()
@@ -488,21 +488,21 @@ class ZowPyClient:
     async def set_proxy(self, proxy_string:str,proxy_type:str="http") -> bool:
         """Define proxy."""
 
-        self.proxy  = await WhatsAppClient.new_proxy(proxy_string=proxy_string,proxy_type=proxy_type)
+        self.proxy = await WhatsAppClient.new_proxy(proxy_string=proxy_string,proxy_type=proxy_type)
         if not self.proxy:
             self.proxy = None
             return False
 
-        self.proxy = self.proxy.to_dict()
-
         if self._client:
             return await self._client.set_proxy(proxy_string=proxy_string,proxy_type=proxy_type)
 
-        return None
+        return True
     
-    async def get_proxy(self) -> str:
+    async def get_proxy(self) -> Optional[ProxyConfig]:
         """Obtém proxy."""
-        return await self._client.get_proxy()
+        if self._client:
+            return await self._client.get_proxy()
+        return self.proxy
     
     async def remove_proxy(self) -> bool:
         """Remove proxy."""

@@ -101,7 +101,7 @@ class WhatsAppClient:
         endpoint: Tuple[str, int] = None,
         session_maker: Optional[AsyncSessionMaker] = None,
         device_config=None,
-        proxy: Optional[Dict[str, any]] = None,
+        proxy: Optional[Union[ProxyConfig, Dict[str, Any]]] = None,
     ):
         """
         Inicializa cliente WhatsApp.
@@ -115,7 +115,18 @@ class WhatsAppClient:
         """
         self.account_id = normalize(account_id)
         self.endpoint = endpoint or (f"g.whatsapp.net", 443)#{random.randint(1, 16)}
-        self.proxy = proxy
+        
+        # Normaliza proxy para ProxyConfig
+        if proxy and isinstance(proxy, dict):
+            self.proxy = ProxyConfig(
+                host=proxy.get("host"),
+                port=proxy.get("port"),
+                username=proxy.get("username"),
+                password=proxy.get("password"),
+                proxy_type=proxy.get("type", "http")
+            )
+        else:
+            self.proxy = proxy
         self.session_maker = session_maker
         self.device_config = device_config
         
@@ -253,15 +264,15 @@ class WhatsAppClient:
             self.proxy = self.proxy or (await self.get_proxy())
             # 3. Conecta TCP socket
             if self.proxy:
-                proxy_type = self.proxy.get("type", "http")
-                proxy_host = self.proxy.get("host", "unknown")
-                proxy_port = self.proxy.get("port", "unknown")
+                proxy_type = self.proxy.proxy_type
+                proxy_host = self.proxy.host
+                proxy_port = self.proxy.port
                 logger.info(f" Conectando TCP socket via PROXY {proxy_type.upper()} ({proxy_host}:{proxy_port})...")
             else:
                 logger.info("Conectando TCP socket (conexão direta, sem proxy)...")
 
 
-            self.connection = AsyncConnection(self.endpoint, proxy=self.proxy)
+            self.connection = AsyncConnection(self.endpoint, proxy=self.proxy.to_dict() if self.proxy else None)
             await self.connection.connect()
             if self.proxy:
                 logger.info("✓ TCP socket conectado via PROXY")
@@ -4563,7 +4574,7 @@ class WhatsAppClient:
         
         # 3. Configura na instância
         self.network_config = NetworkConfig.proxy_config(proxy_config)
-        self.proxy = proxy_config.to_dict()
+        self.proxy = proxy_config
         
         # 4. Salva no banco
         await self._save_proxy_to_db(proxy_config)
@@ -4571,21 +4582,21 @@ class WhatsAppClient:
         logger.info(f"PROXY configurado: {proxy_config.proxy_type.upper()} {proxy_config.host}:{proxy_config.port} (conta: {self.account_id})")
         return True
     
-    async def get_proxy(self) -> Optional[str]:
+    async def get_proxy(self) -> Optional[ProxyConfig]:
         """
-        Obtém configuração de proxy do banco de dados.
+        Obtém configuração de proxy.
         
         Returns:
-            String de proxy no formato "host:port[:username:password]" ou None
+            ProxyConfig ou None
         """
         # Primeiro tenta obter da instância atual
         if self.network_config and self.network_config.type == "proxy" and self.network_config.proxy:
-            return self.network_config.proxy.to_dict()
+            return self.network_config.proxy
         
         # Se não tem na instância, carrega do banco
         proxy_config = await self._load_proxy_from_db()
         if proxy_config:
-            return proxy_config.to_dict()
+            return proxy_config
         
         return None
     
@@ -4596,7 +4607,7 @@ class WhatsAppClient:
             "running": self._running,
             "connected": self._connected,
             "authenticated": self._authenticated,
-            "proxy": self.proxy.to_dict() if self.proxy else None,
+            "proxy": self.proxy.to_dict() if self.proxy and hasattr(self.proxy, 'to_dict') else self.proxy,
         }
 
 
@@ -4646,7 +4657,7 @@ class WhatsAppClient:
                     
                     # Configura na instância
                     self.network_config = NetworkConfig.proxy_config(proxy_config)
-                    self.proxy = proxy_config.to_dict()
+                    self.proxy = proxy_config
                     
                     logger.info(f"PROXY carregado do banco de dados: {proxy_config.proxy_type.upper()} {proxy_config.host}:{proxy_config.port} (conta: {self.account_id})")
                     return proxy_config
