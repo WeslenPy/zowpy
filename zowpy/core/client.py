@@ -713,8 +713,8 @@ class WhatsAppClient:
         useragent = UserAgentConfig(
             platform=platform_id,
             app_version=AppVersionConfig(self.bot_env.deviceEnv.getVersion()),
-            mcc=mcc or "724",
-            mnc=mnc or "05",
+            mcc=mcc or "000",
+            mnc=mnc or "000",
             os_version=self.bot_env.deviceEnv.getOSVersion(),
             manufacturer=self.bot_env.deviceEnv.getManufacturer(),
             device=self.bot_env.deviceEnv.getDeviceName(),
