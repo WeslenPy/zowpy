@@ -1,14 +1,15 @@
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from zowpy.proto import e2e_pb2
+import time
 
 class ReactionAttributes(object):
-    def __init__(self, msgid, remote_jid, from_me,text,sender_timestamp_ms,participant=None):
+    def __init__(self, msgid, remote_jid, from_me,text,sender_timestamp_ms=None,participant=None):
 
         self._msgid = msgid
         self._remote_jid = remote_jid        
         self._from_me = from_me
         self._text = text
-        self._sender_timestamp_ms = sender_timestamp_ms
+        self._sender_timestamp_ms = sender_timestamp_ms or int(time.time())
         self._participant = participant        
 
     def __str__(self):

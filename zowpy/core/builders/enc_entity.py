@@ -26,6 +26,7 @@ class EncEntity:
         enc_type: str,
         ciphertext: bytes,
         mediatype: str = "text",
+        type_message:str="text",
         jid: Optional[str] = None,
         count: Optional[str] = None
     ) -> ProtocolNode:
@@ -47,9 +48,16 @@ class EncEntity:
         # Cria atributos do node <enc>
         attribs = {
             "type": enc_type,
-            "v": "2"
+            "v": "2",
         }
-        
+
+        if type_message=="reaction":
+            attribs["decrypt-fail"] = 'hide'
+            # attribs["type"] = 'msg'
+
+
+
+
         # Adiciona mediatype se fornecido (zowsuplib adiciona mediatype no <enc> node)
         # Baseado no log do zowsuplib: <enc type="pkmsg" v="2" mediatype="image">
         if mediatype and mediatype != "text":
@@ -68,7 +76,7 @@ class EncEntity:
         
         # Se jid fornecido, envolve em <to> node (para participants)
         # Baseado em EncProtocolEntity.toProtocolTreeNode() linha 48
-        if jid:
+        if jid and type_message!="reaction":
             return ProtocolNode(
                 tag="to",
                 attributes={"jid": jid},

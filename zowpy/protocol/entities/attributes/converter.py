@@ -358,7 +358,9 @@ class AttributesConverter:
         #mctx.device_list_metadata.sender_account_type = 0
         #mctx.device_list_metadata.receiver_account_type = 0
         
-        message.message_context_info.MergeFrom(mctx)
+
+        if message_attributes.reaction is None:
+            message.message_context_info.MergeFrom(mctx)
 
         if message_attributes.conversation:
             message.conversation = message_attributes.conversation

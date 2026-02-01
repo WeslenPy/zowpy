@@ -21,6 +21,7 @@ class EncryptedMessageBuilder:
     def build_encrypted_message(
         message_node: ProtocolNode,
         enc_entities: List[ProtocolNode],
+        message_type:str = "text",
         participant: Optional[str] = None
     ) -> ProtocolNode:
         """
@@ -58,6 +59,10 @@ class EncryptedMessageBuilder:
         
         # Obtém category para determinar estrutura
         category = message_node.get_attribute("category")
+
+
+
+
         
         if category == "peer":
             # Peer message: estrutura simples com <meta>
@@ -72,6 +77,8 @@ class EncryptedMessageBuilder:
                 
                 # Adiciona primeiro enc entity
                 message_node.children.append(enc_entities[0])
+
+
         else:
             # Normal message: estrutura com participants node
             # Baseado em EncryptedMessageProtocolEntity.toProtocolTreeNode() linha 40-50
@@ -102,25 +109,29 @@ class EncryptedMessageBuilder:
                 message_node.children.append(skmsg_entity)
             
             # Segunda passada: processa sender key distribution (vai para participants)
-            for enc_entity in enc_entities:
-                # Ignora SKMSG já processado
-                if enc_entity == skmsg_entity:
-                    continue
+            if message_type !="reaction":
+                for enc_entity in enc_entities:
+                    # Ignora SKMSG já processado
+                    if enc_entity == skmsg_entity:
+                        continue
+                    
+                    # Se enc_entity é <to> node, adiciona ao participants (sender key distribution)
+                    if enc_entity.tag == "to":
+                        participants_node.children.append(enc_entity)
+                    elif enc_entity.tag == "enc":
+                        # Outros tipos de enc sem <to> wrapper não devem acontecer em mensagens normais
+                        enc_type = enc_entity.get_attribute("type")
+                        logger.warning(f"Enc entity tipo '{enc_type}' sem <to> wrapper em mensagem normal. Ignorando.")
+                    else:
+                        # Outros tipos de nodes não esperados
+                        logger.warning(f"Enc entity tipo '{enc_entity.tag}' não esperado em mensagem normal. Ignorando.")
                 
-                # Se enc_entity é <to> node, adiciona ao participants (sender key distribution)
-                if enc_entity.tag == "to":
-                    participants_node.children.append(enc_entity)
-                elif enc_entity.tag == "enc":
-                    # Outros tipos de enc sem <to> wrapper não devem acontecer em mensagens normais
-                    enc_type = enc_entity.get_attribute("type")
-                    logger.warning(f"Enc entity tipo '{enc_type}' sem <to> wrapper em mensagem normal. Ignorando.")
-                else:
-                    # Outros tipos de nodes não esperados
-                    logger.warning(f"Enc entity tipo '{enc_entity.tag}' não esperado em mensagem normal. Ignorando.")
-            
-            # Adiciona participants node se tiver children
-            if participants_node.children:
-                message_node.children.append(participants_node)
+                # Adiciona participants node se tiver children
+                if participants_node.children:
+                    message_node.children.append(participants_node)
+
+            else:
+                message_node.add_children(enc_entities)
         
         return message_node
 

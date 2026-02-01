@@ -38,10 +38,13 @@ async def main():
     """
     
     # Cria cliente
-    six_parts= "14373206374,4ljWhbt1yKIN/APYKt8taDPj4kbsULb552rxRJvX0Wk=,cPjOBZVjlURZBJxZOzE4HdkUEjrAA9K/ApZyo4rgiEU=,yIdbWY5IFfBhxhGT6AO3xwlYGQ21ZThe98Lr/Cg0phM=,6CYNIsougyZ3ymOJbfI8lwK+P+6sd/WOLwMO/a2OUHU=,NTU1NTkyNDgxMDY0OSMFw8GN5rYImqEJAm9pObYCtwosxw=="
+    # six_parts= "14373206374,4ljWhbt1yKIN/APYKt8taDPj4kbsULb552rxRJvX0Wk=,cPjOBZVjlURZBJxZOzE4HdkUEjrAA9K/ApZyo4rgiEU=,yIdbWY5IFfBhxhGT6AO3xwlYGQ21ZThe98Lr/Cg0phM=,6CYNIsougyZ3ymOJbfI8lwK+P+6sd/WOLwMO/a2OUHU=,NTU1NTkyNDgxMDY0OSMFw8GN5rYImqEJAm9pObYCtwosxw=="
     # six_parts = "5555924810649,4ljWhbt1yKIN/APYKt8taDPj4kbsULb552rxRJvX0Wk=,cPjOBZVjlURZBJxZOzE4HdkUEjrAA9K/ApZyo4rgiEU=,yIdbWY5IFfBhxhGT6AO3xwlYGQ21ZThe98Lr/Cg0phM=,6CYNIsougyZ3ymOJbfI8lwK+P+6sd/WOLwMO/a2OUHU=,NTU1NTkyNDgxMDY0OSMFw8GN5rYImqEJAm9pObYCtwosxw=="
+    # six_parts = "201201814380,do2SERU4/9Yj55lReaRN6aZKJQ9K3RiKXrw3da4rHm8=,6D00PFIHKSnRufG7+9NU9T5WTxuViefuu61LIxUl8Hg=,kr9WxLubsiVQmcdRsOiZ31h0khcADnA6zBmiRU1TvGk=,wCCqKCgpt1FRJxq3Q0kydhXmnk9h8Oixw94Y9FZCzEE=,MjAxMjAxODE0MzgwI1RJcf7mAfypjMTAyTeeZgV3J9ZD"
+    six_parts = "201289168953,MCVXsjVe8MawoI1knngwMgG3jT9uIiMkQaomKIy+2h8=,AHO8TSNhrJZS2fCvuW4J4tkeBknhCyQx16EYyKsrNng=,JfoetzyUPj6oUokxsftZa6o3eukx6WXNTtfKj6eVhQk=,6GR1abYzZeA95EYpoSTr1abe50JnHH0fNt4NqyMqy3Q=,MjAxMjg5MTY4OTUzIwiPgotfI6grLeCaitnx2+gEC9jc"
     
-    # await import_account_from_six_parts(six_parts, env="android")
+    
+    await import_account_from_six_parts(six_parts, env="smb_android")
 
     account_id = six_parts.split(",")[0]
     
@@ -77,8 +80,8 @@ async def main():
         print("Cliente online - Mantendo conexão ativa indefinidamente...")
         
         # Envia mensagem inicial (opcional)
-        to = "120363423929565689"
-        # to = "559885700260"
+        # to = "120363423929565689"
+        to = "559885700260"
         print(f" Enviando mensagem para {to}...")
 
         print(f"\n📤 Exemplo: Enviando mídia usando send_media_direct...")
@@ -100,20 +103,37 @@ async def main():
         # result = await client.create_group(text, [])
         # print(f"Grupo criado com sucesso: {result}")
 
+        from zowpy.protocol.structs import ProtocolNode
 
-        await client.start_typing(to)
-        await asyncio.sleep(4)
-        await client.send_text(to, text)
-        await client.stop_typing(to)
-        await client.send_image(to,"https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png")
-        await client.send_audio(to,"https://s3-bucket-waconnect.s3.us-west-2.amazonaws.com/static/api/f5ba3d484c1f8a182648272831cdcbe6155f686c8600edc703c3a75965b2a7da924d69c8d9591e32c28a1b21ab2b9820f7ca06578420839f68996c76cd6090b1.ogg")
-        await client.send_document(to,"https://s3-bucket-waconnect.s3.us-west-2.amazonaws.com/static/api/5981fc257c8d45b8dd74eeccc674637baff025d19de3eeec877e571e8015732a7777214b675efc19f8d319f6daebb011f5b0d3ea0f52f721dbe015345c37a805.webp")
-        await client.send_sticker(to,"https://s3-bucket-waconnect.s3.us-west-2.amazonaws.com/static/api/5981fc257c8d45b8dd74eeccc674637baff025d19de3eeec877e571e8015732a7777214b675efc19f8d319f6daebb011f5b0d3ea0f52f721dbe015345c37a805.webp")
+
+        message_id = ProtocolNode._generateId()
+
+        message_id = "F951A0328BBD7EF5A69634E872DC41C0"
+
+        logger.info(f"GEN: {message_id}")
+
+        # await client.start_typing(to)
+        # await asyncio.sleep(4)
+        # message_id = await client.send_text(to, text,message_id=message_id)
+        # logger.info(f"Message Id : {message_id}")
+        # await client.stop_typing(to)
+
+
+        await client.reply_message(to,"tudo",reply_message_id=message_id,quoted=text,from_me=True)
+
+        # await client.send_reaction(to=to,message_id=message_id,reaction="❤️",from_me=True)
+
+
+
+        # await client.send_image(to,"https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png")
+        # await client.send_audio(to,"https://s3-bucket-waconnect.s3.us-west-2.amazonaws.com/static/api/f5ba3d484c1f8a182648272831cdcbe6155f686c8600edc703c3a75965b2a7da924d69c8d9591e32c28a1b21ab2b9820f7ca06578420839f68996c76cd6090b1.ogg")
+        # await client.send_document(to,"https://s3-bucket-waconnect.s3.us-west-2.amazonaws.com/static/api/5981fc257c8d45b8dd74eeccc674637baff025d19de3eeec877e571e8015732a7777214b675efc19f8d319f6daebb011f5b0d3ea0f52f721dbe015345c37a805.webp")
+        # await client.send_sticker(to,"https://s3-bucket-waconnect.s3.us-west-2.amazonaws.com/static/api/5981fc257c8d45b8dd74eeccc674637baff025d19de3eeec877e571e8015732a7777214b675efc19f8d319f6daebb011f5b0d3ea0f52f721dbe015345c37a805.webp")
         # while True:
         #     print(f"Enviando mensagem para {to}...")
         
 
-        await asyncio.sleep(10)
+        await asyncio.sleep(30)
         print("\n🔄 Desconectando...")
         await client.disconnect()
     

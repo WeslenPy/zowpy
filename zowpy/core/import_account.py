@@ -143,6 +143,9 @@ async def import_account_from_six_parts(
     if not mnc:
         mnc = "000"
     
+
+    lg,lc = PhoneUtils.getLGLC(cc)
+
     
     # Cria objeto Config (igual ao zowsuplib)
     config = Config(

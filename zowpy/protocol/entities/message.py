@@ -7,6 +7,8 @@ Baseado em MessageProtocolEntity do zowsuplib.
 import time
 from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
+
+from zowpy.protocol.entities.attributes.attributes_message import MessageAttributes
 from .base import ProtocolEntity
 from .enc import EncProtocolEntity
 from .attributes.attributes_message_meta import MessageMetaAttributes
@@ -87,7 +89,9 @@ class ProtomessageProtocolEntity(MessageProtocolEntity):
     def __init__(
         self,
         message_attributes: Any,  # MessageAttributes
-        message_meta_attributes: MessageMetaAttributes
+        message_meta_attributes: MessageMetaAttributes,
+        message_type:str="text",
+        message_id:Optional[str] = None,
     ):
         """
         Inicializa ProtomessageProtocolEntity.
@@ -98,8 +102,9 @@ class ProtomessageProtocolEntity(MessageProtocolEntity):
         """
         # Inicializa MessageProtocolEntity com os metadados
         super().__init__(
+            message_type=message_type,
             to=message_meta_attributes.recipient,
-            message_id=message_meta_attributes.id,
+            message_id=message_id or message_meta_attributes.id,
             participant=message_meta_attributes.participant
         )
         
@@ -213,7 +218,8 @@ class ExtendedTextMessageProtocolEntity(ProtomessageProtocolEntity):
     def __init__(
         self,
         extended_text_attributes: Any,  # ExtendedTextAttributes
-        meta_attributes: MessageMetaAttributes
+        meta_attributes: MessageMetaAttributes,
+        message_id:Optional[str]=None,
     ):
         """
         Cria mensagem de texto estendida.
@@ -232,7 +238,8 @@ class ExtendedTextMessageProtocolEntity(ProtomessageProtocolEntity):
         # Inicializa via ProtomessageProtocolEntity
         super().__init__(
             message_attributes=message_attributes,
-            message_meta_attributes=meta_attributes
+            message_meta_attributes=meta_attributes,
+            message_id=message_id,
         )
         
         self.extended_text_attributes = extended_text_attributes
@@ -248,4 +255,27 @@ class ExtendedTextMessageProtocolEntity(ProtomessageProtocolEntity):
         from .attributes.converter import AttributesConverter
         converter = AttributesConverter.get()
         return converter.extendedtext_to_proto(self.extended_text_attributes)
+
+
+
+
+class ReactionMessageProtocolEntity(ProtomessageProtocolEntity):
+    """
+    <message from="5356260450362:0@lid" type="reaction" id="A51524CC65529C0E4D017C88F04D9471" verified_level="unknown" notify="Hyper Duck" verified_name="4497206798683073789" sender_pn="559885700260@s.whatsapp.net" t="1769960454">
+        <enc v="2" type="msg" decrypt-fail="hide">
+            0x330a210597fceebf3c6d223f0b8601e71897d740ee2f8bd05501fb46ee8621e466d6280d10031800226081e13a2314c04a987335ba5f8a525fa53c1bb1fa3ae208a3836c2311d40153b142c719c4a0bb0b2eb4cef785905ca1a21a5d95e235c14d62429d1ac5f7f181b16f8a1e1f541931d33c978f25a52eb71155fea1d870d7f7678a812073ae944ff171d0cf8311b52db5
+        </enc>
+    </message>
+    """
+    def __init__(self,reaction_attr,message_meta_attributes=None, to=None):
+        
+
+        super(ReactionMessageProtocolEntity, self).__init__(message_type="reaction",
+                                                            message_attributes= MessageAttributes(reaction = reaction_attr), 
+                                                            message_meta_attributes=message_meta_attributes)
+
+
+
+
+    
 

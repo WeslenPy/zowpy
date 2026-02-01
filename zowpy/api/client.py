@@ -114,8 +114,41 @@ class ZowPyClient:
             
         except Exception as e:
             raise ConnectionError(f"Erro ao conectar: {e}") from e
+
+
+
+    async def reply_message(self,to:str,text:str,reply_message_id:str,quoted:Optional[str]=None,message_id:Optional[str]=None,from_me=False):
+
+        if not self._client or not self._client.is_connected():
+            raise ConnectionError("Not connected")
+        
+        # Envia mensagem via cliente
+        message_id = await self._client.send_text(to, text, message_id=message_id,
+                                                    reply_message_id=reply_message_id,
+                                                    from_me=from_me,
+                                                    quoted=quoted)
+        
+        return message_id
+
+    async def send_reaction(        
+        self,
+        to: str,
+        reaction: str,
+        message_id: Optional[str] = None,
+        from_me:Optional[bool] = False):
+
+        if not self._client or not self._client.is_connected():
+            raise ConnectionError("Not connected")
+        
+        # Envia mensagem via cliente
+        message_id = await self._client.send_reaction(to=to, reaction=reaction,
+                                                      message_id=message_id,
+                                                      from_me=from_me)
+        
+        return message_id
+
     
-    async def send_text(self, to: str, text: str, options: Optional[dict] = None) -> str:
+    async def send_text(self, to: str, text: str,message_id:Optional[str]=None, options: Optional[dict] = None) -> str:
         """
         Envia mensagem de texto de forma totalmente assíncrona.
         
@@ -131,7 +164,7 @@ class ZowPyClient:
             raise ConnectionError("Not connected")
         
         # Envia mensagem via cliente
-        message_id = await self._client.send_text(to, text, options=options)
+        message_id = await self._client.send_text(to, text,message_id=message_id, options=options)
         
         return message_id
     

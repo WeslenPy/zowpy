@@ -18,7 +18,10 @@ from zowpy.db.factory import AxolotlManagerFactory
 from zowpy.db.models import Account
 from zowpy.profile.profile import AsyncProfile
 from zowpy.config.v1.config import Config
+from zowpy.protocol.entities.attributes import MessageMetaAttributes
 from zowpy.protocol.entities.attributes.attributes_disappearing_mode import DisappearingModeAttributes
+from zowpy.protocol.entities.attributes.attributes_quoted import QuotedAttributes
+from zowpy.protocol.entities.attributes.attributes_reaction import ReactionAttributes
 from zowpy.utils.tools import Jid, WATools
 from zowpy.config.bot_env import BotEnv
 from zowpy.config.network import NetworkConfig, ProxyConfig
@@ -695,9 +698,6 @@ class WhatsAppClient:
         # Cria BotEnv
         self.bot_env = BotEnv(device_env, network_env)
         
-        # Obtém MCC/MNC do número
-        mcc, mnc = PhoneUtils.get_mcc_mnc(self.account_id)
-        
         # Obtém platform ID
         platform_id = self.bot_env.deviceEnv.getPlatform()
         
@@ -725,15 +725,14 @@ class WhatsAppClient:
             self.config.device_model_type = self.bot_env.deviceEnv.getDeviceModelType()
             await self.profile.write_config(self.config)
         
-        cc = PhoneUtils.getMobileCC(self.account_id)
-        lg, lc = PhoneUtils.getLGLC(cc)
+        lg, lc = PhoneUtils.getLGLC(self.config.cc)
         
         # Cria user agent
         useragent = UserAgentConfig(
             platform=platform_id,
             app_version=AppVersionConfig(self.bot_env.deviceEnv.getVersion()),
-            mcc=mcc or "000",
-            mnc=mnc or "000",
+            mcc=self.config.mcc,
+            mnc=self.config.mnc,
             os_version=self.bot_env.deviceEnv.getOSVersion(),
             manufacturer=self.bot_env.deviceEnv.getManufacturer(),
             device=self.bot_env.deviceEnv.getDeviceName(),
@@ -755,7 +754,7 @@ class WhatsAppClient:
         self.client_config = ClientConfig(
             username=int(username),
             passive=False,
-            pushname="ZowPy",
+            pushname=self.config.pushname,
             short_connect=True,
             useragent=useragent,
         )
@@ -1419,6 +1418,7 @@ class WhatsAppClient:
         to: str,
         text: str,
         message_id: Optional[str] = None,
+        quoted:Optional[QuotedAttributes]=None,
         options: Optional[dict] = None
     ) -> str:
         """
@@ -1471,7 +1471,9 @@ class WhatsAppClient:
                     result = await self.contact_handler.sync_contacts([phone], mode="delta", context="interactive")
                     logger.info(f"Contato {normalized_jid} sincronizado com sucesso")
 
-                    return await self._send_text_direct(to, text, message_id, options=options)
+                    return await self._send_text_direct(to=to, text=text, message_id=message_id,
+                                                        quoted=quoted,
+                                                        options=options)
                 except Exception as e:
                     logger.error(f"Erro ao sincronizar contato {normalized_jid}: {e}")
                     # Remove contato se sincronização falhou
@@ -1484,11 +1486,17 @@ class WhatsAppClient:
                 logger.warning("ContactHandler não disponível, enviando sem sincronizar")
                 # Atualiza timestamp mesmo sem sincronizar
                 self._last_sync_time[normalized_jid] = time.time()
-                return await self._send_text_direct(to, text, message_id, options=options)
+                return await self._send_text_direct(to=to, text=text, 
+                                                    message_id=message_id, 
+                                                    quoted=quoted,
+                                                    options=options)    
         else:
             logger.debug(f"Contato {normalized_jid} já existe nos contatos")
             # Aplica rate limiting mesmo para contatos conhecidos
-            return await self._send_text_direct(to, text, message_id, options=options)
+            return await self._send_text_direct(to=to, 
+                                                text=text, message_id=message_id, 
+                                                quoted=quoted,
+                                                options=options)
 
     
     async def send_text(
@@ -1496,7 +1504,10 @@ class WhatsAppClient:
         to: str,
         text: str,
         message_id: Optional[str] = None,
-        options: Optional[dict] = None
+        reply_message_id: Optional[str] = None,
+        quoted:Optional[QuotedAttributes]= None,
+        from_me:Optional[bool] = False,
+        options: Optional[dict] = None,
     ) -> str:
         """
         Envia mensagem de texto seguindo o fluxo completo do zowsuplib.
@@ -1515,14 +1526,77 @@ class WhatsAppClient:
         if not self._authenticated:
             raise RuntimeError("Not authenticated")
 
+
+        quoted_attrs = QuotedAttributes(
+            reply_message_id=reply_message_id,
+            text=quoted,
+            participant = self.account_id if from_me else to
+        )
+
         # Destino único
-        return await self.assure_contacts_and_send(to, text, message_id, options=options)
+        return await self.assure_contacts_and_send(
+            to=to, 
+            text=text, 
+            message_id=message_id, 
+            quoted=quoted_attrs,
+            options=options)
+
+
+    async def send_reaction(
+        self,
+        to: str,
+        reaction: str,
+        message_id: Optional[str] = None,
+        from_me:Optional[bool] = False
+    ) -> str:
+        """
+        Envia reação para mensagem.
+    """
+        if not self._authenticated:
+            raise RuntimeError("Not authenticated")
+        
+        # Normaliza e corrige JID de grupo se necessário
+        to = self._normalize_and_fix_group_jid(to)
+        is_group = self._is_group_jid(to)
+        to_jid = to_whatsapp_jid(to, is_group)
+        
+        if not message_id:
+            raise ValueError("message_id is required")
+        
+        message_meta_attrs = MessageMetaAttributes(
+            id=MessageMetaAttributes.ID_ANDROID,
+            recipient=to,
+            fromMe=from_me,
+            timestamp=int(time.time())
+        )
+
+        reaction_attrs = ReactionAttributes(
+            msgid=message_id,
+            remote_jid=to_jid,
+            from_me=from_me,
+            text=reaction,
+            # participant=to_jid
+        )
+
+        from ..protocol.entities.message import ReactionMessageProtocolEntity
+        reaction_entity  = ReactionMessageProtocolEntity(reaction_attr=reaction_attrs, 
+                                              message_meta_attributes=message_meta_attrs, 
+                                                to=to_jid)
+
+
+        message_node = reaction_entity.to_protocol_node()
+        logger.info(message_node)
+
+        await self.process_plaintext_node_and_send(message_node)
+        logger.info(f"Reação enviada para {to_jid}: {reaction}")
+        return message_id
 
     async def _send_text_direct(
         self,
         to: str,
         text: str,
         message_id: Optional[str] = None,
+        quoted:Optional[QuotedAttributes]=None,
         options: Optional[dict] = None
     ) -> str:
         """
@@ -1554,7 +1628,7 @@ class WhatsAppClient:
         
         # 2. Prepara context_info e attributes
         options = options or {}
-        context_info = self._prepare_context_info(options)
+        context_info = self._prepare_context_info(quoted=quoted)
 
         participants = options.get("participants")
 
@@ -1585,7 +1659,7 @@ class WhatsAppClient:
 
         # Cria metadados
         meta = MessageMetaAttributes(
-            id=MessageMetaAttributes.ID_ANDROID,
+            id=message_id,
             recipient=normalized_to,
             timestamp=int(time.time()),
             # participant=normalized_to
@@ -1594,7 +1668,8 @@ class WhatsAppClient:
         # 3. Cria ExtendedTextMessageProtocolEntity
         message_entity = ExtendedTextMessageProtocolEntity(
             extended_text_attributes=extended_text_attrs,
-            meta_attributes=meta
+            meta_attributes=meta,
+            message_id=message_id,
         )
         
         # 4. Converte para ProtocolNode (isso já gera o <proto> internamente)
@@ -1608,7 +1683,11 @@ class WhatsAppClient:
         logger.info(f"Mensagem enviada para {to_jid}: {text[:50]}...")
         return message_id
 
-    def _prepare_context_info(self, options: dict):
+    def _prepare_context_info(self, quoted:Optional[QuotedAttributes]=None,
+                                    mentions:Optional[list[str]]=None,
+                                    disappearing:Optional[int] = None,
+                                    source:Optional[str] = None,
+                                    ):
         """Prepara ContextInfoAttributes baseado nas opções."""
         from ..protocol.entities.attributes import (
             ContextInfoAttributes, 
@@ -1617,26 +1696,21 @@ class WhatsAppClient:
         )
         
         context_info = ContextInfoAttributes()
-        
+
         # Trata mensagem citada (quoted)
-        quoted = options.get("quoted_message")
         if quoted:
-            # Se quoted for um ProtocolNode ou entidade, extrai dados
-            if hasattr(quoted, "get_attribute"):
-                context_info.stanza_id = quoted.get_attribute("id")
-                context_info.participant = quoted.get_attribute("participant") or quoted.get_attribute("from")
-                # Simplificação: assume que é uma mensagem de texto citada
-                context_info.quoted_message = MessageAttributes(conversation="...") # TODO: Extrair texto real
+            context_info.stanza_id = quoted.reply_message_id
+            context_info.participant = to_whatsapp_jid(quoted.participant)
+            context_info.quoted_message = MessageAttributes(conversation=quoted.text or "") 
         
         # Trata menções
-        mentions = options.get("mentions")
         if mentions:
             context_info.mentioned_jid = mentions
          
         # Configura disappearing mode
-        if "disappearing" in options:
+        if disappearing:
             try:
-                disappearing_days = int(options["disappearing"])
+                disappearing_days = int(disappearing)
                 context_info.expiration = disappearing_days * 86400
                 context_info.ephemeral_setting_timestamp = int(time.time())
                 context_info.disappearing_mode = DisappearingModeAttributes(
@@ -1645,7 +1719,7 @@ class WhatsAppClient:
                     initiatedByMe=True
                 )
             except (ValueError, TypeError) as e:
-                logger.warning(f"Valor inválido para 'disappearing': {options.get('disappearing')}, usando padrão")
+                logger.warning(f"Valor inválido para 'disappearing': {disappearing}, usando padrão")
                 context_info.expiration = 0
         else:
             context_info.expiration = 0
@@ -1657,12 +1731,10 @@ class WhatsAppClient:
             )
 
         # Configura source tracking
-        if "source" in options:
-            if options["source"] == "random":
+        if source:
+            if source == "random":
                 srcs = ["contact_card", "contact_search", "global_search_new_chat", "phone_number_hyperlink"]
                 source = random.choice(srcs)
-            else:
-                source = options["source"]
 
             context_info.entry_point_conversion_app = "whatsapp"
             context_info.entry_point_conversion_source = source
@@ -2698,6 +2770,7 @@ class WhatsAppClient:
         
         enc_entities = []
         participant = jids[0] if len(jids) == 1 and retry_count > 0 else None
+        message_type =  message_node.get_attribute_value("type")
         
         for jid in jids:
             # Garante que jid é string
@@ -2746,6 +2819,7 @@ class WhatsAppClient:
                 enc_type = EncEntity.TYPE_MSG
             else:
                 enc_type = EncEntity.TYPE_MSG
+
             
             # Cria node <enc> usando EncEntity helper
             # Para contatos individuais, usa <to> wrapper dentro de <participants>
@@ -2753,6 +2827,7 @@ class WhatsAppClient:
             enc_node = EncEntity.create_enc_node(
                 enc_type=enc_type,
                 ciphertext=ciphertext.serialize(),
+                type_message =message_type,
                 mediatype=mediatype,
                 jid=to_jid_for_node,  # JID completo no formato do zowsuplib
                 count=str(retry_count) if retry_count > 0 else None
@@ -2762,13 +2837,15 @@ class WhatsAppClient:
         
         # Constrói node final usando EncryptedMessageBuilder
         message_node = EncryptedMessageBuilder.build_encrypted_message(
+            message_type = message_type,
             message_node=message_node,
             enc_entities=enc_entities,
             participant=participant
         )
-        
-        # Adiciona elementos extras (reporting, device-identity, tctoken, etc.)
-        await self._add_message_extras(message_node, tctoken=tctoken)
+
+        if message_type !="reaction":
+            # Adiciona elementos extras (reporting, device-identity, tctoken, etc.)
+            await self._add_message_extras(message_node, tctoken=tctoken)
         
         # Enfileira mensagem antes de enviar (para retry)
         self._enqueue_sent_message(message_node)
@@ -3653,16 +3730,11 @@ class WhatsAppClient:
         from ..protocol.entities import OutgoingChatstateProtocolEntity, ChatstateProtocolEntity
         
         # Normaliza JID
-        to_jid = to_whatsapp_jid(to)
-        participant = None
+        is_group = self._is_group_jid(to)
 
-        is_group = self._is_group_jid(to_jid)
-        if is_group:
-            to_jid = to_jid.replace("@g.us", "@s.whatsapp.net")
-            participant = to_whatsapp_jid(self.account_id)
-        else:
-            to_jid = to_jid.replace("@s.whatsapp.net", "@g.us")
+        to_jid = to_whatsapp_jid(to,is_group)
 
+        participant = to_whatsapp_jid(self.account_id)
 
         logger.debug(f"Iniciando indicador de typing para {to_jid} e participant {participant}")
 
@@ -3671,7 +3743,7 @@ class WhatsAppClient:
         chatstate = OutgoingChatstateProtocolEntity(
             ChatstateProtocolEntity.STATE_COMPOSING,
             to=to_jid,
-            participant=participant
+            participant=participant if is_group else None
         )
         
         logger.debug(f"Enviando indicador de typing para {to_jid}")
@@ -3690,20 +3762,16 @@ class WhatsAppClient:
         from ..protocol.entities import OutgoingChatstateProtocolEntity, ChatstateProtocolEntity
         
       # Normaliza JID
-        to_jid = to_whatsapp_jid(to)
-        participant = None
-
         is_group = self._is_group_jid(to)
-        if is_group:
-            to_jid = to_jid.replace("@s.whatsapp.net", "@g.u")
-            participant = to_whatsapp_jid(self.account_id)
+        to_jid = to_whatsapp_jid(to,is_group)
+        participant = to_whatsapp_jid(self.account_id)
 
         logger.debug(f"Parando indicador de typing para {to_jid} e participant {participant}")
         # Cria chatstate de paused
         chatstate = OutgoingChatstateProtocolEntity(
             ChatstateProtocolEntity.STATE_PAUSED,
             to=to_jid,
-            participant=participant
+            participant=participant if is_group else None
         )
         
         logger.debug(f"Parando indicador de typing para {to_jid}")
