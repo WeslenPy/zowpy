@@ -9,6 +9,8 @@ import binascii
 from typing import Dict, Tuple, List, Optional
 from loguru import logger
 
+from zowpy.utils.tools import Jid
+
 from ...protocol.structs import ProtocolNode
 from .iq_builder import IQBuilder
 from ...utils.constants import YowConstants
@@ -263,7 +265,8 @@ class PrekeyBuilder:
         )
         
         for jid in jids:
-            user_attrs = {"jid": jid}
+            normalized_jid = jid.split("@")[0].split(":")[0]
+            user_attrs = {"jid": f"{normalized_jid}@s.whatsapp.net"}
             if reason:
                 user_attrs["reason"] = reason
             

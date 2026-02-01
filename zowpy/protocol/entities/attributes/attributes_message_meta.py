@@ -7,7 +7,6 @@ Baseado em zowsuplib/yowsup/layers/protocol_messages/protocolentities/attributes
 from typing import Any, Optional
 from loguru import logger
 
-
 class MessageMetaAttributes:
     """
     Atributos de metadados para mensagens.
@@ -54,7 +53,7 @@ class MessageMetaAttributes:
             sender_pn: JID do remetente com número de telefone
             from_pn: JID de origem com número de telefone
         """
-        self.id = id
+        self.id = id or self.ID_ANDROID
         self.sender = sender
         self.sender_pn = sender_pn
         self.from_pn = from_pn
@@ -62,12 +61,30 @@ class MessageMetaAttributes:
         self.notify = notify
         self.timestamp = int(timestamp) if timestamp else None
         self.participant = participant
-        self.offline = offline in ("1", True) if isinstance(offline, (str, bool)) else offline
+        self.offline = offline in ("1", True)
         self.retry = int(retry) if retry else None
         self.fromMe = fromMe if fromMe else False
         self.category = category
         self.phash = phash
         self.edit = edit
+
+    def to_dict(self) -> dict:
+        """Retorna atributos para o node <message>."""
+        attrs = {}
+        if self.id: attrs["id"] = self.id
+        if self.sender: attrs["from"] = self.sender
+        if self.recipient: attrs["to"] = self.recipient
+        if self.timestamp: attrs["t"] = str(self.timestamp)
+        if self.participant: attrs["participant"] = self.participant
+        if self.notify: attrs["notify"] = self.notify
+        if self.offline: attrs["offline"] = "1"
+        if self.retry: attrs["retry"] = str(self.retry)
+        if self.category: attrs["category"] = self.category
+        if self.phash: attrs["phash"] = self.phash
+        if self.edit: attrs["edit"] = self.edit
+        if self.sender_pn: attrs["sender_pn"] = self.sender_pn
+        if self.from_pn: attrs["from_pn"] = self.from_pn
+        return attrs
     
     @staticmethod
     def from_message_protocoltreenode(node: 'ProtocolNode', proto: Optional[Any] = None) -> 'MessageMetaAttributes':

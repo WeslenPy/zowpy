@@ -10,11 +10,17 @@ from .message import (
     MessageProtocolEntity,
     TextMessageProtocolEntity,
     ExtendedTextMessageProtocolEntity,
-    MessageMetaAttributes as MessageMetaAttributesSimple,  # Renomeado para evitar conflito
+    ProtomessageProtocolEntity,
+    MessageMetaAttributes as MessageMetaAttributesSimple,
 )
 from .iq import IqProtocolEntity, GetKeysIqProtocolEntity, SetKeysIqProtocolEntity
+from .iq_push import PushIqProtocolEntity
+from .iq_props import PropsIqProtocolEntity
+from .iq_trust_contact import TrustContactIqProtocolEntity
 from .iq_wmex import WmexQueryIqProtocolEntity, WmexResultIqProtocolEntity
+from .ib import IbProtocolEntity, EdgeRoutingIbProtocolEntity
 from .presence import PresenceProtocolEntity
+from .chatstate import ChatstateProtocolEntity, OutgoingChatstateProtocolEntity
 from .receipt import ReceiptProtocolEntity, RetryOutgoingReceiptProtocolEntity
 from .ack import AckProtocolEntity
 from .enc import EncProtocolEntity
@@ -53,13 +59,21 @@ __all__ = [
     "MessageProtocolEntity",
     "TextMessageProtocolEntity",
     "ExtendedTextMessageProtocolEntity",
+    "ProtomessageProtocolEntity",
     "MessageMetaAttributesSimple",  # Versão simples de message.py
     "IqProtocolEntity",
     "GetKeysIqProtocolEntity",
     "SetKeysIqProtocolEntity",
+    "PushIqProtocolEntity",
+    "PropsIqProtocolEntity",
+    "TrustContactIqProtocolEntity",
     "WmexQueryIqProtocolEntity",
     "WmexResultIqProtocolEntity",
+    "IbProtocolEntity",
+    "EdgeRoutingIbProtocolEntity",
     "PresenceProtocolEntity",
+    "ChatstateProtocolEntity",
+    "OutgoingChatstateProtocolEntity",
     "ReceiptProtocolEntity",
     "RetryOutgoingReceiptProtocolEntity",
     "AckProtocolEntity",

@@ -38,8 +38,14 @@ async def main():
     """
     
     # Cria cliente
-    account_id = "201208868278"
-    client = ZowPyClient(account_id)
+    six_parts= "14373206374,4ljWhbt1yKIN/APYKt8taDPj4kbsULb552rxRJvX0Wk=,cPjOBZVjlURZBJxZOzE4HdkUEjrAA9K/ApZyo4rgiEU=,yIdbWY5IFfBhxhGT6AO3xwlYGQ21ZThe98Lr/Cg0phM=,6CYNIsougyZ3ymOJbfI8lwK+P+6sd/WOLwMO/a2OUHU=,NTU1NTkyNDgxMDY0OSMFw8GN5rYImqEJAm9pObYCtwosxw=="
+    # six_parts = "5555924810649,4ljWhbt1yKIN/APYKt8taDPj4kbsULb552rxRJvX0Wk=,cPjOBZVjlURZBJxZOzE4HdkUEjrAA9K/ApZyo4rgiEU=,yIdbWY5IFfBhxhGT6AO3xwlYGQ21ZThe98Lr/Cg0phM=,6CYNIsougyZ3ymOJbfI8lwK+P+6sd/WOLwMO/a2OUHU=,NTU1NTkyNDgxMDY0OSMFw8GN5rYImqEJAm9pObYCtwosxw=="
+    
+    await import_account_from_six_parts(six_parts, env="android")
+
+    account_id = six_parts.split(",")[0]
+    
+    client = ZowPyClient(account_id,device_env="android")
     
     # Eventos
     @client.on_message
@@ -71,26 +77,43 @@ async def main():
         print("Cliente online - Mantendo conexão ativa indefinidamente...")
         
         # Envia mensagem inicial (opcional)
-        to = "120363405885727330"
+        to = "120363423929565689"
+        # to = "559885700260"
         print(f" Enviando mensagem para {to}...")
 
         print(f"\n📤 Exemplo: Enviando mídia usando send_media_direct...")
 
 
-        text = "novo grupo teste"
+        text = "Ola, tudo bem?"
+
+        code = "IkUXAl5oMK5I0ZXp9dauhy"
+
+        # groups = await client.list_groups()
+        # logger.info(f"Grupos: {groups}")
+
+        # await client.join_group_with_code("IkUXAl5oMK5I0ZXp9dauhy")
         
-        result=  await client.get_group_invite_code(to)
+        # result=  await client.get_group_invite_code(to)
         # result= await client.get_group_info(to)
+        # logger.info(f"Resultado: {groups}")
         
         # result = await client.create_group(text, [])
-        print(f"Grupo criado com sucesso: {result}")
+        # print(f"Grupo criado com sucesso: {result}")
 
+
+        await client.start_typing(to)
+        await asyncio.sleep(4)
+        await client.send_text(to, text)
+        await client.stop_typing(to)
+        await client.send_image(to,"https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png")
+        await client.send_audio(to,"https://s3-bucket-waconnect.s3.us-west-2.amazonaws.com/static/api/f5ba3d484c1f8a182648272831cdcbe6155f686c8600edc703c3a75965b2a7da924d69c8d9591e32c28a1b21ab2b9820f7ca06578420839f68996c76cd6090b1.ogg")
+        await client.send_document(to,"https://s3-bucket-waconnect.s3.us-west-2.amazonaws.com/static/api/5981fc257c8d45b8dd74eeccc674637baff025d19de3eeec877e571e8015732a7777214b675efc19f8d319f6daebb011f5b0d3ea0f52f721dbe015345c37a805.webp")
+        await client.send_sticker(to,"https://s3-bucket-waconnect.s3.us-west-2.amazonaws.com/static/api/5981fc257c8d45b8dd74eeccc674637baff025d19de3eeec877e571e8015732a7777214b675efc19f8d319f6daebb011f5b0d3ea0f52f721dbe015345c37a805.webp")
         # while True:
-        #     await client.send_text(to, text)
-        #     await asyncio.sleep(300)
         #     print(f"Enviando mensagem para {to}...")
         
 
+        await asyncio.sleep(10)
         print("\n🔄 Desconectando...")
         await client.disconnect()
     

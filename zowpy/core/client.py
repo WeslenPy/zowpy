@@ -18,6 +18,7 @@ from zowpy.db.factory import AxolotlManagerFactory
 from zowpy.db.models import Account
 from zowpy.profile.profile import AsyncProfile
 from zowpy.config.v1.config import Config
+from zowpy.protocol.entities.attributes.attributes_disappearing_mode import DisappearingModeAttributes
 from zowpy.utils.tools import Jid, WATools
 from zowpy.config.bot_env import BotEnv
 from zowpy.config.network import NetworkConfig, ProxyConfig
@@ -52,6 +53,7 @@ from .processors.presence import PresenceProcessor
 from .processors.iq import IQProcessor
 from .processors.notification import NotificationProcessor
 from .processors.group import GroupProcessor
+from .processors.ib import IbProcessor
 from .processors.stream_error import StreamErrorProcessor
 from .processors.iq_response import IQResponseProcessor
 from .encryption.receiver import EncryptionReceiver
@@ -67,6 +69,7 @@ from .handlers.contact_handler import ContactHandler
 from .handlers.presence_handler import PresenceHandler
 from .handlers.profile_handler import ProfileHandler
 from .handlers.integrity_handler import IntegrityHandler
+from .handlers.config_handler import ConfigHandler
 
 # Builders
 from .builders.prekey_builder import PrekeyBuilder
@@ -279,9 +282,10 @@ class WhatsAppClient:
             else:
                 logger.info("✓ TCP socket conectado (direto)")
             
-            # 4. Envia header WA\x06\x03
-            logger.info("Enviando header WA\\x06\\x03...")
-            await self.connection.send_header()
+            # 4. Envia header WA\x06\x03 (e EDGE_HEADER se disponível)
+            logger.info("Enviando header...")
+            edge_routing_info = self.config.edge_routing_info if self.config else None
+            await self.connection.send_header(edge_routing_info=edge_routing_info)
             logger.info("✓ Header enviado")
             
             # 5. Cria stream
@@ -356,6 +360,20 @@ class WhatsAppClient:
                 logger.debug("Presence 'available' enviado após login (igual ao zowsuplib)")
             except Exception as e:
                 logger.warning(f"Erro ao enviar presence após login: {e}")
+
+            try:
+                async with self.session_maker() as session:
+                    account = await Account.get_by_phone(session, self.account_id)
+                    if not account.is_initialized:
+                        await self.config_handler.get_config()
+                        account.is_initialized = True
+                        await session.commit()
+                        logger.info("✓ Config obtida")
+
+
+
+            except Exception as e:
+                logger.warning(f"Erro ao definir config auto_trust: {e}")
             
         except Exception as e:
             logger.error(f"Erro ao conectar: {e}", exc_info=True)
@@ -648,6 +666,8 @@ class WhatsAppClient:
         self._node_router.register(group_processor)
         self._group_processor = group_processor
         
+        self._node_router.register(IbProcessor(self.events))
+        
         # Inicializa handlers públicos (serão configurados após conexão)
         # Os handlers precisam de send_iq_fn e send_presence_fn que só existem após conexão
         # Será chamado em _initialize_handlers() após conexão
@@ -713,8 +733,8 @@ class WhatsAppClient:
         useragent = UserAgentConfig(
             platform=platform_id,
             app_version=AppVersionConfig(self.bot_env.deviceEnv.getVersion()),
-            mcc=mcc or "724",
-            mnc=mnc or "05",
+            mcc=mcc or "000",
+            mnc=mnc or "000",
             os_version=self.bot_env.deviceEnv.getOSVersion(),
             manufacturer=self.bot_env.deviceEnv.getManufacturer(),
             device=self.bot_env.deviceEnv.getDeviceName(),
@@ -927,8 +947,6 @@ class WhatsAppClient:
                 
                 if account:
                     account.is_logged_in = True
-                    account.is_initialized = True
-                    
                     # Atualiza pushname se disponível no config
                     if self.config and self.config.pushname:
                         account.pushname = self.config.pushname
@@ -1178,6 +1196,11 @@ class WhatsAppClient:
             iq_response_processor=self._iq_response_processor
         )
         
+        self.config_handler = ConfigHandler(
+            send_iq_fn=send_iq_fn,
+            iq_response_processor=self._iq_response_processor
+        )
+        
         # Atualiza EncryptionReceiver com funções disponíveis
         if self._encryption_receiver:
             self._encryption_receiver._get_keys = self._get_keys_for_recipient
@@ -1207,9 +1230,20 @@ class WhatsAppClient:
 
             self._group_processor._send_ack = _send_ack_group
 
-        # IQProcessor: got_pong para pongs w:p não registrados (opcional)
         if self._iq_processor:
             self._iq_processor._got_pong_fn = self._got_pong
+
+        # Handler para edge_routing
+        async def handle_edge_routing(data: dict):
+            routing_info = data.get("routing_info")
+            if routing_info and self.profile:
+                config = await self.profile.config
+                if config.edge_routing_info != routing_info:
+                    config.edge_routing_info = routing_info
+                    await self.profile.write_config(config)
+                    logger.info("edge_routing_info atualizado e salvo")
+
+        self.events.on("ib:edge_routing", handle_edge_routing)
     
     async def _handle_iq(self, node: ProtocolNode) -> None:
         """Processa IQ recebido."""
@@ -1329,10 +1363,7 @@ class WhatsAppClient:
 
         if not self.transport:
             raise RuntimeError("Transport não disponível")
-        
-        # Validação da estrutura (para debug)
-        if logger._core.min_level <= 10:  # DEBUG
-            self._validate_node_structure(node)
+
         
         # Codifica node
         encoded_bytes = await self.coder.encoder.encode(node)
@@ -1388,7 +1419,8 @@ class WhatsAppClient:
         self,
         to: str,
         text: str,
-        message_id: Optional[str] = None
+        message_id: Optional[str] = None,
+        options: Optional[dict] = None
     ) -> str:
         """
         Garante que contato está sincronizado antes de enviar mensagem.
@@ -1400,6 +1432,7 @@ class WhatsAppClient:
             to: JID do destinatário
             text: Texto da mensagem
             message_id: ID da mensagem (gerado se None)
+            options: Opções adicionais (quoted_message, mentions, etc)
         
         Returns:
             ID da mensagem enviada
@@ -1412,9 +1445,6 @@ class WhatsAppClient:
         # Normaliza e corrige JID de grupo se necessário antes da normalização
         to = self._normalize_and_fix_group_jid(to)
         
-        # if self._is_group_jid(to):
-        #     return await self._send_to_group(to, text, message_id)
-
         # 3. Normaliza JID
         from ..utils.jid import normalize
         normalized_jid = normalize(to)
@@ -1438,10 +1468,11 @@ class WhatsAppClient:
             # 8. Sincroniza contato
             if self.contact_handler:
                 try:
+                    # sync_contacts agora automatiza o trust_contact internamente
                     result = await self.contact_handler.sync_contacts([phone], mode="delta", context="interactive")
                     logger.info(f"Contato {normalized_jid} sincronizado com sucesso")
-                    
-                    return await self._send_text_direct(to, text, message_id)
+
+                    return await self._send_text_direct(to, text, message_id, options=options)
                 except Exception as e:
                     logger.error(f"Erro ao sincronizar contato {normalized_jid}: {e}")
                     # Remove contato se sincronização falhou
@@ -1454,28 +1485,57 @@ class WhatsAppClient:
                 logger.warning("ContactHandler não disponível, enviando sem sincronizar")
                 # Atualiza timestamp mesmo sem sincronizar
                 self._last_sync_time[normalized_jid] = time.time()
-                return await self._send_text_direct(to, text, message_id)
+                return await self._send_text_direct(to, text, message_id, options=options)
         else:
             logger.debug(f"Contato {normalized_jid} já existe nos contatos")
             # Aplica rate limiting mesmo para contatos conhecidos
-            return await self._send_text_direct(to, text, message_id)
+            return await self._send_text_direct(to, text, message_id, options=options)
 
     
+    async def send_text(
+        self,
+        to: str,
+        text: str,
+        message_id: Optional[str] = None,
+        options: Optional[dict] = None
+    ) -> str:
+        """
+        Envia mensagem de texto seguindo o fluxo completo do zowsuplib.
+        
+        Suporta mensagens de texto estendidas com contexto (citações, menções, etc).
+        
+        Args:
+            to: JID do destinatário (pode ser múltiplos separados por ",")
+            text: Texto da mensagem
+            message_id: ID da mensagem (gerado se None)
+            options: Opções adicionais (quoted_message, mentions, etc)
+        
+        Returns:
+            ID da mensagem enviada
+        """
+        if not self._authenticated:
+            raise RuntimeError("Not authenticated")
+
+        # Destino único
+        return await self.assure_contacts_and_send(to, text, message_id, options=options)
+
     async def _send_text_direct(
         self,
         to: str,
         text: str,
-        message_id: Optional[str] = None
+        message_id: Optional[str] = None,
+        options: Optional[dict] = None
     ) -> str:
         """
         Envia mensagem de texto diretamente (sem validações de contato).
         
-        Este método é chamado por assure_contacts_and_send() após validações.
+        Suporta mensagens de texto estendidas com contexto (citações, menções, etc).
         
         Args:
             to: JID do destinatário
             text: Texto da mensagem
             message_id: ID da mensagem (gerado se None)
+            options: Opções adicionais (quoted_message, mentions, etc)
         
         Returns:
             ID da mensagem enviada
@@ -1493,122 +1553,124 @@ class WhatsAppClient:
             message_id = ProtocolNode._generateId()
             logger.debug(f"Generated message ID: {message_id}")
         
-        # 2. Cria ExtendedTextMessageProtocolEntity
+        # 2. Prepara context_info e attributes
+        options = options or {}
+        context_info = self._prepare_context_info(options)
+
+        participants = options.get("participants")
+
+
+        logger.info(f"context_info: {context_info}")
+        
+        from ..protocol.entities.attributes import MessageMetaAttributes, ExtendedTextAttributes
         from ..protocol.entities import ExtendedTextMessageProtocolEntity
-        from ..proto.e2e_pb2 import Message as MessagePb
         
-        # Cria entidade de mensagem estendida
-        message_entity = ExtendedTextMessageProtocolEntity(
-            to=to_jid,
+        # Cria atributos de texto estendido
+        extended_text_attrs = ExtendedTextAttributes(
             text=text,
-            message_id=message_id
+            context_info=context_info,
+            matched_text=options.get("matched_text"),
+            canonical_url=options.get("canonical_url"),
+            description=options.get("description"),
+            title=options.get("title"),
+            jpeg_thumbnail=options.get("jpeg_thumbnail"),
+            text_argb=options.get("text_argb"),
+            background_argb=options.get("background_argb"),
+            font=options.get("font"),
+            preview_type=options.get("preview_type",0),
+            invite_link_group_type_v2=options.get("invite_link_group_type_v2",0),
+        )
+
+
+        normalized_to = Jid.normalize(to)
+
+        # Cria metadados
+        meta = MessageMetaAttributes(
+            id=MessageMetaAttributes.ID_ANDROID,
+            recipient=normalized_to,
+            timestamp=int(time.time()),
+            # participant=normalized_to
         )
         
-        # 3. Gera protobuf usando o método to_protobuf() da entidade
-        # Cria Message protobuf completo
-        message_pb = MessagePb()
-        
-        # Adiciona ExtendedTextMessage ao protobuf
-        ext_text = message_entity.to_protobuf()
-        message_pb.extended_text_message.CopyFrom(ext_text)
-        
-        # Serializa protobuf
-        proto_bytes = message_pb.SerializeToString()
-        logger.debug(f"Protobuf serializado: {len(proto_bytes)} bytes")
-        
-        # 4. Adiciona node <proto> à entidade (ExtendedTextMessageProtocolEntity cria automaticamente se proto_data for fornecido)
-        # Mas como já criamos a entidade, adicionamos manualmente
-        from ..protocol.entities import ProtocolEntity
-        proto_node = ProtocolEntity(
-            tag="proto",
-            attributes={"mediatype": "text"},
-            data=proto_bytes
+        # 3. Cria ExtendedTextMessageProtocolEntity
+        message_entity = ExtendedTextMessageProtocolEntity(
+            extended_text_attributes=extended_text_attrs,
+            meta_attributes=meta
         )
-        message_entity.children.append(proto_node)
         
-        # 5. Usa a entidade diretamente (herda de ProtocolNode)
-        # ExtendedTextMessageProtocolEntity herda de ProtocolEntity que herda de ProtocolNode
-        message_node = message_entity
+        # 4. Converte para ProtocolNode (isso já gera o <proto> internamente)
+        message_node = message_entity.to_protocol_node()
+
+        logger.debug(f"Message node: {message_node}")
         
-        # 6. Processa e envia mensagem
+        # 5. Processa e envia mensagem
         await self.process_plaintext_node_and_send(message_node)
         
         logger.info(f"Mensagem enviada para {to_jid}: {text[:50]}...")
         return message_id
-    
-    async def process_plaintext_node_and_send(
-        self,
-        node: ProtocolNode,
-        retry_receipt_entity: Optional[ProtocolNode] = None
-    ) -> None:
-        """
-        Processa node de mensagem plaintext e envia.
-        
-        Equivalente ao processPlaintextNodeAndSend() do zowsuplib.
-        
-        Args:
-            node: ProtocolNode da mensagem (com <proto> ainda não criptografado)
-            retry_receipt_entity: Receipt de retry (se for reenvio)
-        """
-        to_jid = node.get_attribute("to")
-        proto_node = node.get_child("proto")
-        if not proto_node:
-            raise ValueError("Node de mensagem deve ter <proto>")
-        proto_bytes = proto_node.data
-        
-        # Verifica múltiplos destinos ("," em node["to"])
-        if "," in to_jid:
-            # Múltiplos destinos - split e envia para todos
-            jids = [j.strip() for j in to_jid.split(",")]
-            logger.info(f"Múltiplos destinos detectados: {len(jids)} destinatários")
-            # Define o primeiro como destino principal
-            node.set_attribute("to", jids[0])
-            await self.ensure_sessions_and_send_to_contacts(node, jids)
-        else:
-            # Destino único
-            account = to_jid.split('@')[0]
-            is_group = self._is_group_jid(to_jid)
-            
-            if is_group:
-                # Envia para grupo
-                await self._send_to_group(node, proto_bytes, retry_receipt_entity)
-            else:
-                jids = [to_jid]
-                await self.ensure_sessions_and_send_to_contacts(node, jids)
-              
-    async def send_text(
-        self,
-        to: str,
-        text: str,
-        message_id: Optional[str] = None
-    ) -> str:
-        """
-        Envia mensagem de texto seguindo o fluxo completo do zowsuplib.
-        
-        Fluxo:
-        1. Validações de segurança (conta restrita, limite diário)
-        2. Verifica e sincroniza contato se necessário (assure_contacts_and_send)
-        3. Cria node de mensagem com <proto> (sem criptografar ainda)
-        4. Processa mensagem (process_plaintext_node_and_send)
-        5. Sincroniza dispositivos se necessário
-        6. Verifica sessões e obtém chaves se necessário
-        7. Criptografa para cada dispositivo
-        8. Adiciona reporting token, device-identity, etc.
-        9. Envia
-        
-        Args:
-            to: JID do destinatário (pode ser múltiplos separados por ",")
-            text: Texto da mensagem
-            message_id: ID da mensagem (gerado se None)
-        
-        Returns:
-            ID da mensagem enviada
-        """
-        if not self._authenticated:
-            raise RuntimeError("Not authenticated")
 
-        # Destino único
-        return await self.assure_contacts_and_send(to, text, message_id)
+    def _prepare_context_info(self, options: dict):
+        """Prepara ContextInfoAttributes baseado nas opções."""
+        from ..protocol.entities.attributes import (
+            ContextInfoAttributes, 
+            MessageAttributes,
+            MessageMetaAttributes
+        )
+        
+        context_info = ContextInfoAttributes()
+        
+        # Trata mensagem citada (quoted)
+        quoted = options.get("quoted_message")
+        if quoted:
+            # Se quoted for um ProtocolNode ou entidade, extrai dados
+            if hasattr(quoted, "get_attribute"):
+                context_info.stanza_id = quoted.get_attribute("id")
+                context_info.participant = quoted.get_attribute("participant") or quoted.get_attribute("from")
+                # Simplificação: assume que é uma mensagem de texto citada
+                context_info.quoted_message = MessageAttributes(conversation="...") # TODO: Extrair texto real
+        
+        # Trata menções
+        mentions = options.get("mentions")
+        if mentions:
+            context_info.mentioned_jid = mentions
+         
+        # Configura disappearing mode
+        if "disappearing" in options:
+            try:
+                disappearing_days = int(options["disappearing"])
+                context_info.expiration = disappearing_days * 86400
+                context_info.ephemeral_setting_timestamp = int(time.time())
+                context_info.disappearing_mode = DisappearingModeAttributes(
+                    initiator=DisappearingModeAttributes.INITIATOR_CHANGED_IN_CHAT,
+                    trigger=DisappearingModeAttributes.TRIGGER_CHAT_SETTING,
+                    initiatedByMe=True
+                )
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Valor inválido para 'disappearing': {options.get('disappearing')}, usando padrão")
+                context_info.expiration = 0
+        else:
+            context_info.expiration = 0
+            context_info.ephemeral_setting_timestamp = int(time.time())
+            context_info.disappearing_mode = DisappearingModeAttributes(
+                initiator=DisappearingModeAttributes.INITIATOR_CHANGED_IN_CHAT,
+                trigger=DisappearingModeAttributes.TRIGGER_UNKNOWN,
+                initiatedByMe=None
+            )
+
+        # Configura source tracking
+        if "source" in options:
+            if options["source"] == "random":
+                srcs = ["contact_card", "contact_search", "global_search_new_chat", "phone_number_hyperlink"]
+                source = random.choice(srcs)
+            else:
+                source = options["source"]
+
+            context_info.entry_point_conversion_app = "whatsapp"
+            context_info.entry_point_conversion_source = source
+            context_info.entry_point_conversion_delay_seconds = random.randint(5, 13)
+
+            
+        return context_info
     
     async def send_image(
         self,
@@ -2470,7 +2532,7 @@ class WhatsAppClient:
         jid = Jid.normalize(to_jid)
         phone = jid.split('@')[0] if '@' in jid else jid
 
-        isNewContact = self.axolotl_manager._store.isNewContact(jid)
+        isNewContact = await self.axolotl_manager._store.isNewContact(jid)
         if isNewContact:
             await self.axolotl_manager._store.addContact(jid)
 
@@ -2503,6 +2565,23 @@ class WhatsAppClient:
         """
         logger.debug(f"ensure_sessions_and_send_to_contacts: {len(jids)} JIDs, retry_count={retry_count}")
         
+        # Sincroniza dispositivos antes de verificar sessões
+        # Isso garante que temos a lista atualizada de dispositivos do destinatário
+        try:
+            logger.debug(f"Sincronizando dispositivos para {jids}")
+            synced_jids = await self.contact_handler.sync_devices(jids)
+            if synced_jids:
+                logger.debug(f"Dispositivos sincronizados: {synced_jids}")
+                
+                for jid in synced_jids:
+                    normalized_jid = jid.split("@")[0].split(":")[0]
+                    jid = f"{normalized_jid}@{YowConstants.WHATSAPP_SERVER}"
+                    if normalized_jid not in jids:
+                        jids.append(jid)
+
+        except Exception as e:
+            logger.warning(f"Falha ao sincronizar dispositivos para {jids}: {e}. Continuando com JIDs originais.")
+        
         # Obtém proto_bytes do node
         proto_node = message_node.get_child("proto")
         if not proto_node:
@@ -2528,6 +2607,9 @@ class WhatsAppClient:
             
             # Adiciona JIDs com sucesso
             all_jids.extend(success_jids)
+
+            await self.contact_handler.trust_contact(success_jids)
+            logger.info(f"Contato {success_jids} marcado como confiável")
             
             # Envia para todos os JIDs que têm sessão agora
             if len(all_jids) > 0:
@@ -2597,6 +2679,14 @@ class WhatsAppClient:
         if not proto_node:
             raise ValueError("Node de mensagem deve ter <proto>")
         proto_bytes = proto_node.data
+
+        logger.info(
+            f"Sending to {len(jids)} contacts with sessions: {jids}"
+        )
+
+        logger.info(
+            f"Proto bytes: {proto_bytes}"
+        )
         
         # Obtém mediatype do proto node
         mediatype = proto_node.get_attribute("mediatype") if proto_node else "text"
@@ -2636,6 +2726,18 @@ class WhatsAppClient:
                 to_jid_for_node = f"{recipient_id}@{YowConstants.WHATSAPP_SERVER}"
             
             # Criptografa para este dispositivo (usa recipient_id interno)
+
+            logger.debug(f"Criptografando para {recipient_id}")
+            logger.debug(f"Proto bytes: {proto_bytes}")
+            logger.debug(f"Mediatype: {mediatype}")
+            logger.debug(f"Retry count: {retry_count}")
+            logger.debug(f"To jid for node: {to_jid_for_node}")
+            logger.debug(f"Participant: {participant}")
+            logger.debug(f"Enc entities: {enc_entities}")
+            logger.debug(f"Tctoken: {tctoken}")
+            logger.debug(f"Message node: {message_node}")
+
+
             ciphertext = await self.axolotl_manager.encrypt(recipient_id, proto_bytes)
             
             # Identifica tipo
@@ -3549,19 +3651,32 @@ class WhatsAppClient:
         if not self._authenticated:
             raise RuntimeError("Not authenticated")
         
-        from ..protocol.entities import PresenceProtocolEntity
+        from ..protocol.entities import OutgoingChatstateProtocolEntity, ChatstateProtocolEntity
         
         # Normaliza JID
         to_jid = to_whatsapp_jid(to)
+        participant = None
+
+        is_group = self._is_group_jid(to_jid)
+        if is_group:
+            to_jid = to_jid.replace("@g.us", "@s.whatsapp.net")
+            participant = to_whatsapp_jid(self.account_id)
+        else:
+            to_jid = to_jid.replace("@s.whatsapp.net", "@g.us")
+
+
+        logger.debug(f"Iniciando indicador de typing para {to_jid} e participant {participant}")
+
         
-        # Cria presence de typing
-        presence = PresenceProtocolEntity(
-            presence_type=PresenceProtocolEntity.TYPE_COMPOSING,
-            to=to_jid
+        # Cria chatstate de typing
+        chatstate = OutgoingChatstateProtocolEntity(
+            ChatstateProtocolEntity.STATE_COMPOSING,
+            to=to_jid,
+            participant=participant
         )
         
         logger.debug(f"Enviando indicador de typing para {to_jid}")
-        await self._send_protocol_node(presence)
+        await self._send_protocol_node(chatstate.to_protocol_node())
     
     async def stop_typing(self, to: str) -> None:
         """
@@ -3573,19 +3688,27 @@ class WhatsAppClient:
         if not self._authenticated:
             raise RuntimeError("Not authenticated")
         
-        from ..protocol.entities import PresenceProtocolEntity
+        from ..protocol.entities import OutgoingChatstateProtocolEntity, ChatstateProtocolEntity
         
-        # Normaliza JID
+      # Normaliza JID
         to_jid = to_whatsapp_jid(to)
-        
-        # Cria presence de paused
-        presence = PresenceProtocolEntity(
-            presence_type=PresenceProtocolEntity.TYPE_PAUSED,
-            to=to_jid
+        participant = None
+
+        is_group = self._is_group_jid(to)
+        if is_group:
+            to_jid = to_jid.replace("@s.whatsapp.net", "@g.u")
+            participant = to_whatsapp_jid(self.account_id)
+
+        logger.debug(f"Parando indicador de typing para {to_jid} e participant {participant}")
+        # Cria chatstate de paused
+        chatstate = OutgoingChatstateProtocolEntity(
+            ChatstateProtocolEntity.STATE_PAUSED,
+            to=to_jid,
+            participant=participant
         )
         
         logger.debug(f"Parando indicador de typing para {to_jid}")
-        await self._send_protocol_node(presence)
+        await self._send_protocol_node(chatstate.to_protocol_node())
     
     def is_connected(self) -> bool:
         """Verifica se está conectado e autenticado"""
@@ -4082,6 +4205,47 @@ class WhatsAppClient:
             # Processa como mensagem normal
             await self.process_plaintext_node_and_send(message_node)
     
+
+    async def process_plaintext_node_and_send(
+        self,
+        node: ProtocolNode,
+        retry_receipt_entity: Optional[ProtocolNode] = None
+    ) -> None:
+        """
+        Processa node de mensagem plaintext e envia.
+        
+        Equivalente ao processPlaintextNodeAndSend() do zowsuplib.
+        
+        Args:
+            node: ProtocolNode da mensagem (com <proto> ainda não criptografado)
+            retry_receipt_entity: Receipt de retry (se for reenvio)
+        """
+        to_jid = node.get_attribute("to")
+        proto_node = node.get_child("proto")
+        if not proto_node:
+            raise ValueError("Node de mensagem deve ter <proto>")
+        proto_bytes = proto_node.data
+        
+        # Verifica múltiplos destinos ("," em node["to"])
+        if "," in to_jid:
+            # Múltiplos destinos - split e envia para todos
+            jids = [j.strip() for j in to_jid.split(",")]
+            logger.info(f"Múltiplos destinos detectados: {len(jids)} destinatários")
+            # Define o primeiro como destino principal
+            node.set_attribute("to", jids[0])
+            await self.ensure_sessions_and_send_to_contacts(node, jids)
+        else:
+            # Destino único
+            account = to_jid.split('@')[0]
+            is_group = self._is_group_jid(to_jid)
+            
+            if is_group:
+                # Envia para grupo
+                await self._send_to_group(node, proto_bytes, retry_receipt_entity)
+            else:
+                jids = [to_jid]
+                await self.ensure_sessions_and_send_to_contacts(node, jids)
+              
     async def _process_pending_messages(
         self,
         from_jid: str,

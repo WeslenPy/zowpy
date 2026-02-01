@@ -6,34 +6,7 @@ Baseado em zowsuplib/yowsup/layers/protocol_messages/protocolentities/attributes
 
 from typing import Optional
 
-
-class ContextInfoAttributes:
-    """
-    Atributos de contexto para mensagens.
-    
-    Representa informações de contexto como mensagens citadas, encaminhamento, etc.
-    Por enquanto, implementação simplificada - pode ser expandida conforme necessário.
-    """
-    def __init__(self, **kwargs):
-        self._stanza_id = kwargs.get("stanza_id")
-        self._participant = kwargs.get("participant")
-        self._quoted_message = kwargs.get("quoted_message")
-        self._remote_jid = kwargs.get("remote_jid")
-        self._mentioned_jid = kwargs.get("mentioned_jid", [])
-        self._edit_version = kwargs.get("edit_version")
-        self._revoke_message = kwargs.get("revoke_message")
-        self._conversion_delay_seconds = kwargs.get("conversion_delay_seconds")
-        self._forwarding_score = kwargs.get("forwarding_score")
-        self._is_forwarded = kwargs.get("is_forwarded")
-        self._expiration = kwargs.get("expiration")
-        self._ephemeral_setting_timestamp = kwargs.get("ephemeral_setting_timestamp")
-        self._external_ad_reply = kwargs.get("external_ad_reply")
-        self._entry_point_conversion_source = kwargs.get("entry_point_conversion_source")
-        self._entry_point_conversion_app = kwargs.get("entry_point_conversion_app")
-        self._entry_point_conversion_delay_seconds = kwargs.get("entry_point_conversion_delay_seconds")
-        self._disappearing_mode = kwargs.get("disappearing_mode")
-        self._action_link = kwargs.get("action_link")
-        self._business_message_forward_info = kwargs.get("business_message_forward_info")
+from zowpy.protocol.entities.attributes.attributes_context_info import ContextInfoAttributes
 
 
 class MediaAttributes:

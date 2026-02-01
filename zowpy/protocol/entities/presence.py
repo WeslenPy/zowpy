@@ -17,8 +17,6 @@ class PresenceProtocolEntity(ProtocolEntity):
     
     TYPE_AVAILABLE = "available"
     TYPE_UNAVAILABLE = "unavailable"
-    TYPE_COMPOSING = "composing"
-    TYPE_PAUSED = "paused"
     
     def __init__(
         self,

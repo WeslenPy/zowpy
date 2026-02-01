@@ -128,6 +128,8 @@ class GroupHandler:
             Exception: Se obtenção falhar
         """
         logger.info(f"Obtendo informações do grupo: {group_jid}")
+
+        group_jid = group_jid if "@" in group_jid else f"{group_jid}@g.us"
         
         iq_node = GroupBuilder.build_get_info(group_jid)
         iq_id = iq_node.get_attribute("id")

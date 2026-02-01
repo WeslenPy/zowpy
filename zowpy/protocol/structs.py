@@ -105,51 +105,7 @@ class ProtocolNode:
         
         return id
     
-    def get_attribute(self, key: str) -> Optional[str]:
-        """Obtém atributo do node."""
-        return self.attributes.get(key)
 
-
-    def remove_attribute(self, key: str) -> None:
-        """Remove atributo do node."""
-        self.attributes.pop(key, None)
-
-
-    def get_all_children(self,tag = None):
-        ret = []
-        if tag is None:
-            return self.children
-
-        for c in self.children:
-            if tag == c.tag:
-                ret.append(c)
-
-        return ret
-
-    
-    def get_child(self, index_or_tag: Union[int, str]) -> Optional['ProtocolNode']:
-        """Obtém filho do node por índice ou tag."""
-        if isinstance(index_or_tag, int):
-            if 0 <= index_or_tag < len(self.children):
-                return self.children[index_or_tag]
-            return None
-        else:
-            # Busca por tag
-            for child in self.children:
-                if isinstance(child, ProtocolNode) and child.tag == index_or_tag:
-                    return child
-            return None
-    
-    def has_children(self) -> bool:
-        """Verifica se tem filhos."""
-        return len(self.children) > 0
-        
-    def add_child(self, childNode):
-        self.children.append(childNode)
-
-    def add_children(self, children):
-        for c in children:
-            self.add_child(c)
     
     def to_dict(self) -> Dict[str, Any]:
         """Converte node para dicionário."""
@@ -171,4 +127,112 @@ class ProtocolNode:
             children=children,
             data=node_data,
         )
+
+
+    def getData(self):
+        return self.data
+
+    def setData(self, data):
+        self.data = data
+
+
+    @staticmethod
+    def tagEquals(node,string):
+        return node is not None and node.tag is not None and node.tag == string
+
+
+    @classmethod
+    def require(node,string):
+        if not ProtocolNode.tagEquals(node,string):
+            raise Exception("failed require. string: "+string);
+
+
+    def __getitem__(self, key):
+        return self.getAttributeValue(key)
+
+    def __setitem__(self, key, val):
+        self.setAttribute(key, val)
+
+    def __delitem__(self, key):
+        self.removeAttribute(key)
+
+
+    def getChild(self,identifier):
+
+        if type(identifier) == int:
+            if len(self.children) > identifier:
+                return self.children[identifier]
+            else:
+                return None
+
+        for c in self.children:
+            if identifier == c.tag:
+                return c
+
+        return None
+
+
+    def get_child(self, identifier):
+        return self.getChild(identifier)
+
+    def hasChildren(self):
+        return len(self.children) > 0
+
+    def has_children(self):
+        return self.hasChildren()
+
+    def addChild(self, childNode):
+        self.children.append(childNode)
+
+    def add_child(self, childNode):
+        self.addChild(childNode)
+
+    def addChildren(self, children):
+        for c in children:
+            self.addChild(c)
+
+    def add_children(self, childNode):
+        self.addChildren(childNode)
+
+    def getAttributeValue(self,string):
+        try:
+            return self.attributes[string]
+        except KeyError:
+            return None
+
+    def get_attribute(self, key):
+        return self.getAttributeValue(key)
+
+    def get_attribute_value(self, key):
+        return self.getAttributeValue(key)
+
+    def removeAttribute(self, key):
+        if key in self.attributes:
+            del self.attributes[key]
+
+
+    def remove_attribute(self, key):
+        self.removeAttribute(key)
+
+    def setAttribute(self, key, value):
+        self.attributes[key] = value
+
+    def set_attribute(self, key, value):
+        self.setAttribute(key, value)
+
+    def getAllChildren(self,tag = None):
+        ret = []
+        if tag is None:
+            return self.children
+
+        for c in self.children:
+            if tag == c.tag:
+                ret.append(c)
+
+        return ret
+
+
+
+    def get_all_children(self, tag = None):
+        return self.getAllChildren(tag)
 

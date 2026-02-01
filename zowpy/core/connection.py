@@ -13,6 +13,7 @@ from loguru import logger
 
 # Header do protocolo WhatsApp
 WA_HEADER = b'WA\x06\x03'
+EDGE_HEADER = b'ED\x00\x01'
 
 
 class ConnectionError(Exception):
@@ -392,11 +393,11 @@ class AsyncConnection:
         except Exception as e:
             raise ConnectionError(f"Erro ao conectar via proxy: {e}") from e
     
-    async def send_header(self) -> None:
+    async def send_header(self, edge_routing_info: Optional[bytes] = None) -> None:
         """
-        Envia header WA\x06\x03 após conexão.
+        Envia header (EDGE_HEADER + routing_info se disponível, depois WA_HEADER) após conexão.
         
-        Baseado no zowsuplib: NoiseLayer.toLower(self.HEADER)
+        Baseado no zowsuplib: NoiseLayer.toLower(self.HEADER) e EDGE_HEADER flow.
         """
         if self._header_sent:
             return
@@ -405,9 +406,23 @@ class AsyncConnection:
             raise ConnectionError("Writer não disponível")
         
         try:
+            # 1. Se tiver edge_routing_info, envia EDGE_HEADER + routing_info segmentado
+            if edge_routing_info:
+                logger.info("Enviando EDGE_HEADER e routing_info")
+                # Envia EDGE_HEADER bruto
+                self.writer.write(EDGE_HEADER)
+                
+                # Envia routing_info como segmento (3 bytes tamanho + dados)
+                size_bytes = struct.pack('>I', len(edge_routing_info))[1:]
+                self.writer.write(size_bytes + edge_routing_info)
+                await self.writer.drain()
+                logger.debug(f"EDGE_HEADER e routing_info ({len(edge_routing_info)} bytes) enviados")
+
+            # 2. Envia WA_HEADER bruto
             logger.debug("Enviando header WA\\x06\\x03")
             self.writer.write(WA_HEADER)
             await self.writer.drain()
+            
             self._header_sent = True
             logger.info("Header WA\\x06\\x03 enviado")
         except Exception as e:

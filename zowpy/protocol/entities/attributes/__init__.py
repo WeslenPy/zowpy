@@ -13,6 +13,7 @@ from .attributes_document import DocumentAttributes
 from .attributes_sticker import StickerAttributes
 from .attributes_message_meta import MessageMetaAttributes
 from .attributes_message import MessageAttributes
+from .attributes_extendedtext import ExtendedTextAttributes
 from .converter import AttributesConverter
 
 __all__ = [
@@ -26,6 +27,7 @@ __all__ = [
     "StickerAttributes",
     "MessageMetaAttributes",
     "MessageAttributes",
+    "ExtendedTextAttributes",
     "AttributesConverter",
 ]
 

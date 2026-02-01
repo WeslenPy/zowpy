@@ -89,7 +89,6 @@ class MessageBuilder:
         )
         
         # 7. Cria node de mensagem completo
-        # CORREÇÃO: zowsuplib não adiciona atributo "t"
         message_node = ProtocolNode(
             tag="message",
             attributes={

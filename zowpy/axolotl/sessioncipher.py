@@ -55,6 +55,20 @@ class SessionCipher:
             items = sessionState.getUnacknowledgedPreKeyMessageItems()
             localRegistrationid = sessionState.getLocalRegistrationId()
 
+
+            logger.debug(f"Local registration id: {localRegistrationid}")
+            logger.debug(f"Pre key id: {items.getPreKeyId()}")
+            logger.debug(f"Signed pre key id: {items.getSignedPreKeyId()}")
+            logger.debug(f"Base key: {items.getBaseKey()}")
+            logger.debug(f"Local identity key: {sessionState.getLocalIdentityKey()}")
+            logger.debug(f"Ciphertext message: {ciphertextMessage}")
+            logger.debug(f"Session version: {sessionVersion}")
+            logger.debug(f"Sender ephemeral: {senderEphemeral}")
+            logger.debug(f"Chain key: {chainKey}")
+            logger.debug(f"Message keys: {messageKeys}")
+            logger.debug(f"Previous counter: {previousCounter}")
+            logger.debug(f"Session state: {sessionState}")
+
             ciphertextMessage = PreKeyWhisperMessage(sessionVersion, localRegistrationid, items.getPreKeyId(),
                                                     items.getSignedPreKeyId(), items.getBaseKey(),
                                                     sessionState.getLocalIdentityKey(),

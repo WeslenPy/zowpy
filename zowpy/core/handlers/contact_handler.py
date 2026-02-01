@@ -10,6 +10,7 @@ from loguru import logger
 
 from ...protocol.structs import ProtocolNode
 from ...utils.jid import to_whatsapp_jid
+from ...protocol.entities.iq_trust_contact import TrustContactIqProtocolEntity
 from ..builders.contact_builder import ContactBuilder
 from ..processors.iq_response import IQResponseProcessor
 
@@ -39,7 +40,7 @@ class ContactHandler:
     async def sync_contacts(
         self,
         numbers: List[str],
-        mode: str = ContactBuilder.MODE_FULL,
+        mode: str = ContactBuilder.MODE_DELTA,
         context: str = ContactBuilder.CONTEXT_INTERACTIVE
     ) -> Dict[str, Any]:
         """
@@ -107,25 +108,21 @@ class ContactHandler:
 
 
                 """
-                <iq from="201208868278@s.whatsapp.net" type="result" id="FE04618F50CD591EA67273248ABBC9D3">
-                    <usync sid="134131020710000000" index="0" last="true" mode="delta" context="interactive">
-                        <result>
+                <iq id="3E13BF54FB6C05A6D7812A94C82079ED" type="get" xmlns="usync">
+                <usync sid="134143021780000000" index="0" last="true" mode="delta" context="interactive">
+                    <query>
                         <lid />
                         <status />
-                        <contact integrity="pass" version="1768623975512747" />
-                        </result>
-                        <list>
-                        <user jid="559885700260@s.whatsapp.net">
-                            <lid val="5356260450362:0@lid" />
-                            <status t="1762827573">
-                            0x536f66747761726520446576656c6f706572
-                            </status>
-                            <contact type="in">
-                            0x2b353539383835373030323630
+                        <contact />
+                    </query>
+                    <list>
+                        <user>
+                            <contact>
+                                0x2b353539383835373030323630
                             </contact>
                         </user>
-                        </list>
-                    </usync>
+                    </list>
+                </usync>
                 </iq>
                 """
 
@@ -174,6 +171,16 @@ class ContactHandler:
 
                 logger.info(f"On Contact Handler: {result}")
                 
+                # AUTOMAÇÃO: Confia nos contatos sincronizados com sucesso
+                if in_numbers:
+                    try:
+                        # Converte números para JIDs completos para o TrustContact
+                        jids_to_trust = [to_whatsapp_jid(num) for num in in_numbers]
+                        asyncio.create_task(self.trust_contact(jids_to_trust))
+                        logger.info(f"Automação: Solicitado trust para {len(jids_to_trust)} contatos")
+                    except Exception as e:
+                        logger.warning(f"Erro na automação de trust_contact: {e}")
+
                 # Extrai números in e out
                 # A estrutura pode variar, mas geralmente está em nodes filhos
                 # Por enquanto, retorna estrutura básica
@@ -195,8 +202,8 @@ class ContactHandler:
     async def sync_devices(
         self,
         jids: List[str],
-        mode: str = ContactBuilder.MODE_FULL,
-        context: str = ContactBuilder.CONTEXT_INTERACTIVE
+        mode: str = ContactBuilder.MODE_QUERY,
+        context: str = ContactBuilder.CONTEXT_MESSAGE
     ) -> List[str]:
         """
         Sincroniza dispositivos de contatos.
@@ -214,6 +221,22 @@ class ContactHandler:
         """
         # CORREÇÃO: Normaliza JIDs antes de usar
         # Aceita números simples, JIDs parciais ou completos
+
+
+        """
+        <iq id="63A60F1FD538E4E57CB2DB291C8A9407" type="get" xmlns="usync">
+        <usync sid="134143022990000000" index="0" last="true" mode="query" context="message">
+            <query>
+                <lid />
+                <devices version="2" />
+            </query>
+            <list>
+                <user jid="559885700260@s.whatsapp.net" />
+            </list>
+        </usync>
+        </iq>
+        """
+
         normalized_jids = []
         for jid in jids:
             try:
@@ -269,11 +292,28 @@ class ContactHandler:
                 if list_node:
                     for user_node in list_node.children:
                         if user_node.tag == "user":
-                            # Extrai JID do dispositivo
-                            # A estrutura pode variar
+                            # Extrai JID do dispositivo principal
                             jid = user_node.get_attribute("jid")
-                            if jid:
+                            if jid and jid not in devices:
                                 devices.append(jid)
+                            
+                            # Extrai JIDs de dispositivos adicionais (Companion Mode)
+                            devices_node = user_node.get_child("devices")
+                            if devices_node:
+                                device_list_node = devices_node.get_child("device-list")
+                                if device_list_node:
+                                    for device_node in device_list_node.children:
+                                        if device_node.tag == "device":
+                                            device_id = device_node.get_attribute("id")
+                                            if device_id and jid:
+                                                # Constrói JID do dispositivo (ex: 559885700260:1@s.whatsapp.net)
+                                                number = jid.split("@")[0]
+                                                if ":" in number:
+                                                    number = number.split(":")[0]
+                                                
+                                                device_jid = f"{number}:{device_id}@s.whatsapp.net"
+                                                if device_jid not in devices:
+                                                    devices.append(device_jid)
                 
                 logger.info(f"Dispositivos sincronizados: {len(devices)} dispositivos")
                 future.set_result(devices)
@@ -329,4 +369,54 @@ class ContactHandler:
             "number": number,
             "sync_result": result
         }
+
+    async def trust_contact(
+        self,
+        jids: List[str],
+        timestamp: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Confia em contatos (marca como trusted contact).
+        
+        Args:
+            jids: Lista de JIDs dos contatos
+            timestamp: Timestamp Unix (usa time.time() se None)
+        
+        Returns:
+            Dict com resultado da operação
+        """
+        from time import time
+        
+        if timestamp is None:
+            timestamp = int(time())
+        
+        # Cria entidade
+        entity = TrustContactIqProtocolEntity(
+            jids=jids,
+            timestamp=timestamp
+        )
+        iq_node = entity.to_protocol_node()
+        iq_id = iq_node.get_attribute("id")
+        
+        future = asyncio.Future()
+        
+        async def on_response(node: ProtocolNode):
+            """Processa resposta de trust contact"""
+            try:
+                if node.get_attribute("type") != "result":
+                    future.set_exception(Exception(f"Erro ao confiar em contato: tipo={node.get_attribute('type')}"))
+                    return
+                
+                future.set_result({"status": "OK", "iq_id": iq_id})
+            except Exception as e:
+                future.set_exception(e)
+        
+        self._iq_processor.register_callback(iq_id, on_response, timeout=30.0)
+        await self._send_iq(iq_node)
+        
+        try:
+            return await asyncio.wait_for(future, timeout=30.0)
+        except asyncio.TimeoutError:
+            self._iq_processor.unregister_callback(iq_id)
+            raise Exception("Timeout aguardando resposta de trust contact")
 

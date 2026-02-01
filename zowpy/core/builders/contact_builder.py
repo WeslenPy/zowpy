@@ -28,6 +28,8 @@ class ContactBuilder:
     MODE_DELTA = "delta"
     CONTEXT_REGISTRATION = "registration"
     CONTEXT_INTERACTIVE = "interactive"
+    MODE_QUERY = "query"
+    CONTEXT_MESSAGE = "message"
     
     @staticmethod
     def _generate_sid() -> str:
@@ -43,7 +45,7 @@ class ContactBuilder:
     @staticmethod
     def build_sync_contacts(
         numbers: List[str],
-        mode: str = MODE_FULL,
+        mode: str = MODE_DELTA,
         context: str = CONTEXT_INTERACTIVE,
         sid: Optional[str] = None,
         index: int = 0,
@@ -143,8 +145,8 @@ class ContactBuilder:
     @staticmethod
     def build_sync_devices(
         jids: List[str],
-        mode: str = MODE_FULL,
-        context: str = CONTEXT_INTERACTIVE,
+        mode: str = MODE_QUERY,
+        context: str = CONTEXT_MESSAGE,
         iq_id: Optional[str] = None
     ) -> ProtocolNode:
         """
@@ -174,7 +176,10 @@ class ContactBuilder:
         # Cria node <usync>
         usync_attrs = {
             "mode": mode,
-            "context": context
+            "context": context,
+            "index": "0",
+            "last": "true",
+            "sid": ContactBuilder._generate_sid()
         }
         
         usync_node = ProtocolNode(

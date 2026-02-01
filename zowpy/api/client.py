@@ -115,13 +115,14 @@ class ZowPyClient:
         except Exception as e:
             raise ConnectionError(f"Erro ao conectar: {e}") from e
     
-    async def send_text(self, to: str, text: str) -> str:
+    async def send_text(self, to: str, text: str, options: Optional[dict] = None) -> str:
         """
         Envia mensagem de texto de forma totalmente assíncrona.
         
         Args:
             to: JID do destinatário (número de telefone ou JID completo)
             text: Texto da mensagem
+            options: Opções adicionais (quoted_message, mentions, etc)
         
         Returns:
             ID da mensagem enviada
@@ -130,7 +131,7 @@ class ZowPyClient:
             raise ConnectionError("Not connected")
         
         # Envia mensagem via cliente
-        message_id = await self._client.send_text(to, text)
+        message_id = await self._client.send_text(to, text, options=options)
         
         return message_id
     
@@ -186,7 +187,7 @@ class ZowPyClient:
         self,
         to: str,
         file_path_or_url: str,
-        ptt: bool = False,
+        ptt: bool = True,
         progress_callback: Optional[Callable] = None
     ) -> str:
         """
