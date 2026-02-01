@@ -30,7 +30,7 @@ class ZowPyClient:
         self,
         account_id: str,
         session_maker: Optional[AsyncSessionMaker] = None,
-        device_env: Optional[str] = None,
+        env: Optional[str] = None,
     ):
         """
         Inicializa cliente ZowPy.
@@ -38,12 +38,12 @@ class ZowPyClient:
         Args:
             account_id: ID da conta (número de telefone)
             session_maker: Pool de banco de dados (opcional)
-            device_env: Ambiente do dispositivo (android, ios, smb_android, smb_ios)
+            env: Ambiente do dispositivo (android, ios, smb_android, smb_ios)
         """
         self.account_id = account_id
         from ..config.settings import settings
         self.session_maker = session_maker or AsyncSessionMaker
-        self.device_env = device_env or "smb_android"
+        self.env = env
         
         # Componentes internos
         self._state_store: Optional[AsyncStateStore] = None
@@ -74,7 +74,7 @@ class ZowPyClient:
                 self.account_id,
                 # endpoint=None,  # Seleciona aleatoriamente da lista do zowsuplib
                 session_maker=self.session_maker,
-                device_config=self.device_env,
+                env=self.env,
                 proxy=self.proxy,
             )
             

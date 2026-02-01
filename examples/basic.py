@@ -41,11 +41,11 @@ async def main():
     six_parts= "14373206374,4ljWhbt1yKIN/APYKt8taDPj4kbsULb552rxRJvX0Wk=,cPjOBZVjlURZBJxZOzE4HdkUEjrAA9K/ApZyo4rgiEU=,yIdbWY5IFfBhxhGT6AO3xwlYGQ21ZThe98Lr/Cg0phM=,6CYNIsougyZ3ymOJbfI8lwK+P+6sd/WOLwMO/a2OUHU=,NTU1NTkyNDgxMDY0OSMFw8GN5rYImqEJAm9pObYCtwosxw=="
     # six_parts = "5555924810649,4ljWhbt1yKIN/APYKt8taDPj4kbsULb552rxRJvX0Wk=,cPjOBZVjlURZBJxZOzE4HdkUEjrAA9K/ApZyo4rgiEU=,yIdbWY5IFfBhxhGT6AO3xwlYGQ21ZThe98Lr/Cg0phM=,6CYNIsougyZ3ymOJbfI8lwK+P+6sd/WOLwMO/a2OUHU=,NTU1NTkyNDgxMDY0OSMFw8GN5rYImqEJAm9pObYCtwosxw=="
     
-    await import_account_from_six_parts(six_parts, env="android")
+    # await import_account_from_six_parts(six_parts, env="android")
 
     account_id = six_parts.split(",")[0]
     
-    client = ZowPyClient(account_id,device_env="android")
+    client = ZowPyClient(account_id)
     
     # Eventos
     @client.on_message

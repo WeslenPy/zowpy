@@ -19,7 +19,7 @@ from sqlalchemy import (
     Index,
     select,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import load_only, relationship
 from zowpy.db.common.model import BaseModel
 from zowpy.db.config.base import Model
 
@@ -127,12 +127,26 @@ class Account(Model,BaseModel):
     )
 
 
+
+    @classmethod
+    async def get_env_by_phone(cls, session: AsyncSession, phone: str) -> str | None:
+        """
+        Busca o ambiente de uma conta pelo número de telefone.
+        """
+        result = await session.execute(select(cls).options(load_only(cls.env)).filter_by(phone=phone))
+        account = result.scalar_one_or_none()
+        if account:
+            return account.env
+        return None
+
+
+
     @classmethod
     async def get_by_phone(cls, session: AsyncSession, phone: str) -> Account:
         """
         Busca uma conta pelo número de telefone.
         """
-        result = await session.execute(select(Account).filter_by(phone=phone))
+        result = await session.execute(select(cls).filter_by(phone=phone))
         return result.scalar_one_or_none()
 
 
@@ -144,7 +158,7 @@ class Account(Model,BaseModel):
         """
         account = await cls.get_by_phone(session, phone)
         if account is None:
-            account = Account(phone=phone)
+            account = cls(phone=phone)
             session.add(account)
             await session.commit()
             await session.refresh(account)

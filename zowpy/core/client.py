@@ -103,7 +103,7 @@ class WhatsAppClient:
         account_id: str,
         endpoint: Tuple[str, int] = None,
         session_maker: Optional[AsyncSessionMaker] = None,
-        device_config=None,
+        env: Optional[str] = None,
         proxy: Optional[Union[ProxyConfig, Dict[str, Any]]] = None,
     ):
         """
@@ -114,6 +114,7 @@ class WhatsAppClient:
             endpoint: Endpoint TCP do WhatsApp (host, port)
             session_maker: AsyncSessionMaker
             device_config: Configuração do dispositivo
+            env: Ambiente do dispositivo (android, ios, smb_android, smb_ios)
             proxy: Configuração de proxy (opcional)
         """
         self.account_id = normalize(account_id)
@@ -131,7 +132,7 @@ class WhatsAppClient:
         else:
             self.proxy = proxy
         self.session_maker = session_maker
-        self.device_config = device_config
+        self.env = env
         
         # Componentes principais
         self.connection: Optional[AsyncConnection] = None
@@ -369,9 +370,6 @@ class WhatsAppClient:
                         account.is_initialized = True
                         await session.commit()
                         logger.info("✓ Config obtida")
-
-
-
             except Exception as e:
                 logger.warning(f"Erro ao definir config auto_trust: {e}")
             
@@ -677,12 +675,13 @@ class WhatsAppClient:
         from ..noise.config import UserAgentConfig, AppVersionConfig
         from ..utils.phone import PhoneUtils
         
-        env_name = "smb_android"
-        if self.device_config:
-            if isinstance(self.device_config, str):
-                env_name = self.device_config
-            elif hasattr(self.device_config, 'name'):
-                env_name = self.device_config.name
+        env_name =self.env
+        if not env_name:
+            async with self.session_maker() as session:
+                env_name =await Account.get_env_by_phone(session, self.account_id)
+
+        if not env_name:
+            raise ValueError(f"Ambiente não encontrado para a conta {self.account_id}")
         
         logger.debug(f"env_name: {env_name}")
         
