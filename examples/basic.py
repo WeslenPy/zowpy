@@ -108,20 +108,34 @@ async def main():
 
         message_id = ProtocolNode._generateId()
 
-        message_id = "F951A0328BBD7EF5A69634E872DC41C0"
+        message_id = "D24A03C9F1DBEB770C236E8589415F6A"
 
         logger.info(f"GEN: {message_id}")
 
-        # await client.start_typing(to)
-        # await asyncio.sleep(4)
-        # message_id = await client.send_text(to, text,message_id=message_id)
-        # logger.info(f"Message Id : {message_id}")
-        # await client.stop_typing(to)
+        await client.start_typing(to)
+        await asyncio.sleep(4)
+        message_id = await client.send_text(to, text)
+        logger.info(f"Message Id : {message_id}")
+        await client.stop_typing(to)
 
 
-        await client.reply_message(to,"tudo",reply_message_id=message_id,quoted=text,from_me=True)
+        await client.edit_message(message_id=message_id,to=to,text="ok")
+
+        await client.delete_message(message_id=message_id,to=to)
+
+
+        # await client.reply_message(to,"tudo",reply_message_id=message_id,quoted="tudo",from_me=True)
 
         # await client.send_reaction(to=to,message_id=message_id,reaction="❤️",from_me=True)
+        # await client.remove_reaction(to=to,message_id=message_id,from_me=True)
+
+
+        # await client.send_status(media_type="video",file_path_or_url="./videoplayback.mp4",caption="teste")
+        # await client.send_status(media_type="audio",file_path_or_url="https://s3-bucket-waconnect.s3.us-west-2.amazonaws.com/static/api/f5ba3d484c1f8a182648272831cdcbe6155f686c8600edc703c3a75965b2a7da924d69c8d9591e32c28a1b21ab2b9820f7ca06578420839f68996c76cd6090b1.ogg")
+                                # text_color=client._generate_random_text_color(),
+                                # background_color=client._generate_random_background_color())
+
+        # await client.send_status(media_type="image",file_path_or_url="https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png")
 
 
 

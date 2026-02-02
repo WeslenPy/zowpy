@@ -757,6 +757,8 @@ class SqlAxolotlStore(AxolotlStore):
 
             return await self.contactStore.isNewContact(db, self._account_id, jid)
 
+
+
     # Broadcasts
     async def addBroadcast(self, jids, senderJid, name=None):
         async with self._get_session() as db:

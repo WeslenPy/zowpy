@@ -368,3 +368,7 @@ class AxolotlManager(object):
         await self._store.saveIdentity(recipient,deviceid,identitykey)
 
 
+
+    async def get_all_contacts(self):
+        return await self._store.getAllContact()
+

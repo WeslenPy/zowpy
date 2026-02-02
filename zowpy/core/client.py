@@ -18,10 +18,17 @@ from zowpy.db.factory import AxolotlManagerFactory
 from zowpy.db.models import Account
 from zowpy.profile.profile import AsyncProfile
 from zowpy.config.v1.config import Config
-from zowpy.protocol.entities.attributes import MessageMetaAttributes
+from zowpy.protocol.entities import ExtendedTextMessageProtocolEntity
+from zowpy.protocol.entities.attributes import ExtendedTextAttributes, MessageMetaAttributes
 from zowpy.protocol.entities.attributes.attributes_disappearing_mode import DisappearingModeAttributes
+from zowpy.protocol.entities.attributes.attributes_message import MessageAttributes
 from zowpy.protocol.entities.attributes.attributes_quoted import QuotedAttributes
 from zowpy.protocol.entities.attributes.attributes_reaction import ReactionAttributes
+from zowpy.protocol.entities.attributes.attributes_status import StatusAttributes
+from zowpy.protocol.entities.attributes.attributes_video import VideoAttributes
+from zowpy.protocol.entities.attributes.attributes_message_key import MessageKeyAttributes
+from zowpy.protocol.entities.attributes.attributes_protocol import ProtocolAttributes
+from zowpy.protocol.entities.message import ProtomessageProtocolEntity
 from zowpy.utils.tools import Jid, WATools
 from zowpy.config.bot_env import BotEnv
 from zowpy.config.network import NetworkConfig, ProxyConfig
@@ -86,7 +93,14 @@ from ..axolotl.ecc.curve import Curve
 from ..axolotl.ecc.djbec import DjbECPublicKey
 from ..axolotl import exceptions
 from ..utils.constants import YowConstants
+from enum import Enum
 
+
+class MediaType(Enum):
+    TEXT = "text"
+    VIDEO = "video"
+    IMAGE = "image"
+    AUDIO = "audio"
 
 class AuthenticationError(Exception):
     """Erro de autenticação"""
@@ -1442,7 +1456,6 @@ class WhatsAppClient:
         """
         
         # Normaliza e corrige JID de grupo se necessário antes da normalização
-        to = self._normalize_and_fix_group_jid(to)
         
         # 3. Normaliza JID
         from ..utils.jid import normalize
@@ -1452,17 +1465,16 @@ class WhatsAppClient:
             raise ValueError(f"JID inválido: {to}")
         
         phone = normalized_jid.split('@')[0] if '@' in normalized_jid else normalized_jid
+        
+        is_group = self._is_group_jid(to)
+        to_jid = to_whatsapp_jid(to, is_group)
 
-        # 5. Verifica se contato é novo
-        if not self.axolotl_manager:
-            raise ValueError
-
-        is_new_contact = await self.axolotl_manager._store.isNewContact(normalized_jid)
+        is_new_contact = await self.axolotl_manager._store.isNewContact(to_jid)
         
         if is_new_contact:
             logger.info(f"Contato {normalized_jid} é novo, sincronizando e validando antes de enviar...")
             
-            await self.axolotl_manager._store.addContact(normalized_jid)
+            await self.axolotl_manager._store.addContact(to_jid)
             
             # 8. Sincroniza contato
             if self.contact_handler:
@@ -1484,8 +1496,6 @@ class WhatsAppClient:
                     raise
             else:
                 logger.warning("ContactHandler não disponível, enviando sem sincronizar")
-                # Atualiza timestamp mesmo sem sincronizar
-                self._last_sync_time[normalized_jid] = time.time()
                 return await self._send_text_direct(to=to, text=text, 
                                                     message_id=message_id, 
                                                     quoted=quoted,
@@ -1542,6 +1552,183 @@ class WhatsAppClient:
             options=options)
 
 
+    async def send_status_text(
+        self,
+        text:str,
+        to:str,
+        text_color:Optional[str]= None,
+        background_color:Optional[str] = None,
+        font:Optional[int] = None,
+    ):
+
+        context_info = self._prepare_context_info()
+
+        extend_attributes =  ExtendedTextAttributes(
+            text=text,
+            preview_type=0,
+            context_info=context_info,
+            invite_link_group_type_v2=0,
+            text_argb=text_color,
+            background_argb=background_color,
+            font=font
+        )   
+
+
+        meta_message_attr =  MessageMetaAttributes(
+            recipient=to,
+            timestamp=int(time.time())
+        )    
+
+
+        messageEntity = ExtendedTextMessageProtocolEntity(
+            extend_attributes, 
+            meta_message_attr
+        )
+
+        message_node = messageEntity.to_protocol_node()
+        message_id = await self.process_plaintext_node_and_send(message_node)
+
+        return message_id
+
+
+    async def delete_message(self,to:str,message_id:str):
+        jid = to_whatsapp_jid(to)
+
+
+        message_key_attr = MessageKeyAttributes(
+            id=  message_id,
+            from_me=True,
+            remote_jid=jid
+        )
+
+        attrs= ProtocolAttributes(
+            key = message_key_attr,
+            type= ProtocolAttributes.TYPE_REVOKE,
+        )
+
+        message_meta_attr = MessageMetaAttributes(
+            recipient = jid,
+            edit="7"
+        )
+
+        message_protocol = MessageAttributes(
+            protocol=attrs
+        )
+
+        message_entity = ProtomessageProtocolEntity(
+            message_attributes=message_protocol,
+            message_meta_attributes=message_meta_attr
+
+        )
+
+        return await self.process_plaintext_node_and_send(message_entity.to_protocol_node())
+
+
+
+    async def edit_message(self,to:str,message_id:str,text:str):
+
+
+        jid = to_whatsapp_jid(to)
+
+        context_info = self._prepare_context_info()
+
+
+        extended_text= ExtendedTextAttributes(
+            text= text,
+            preview_type=0,
+            context_info= context_info
+        )
+
+
+        message_attr = MessageAttributes(
+            extended_text=extended_text
+
+        )
+
+
+        message_key_attr = MessageKeyAttributes(
+            id=  message_id,
+            from_me=True,
+            remote_jid=jid
+        )
+
+        attrs= ProtocolAttributes(
+            key = message_key_attr,
+            type= ProtocolAttributes.TYPE_MESSAGE_EDIT,
+            edited_message=message_attr
+        )
+
+        message_meta_attr = MessageMetaAttributes(
+            recipient = jid,
+            edit="1"
+        )
+
+
+        message_protocol = MessageAttributes(
+            protocol=attrs
+            
+        )
+
+        message_entity = ProtomessageProtocolEntity(
+            message_attributes=message_protocol,
+            message_meta_attributes=message_meta_attr
+
+        )
+
+        return await self.process_plaintext_node_and_send(message_entity.to_protocol_node())
+
+
+
+    async def send_status(
+        self,
+        media_type:MediaType,
+        text:Optional[str]=None,
+        file_path_or_url:Optional[str]=None,
+        text_color:Optional[str]= None,
+        background_color:Optional[str] = None,
+        font:Optional[int] = None,
+        caption:Optional[str] = None,
+        preview_type:Optional[int] = None,
+        ):
+
+        to = "status@broadcast"
+
+
+        if media_type == MediaType.TEXT:
+            return await self.send_status_text(
+                text=text,text_color=text_color,
+                background_color=background_color,
+                font=font,
+                to=to
+            )
+
+
+        elif media_type ==  MediaType.IMAGE:
+            return await self.send_image(
+                to=to,
+                file_path_or_url= file_path_or_url,
+                caption= caption
+            )
+
+        elif media_type ==  MediaType.VIDEO:
+            return await self.send_video(
+                to=to,
+                file_path_or_url= file_path_or_url,
+                caption= caption
+            )
+
+        elif media_type ==  MediaType.AUDIO:
+            return await self.send_audio(
+                to=to,
+                file_path_or_url= file_path_or_url,
+                ptt=True
+            )
+        raise ValueError("MediaType incorrect")
+
+
+
+
+
     async def send_reaction(
         self,
         to: str,
@@ -1564,14 +1751,14 @@ class WhatsAppClient:
             raise ValueError("message_id is required")
         
         message_meta_attrs = MessageMetaAttributes(
-            id=MessageMetaAttributes.ID_ANDROID,
+            # id=message_id,
             recipient=to,
             fromMe=from_me,
             timestamp=int(time.time())
         )
 
         reaction_attrs = ReactionAttributes(
-            msgid=message_id,
+            msgid=f"{message_id}",
             remote_jid=to_jid,
             from_me=from_me,
             text=reaction,
@@ -1587,9 +1774,9 @@ class WhatsAppClient:
         message_node = reaction_entity.to_protocol_node()
         logger.info(message_node)
 
-        await self.process_plaintext_node_and_send(message_node)
+        react_message_id = await self.process_plaintext_node_and_send(message_node)
         logger.info(f"Reação enviada para {to_jid}: {reaction}")
-        return message_id
+        return react_message_id
 
     async def _send_text_direct(
         self,
@@ -1629,9 +1816,6 @@ class WhatsAppClient:
         # 2. Prepara context_info e attributes
         options = options or {}
         context_info = self._prepare_context_info(quoted=quoted)
-
-        participants = options.get("participants")
-
 
         logger.info(f"context_info: {context_info}")
         
@@ -1743,6 +1927,147 @@ class WhatsAppClient:
             
         return context_info
     
+
+    async def send_video(
+        self,
+        to: str,
+        file_path_or_url: str,
+        caption: Optional[str] = None,
+        message_id: Optional[str] = None,
+        progress_callback: Optional[callable] = None
+    ) -> str:
+
+        """
+        Fluxo:
+        1. Processa video (dimensões, thumbnail, SHA256)
+        2. Gera media_key e criptografa imagem
+        3. Obtém media connection
+        4. Faz upload HTTP
+        5. Constrói ImageMessage protobuf
+        6. Envia usando fluxo existente
+        
+        Args:
+            to: JID do destinatário
+            file_path_or_url: Caminho do arquivo de imagem ou URL
+            caption: Legenda da imagem (opcional)
+            message_id: ID da mensagem (gerado se None)
+            progress_callback: Callback para progresso de upload (opcional)
+        
+        Returns:
+            ID da mensagem enviada
+        """
+        if not self._authenticated:
+            raise RuntimeError("Not authenticated")
+        
+        # Usa ImageBuilder para upload
+        from .builders.video_builder import VideoBuilder
+        
+        builder = await VideoBuilder.from_filepath(
+            file_path_or_url=file_path_or_url,
+            media_cipher=self._media_cipher,
+            media_uploader=self._media_uploader,
+            media_connection=self._media_connection,
+            caption=caption,
+            progress_callback=progress_callback
+        )
+        
+        # Obtém JID do remetente
+        from_jid = f"{self.account_id}@{YowConstants.WHATSAPP_SERVER}"
+        
+        # Faz upload e constrói VideoMessage protobuf
+        video_msg = await builder.upload_and_build(to, from_jid)
+        
+        # Extrai dados do protobuf
+        url = video_msg.url
+        direct_path = video_msg.direct_path if video_msg.direct_path else None
+        mimetype = video_msg.mimetype
+        file_sha256 = video_msg.file_sha256
+        file_length = video_msg.file_length
+        media_key = video_msg.media_key
+        media_key_timestamp = video_msg.media_key_timestamp
+        file_enc_sha256 = video_msg.file_enc_sha256
+        width = video_msg.width
+        seconds = video_msg.seconds
+        height = video_msg.height
+        gif_playback = video_msg.gif_playback
+        jpeg_thumbnail = video_msg.jpeg_thumbnail if video_msg.jpeg_thumbnail else None
+        
+        # Gera message_id se não fornecido
+        if not message_id:
+            message_id = self._message_builder._generate_message_id()
+        
+        # Normaliza e corrige JID de grupo se necessário
+        to = self._normalize_and_fix_group_jid(to)
+        
+        # Importa classes necessárias
+        from ..protocol.entities.attributes import (
+            DownloadableMediaMessageAttributes,
+            VideoAttributes,
+            MessageMetaAttributes,
+        )
+        from ..protocol.entities.media import (
+            VideoDownloadableMediaMessageProtocolEntity,
+        )
+        
+        # Cria DownloadableMediaMessageAttributes
+        downloadable_attrs = DownloadableMediaMessageAttributes(
+            mimetype=mimetype,
+            file_length=file_length,
+            file_sha256=file_sha256,
+            media_key=media_key,
+            media_key_timestamp=media_key_timestamp,
+            file_enc_sha256=file_enc_sha256,
+            url=url,
+            direct_path=direct_path
+        )
+        
+        # Cria ImageAttributes
+        image_attrs = VideoAttributes(
+            downloadablemedia_attributes=downloadable_attrs,
+            width=width,
+            height=height,
+            seconds=seconds,
+            caption=caption,
+            jpeg_thumbnail=jpeg_thumbnail,
+            gif_playback=gif_playback,
+        )
+        
+        # Cria MessageMetaAttributes
+        message_meta_attrs = MessageMetaAttributes(
+            id=message_id,
+            recipient=to,
+            fromMe=True,
+            timestamp=int(time.time())
+        )
+        
+        # Cria Protocol Entity
+        entity = VideoDownloadableMediaMessageProtocolEntity(
+            image_attrs,
+            message_meta_attrs
+        )
+        
+        # Converte para ProtocolNode
+        message_node = entity.to_protocol_node()
+        
+        # Extrai proto_bytes do node <proto>
+        proto_node = None
+        for child in message_node.children:
+            if child.tag == "proto":
+                proto_node = child
+                break
+        
+        if not proto_node or not proto_node.data:
+            raise ValueError("Falha ao obter dados protobuf do Protocol Entity")
+        
+        proto_bytes = proto_node.data
+        
+        # Envia usando fluxo existente
+        await self._send_to_contact(message_node, proto_bytes, to)
+        
+        return message_id
+
+
+
     async def send_image(
         self,
         to: str,
@@ -2472,7 +2797,7 @@ class WhatsAppClient:
         - Contém "@g.us" OU
         - Tem >= 15 caracteres
         """
-        return "-" in jid or ("." not in jid and ":" not in jid and len(jid) >= 15) or f"@{YowConstants.WHATSAPP_GROUP_SERVER}" in jid
+        return "-" in jid or ("." not in jid and ":" not in jid and len(jid) >= 15) or f"@{YowConstants.WHATSAPP_GROUP_SERVER}" in jid or jid == "status@broadcast"
     
     def _normalize_and_fix_group_jid(self, jid: str) -> str:
         """
@@ -2497,7 +2822,7 @@ class WhatsAppClient:
         # Se já tem "@", verifica se precisa corrigir
         if "@" in jid:
             # Se já tem "@g.us", retorna como está
-            if f"@{YowConstants.WHATSAPP_GROUP_SERVER}" in jid:
+            if f"@{YowConstants.WHATSAPP_GROUP_SERVER}" in jid or "@broadcast" in jid:
                 return jid
             
             # Se tem outro sufixo mas é grupo, corrige para "@g.us"
@@ -2600,22 +2925,9 @@ class WhatsAppClient:
         
         # Contato individual - continua fluxo normal
         jids = [to_jid]
-        jid = Jid.normalize(to_jid)
-        phone = jid.split('@')[0] if '@' in jid else jid
-
-        isNewContact = await self.axolotl_manager._store.isNewContact(jid)
-        if isNewContact:
-            await self.axolotl_manager._store.addContact(jid)
-
 
         return await self.ensure_sessions_and_send_to_contacts(message_node, jids)
-            
-        #     if session_jids:
-        #         # Tem sessões, envia para elas
-        #         await self._send_to_contacts_with_sessions(message_node, session_jids)
-        #     else:
-        #         # Não tem sessão, sincroniza dispositivos e obtém chaves
-        #         await self._sync_devices_and_send(message_node, proto_bytes, to_jid)
+
     
     async def ensure_sessions_and_send_to_contacts(
         self, 
@@ -2640,16 +2952,7 @@ class WhatsAppClient:
         # Isso garante que temos a lista atualizada de dispositivos do destinatário
         try:
             logger.debug(f"Sincronizando dispositivos para {jids}")
-            synced_jids = await self.contact_handler.sync_devices(jids)
-            if synced_jids:
-                logger.debug(f"Dispositivos sincronizados: {synced_jids}")
-                
-                for jid in synced_jids:
-                    normalized_jid = jid.split("@")[0].split(":")[0]
-                    jid = f"{normalized_jid}@{YowConstants.WHATSAPP_SERVER}"
-                    if normalized_jid not in jids:
-                        jids.append(jid)
-
+            jids = await self.contact_handler.sync_devices(jids)
         except Exception as e:
             logger.warning(f"Falha ao sincronizar dispositivos para {jids}: {e}. Continuando com JIDs originais.")
         
@@ -2657,15 +2960,12 @@ class WhatsAppClient:
         proto_node = message_node.get_child("proto")
         if not proto_node:
             raise ValueError("Node de mensagem deve ter <proto>")
-        proto_bytes = proto_node.data
         
         # Separa JIDs com sessão dos sem sessão
-
 
         jids_maps = await self.axolotl_manager.session_exists_bulk(jids)
         all_jids = [f"{recipient_id}@{YowConstants.WHATSAPP_SERVER}" for recipient_id, deviceid in jids_maps]
         jids_no_session = [jid for jid in jids if jid not in all_jids]
-  
 
 
         async def on_get_keys_success(node, success_jids, errors):
@@ -2680,6 +2980,12 @@ class WhatsAppClient:
             all_jids.extend(success_jids)
 
             await self.contact_handler.trust_contact(success_jids)
+
+            for jid in all_jids:
+                new_contact = await self.axolotl_manager._store.isNewContact(jid)
+                if new_contact:
+                    await self.axolotl_manager._store.addContact(jid)
+
             logger.info(f"Contato {success_jids} marcado como confiável")
             
             # Envia para todos os JIDs que têm sessão agora
@@ -2765,8 +3071,7 @@ class WhatsAppClient:
         # Obtém tctoken se necessário
         target_jid = message_node.get_attribute("to")
         tctoken = None
-        if hasattr(self, 'axolotl_manager') and hasattr(self.axolotl_manager, '_store'):
-            tctoken = await self.axolotl_manager._store.getTcToken(target_jid)
+        tctoken = await self.axolotl_manager._store.getTcToken(target_jid)
         
         enc_entities = []
         participant = jids[0] if len(jids) == 1 and retry_count > 0 else None
@@ -3229,7 +3534,8 @@ class WhatsAppClient:
         self,
         message_node: ProtocolNode,
         proto_bytes: bytes,
-        retry_receipt_entity: Optional[ProtocolNode] = None
+        retry_receipt_entity: Optional[ProtocolNode] = None,
+        participants:Optional[list[str]] = None,
     ) -> None:
         """
         Envia mensagem para grupo seguindo fluxo completo do zowsuplib.
@@ -3272,15 +3578,10 @@ class WhatsAppClient:
             # Para status@broadcast, obtém todos os contatos conhecidos
             logger.debug("Tentando obter contatos para status@broadcast")
             try:
-                if hasattr(self.axolotl_manager, '_store') and hasattr(self.axolotl_manager._store, 'getAllContact'):
-                    jids = await self.axolotl_manager._store.getAllContact() if asyncio.iscoroutinefunction(self.axolotl_manager._store.getAllContact) else self.axolotl_manager._store.getAllContact()
-                    logger.info(f"Enviando status para {len(jids)} contatos via status@broadcast")
-                    await self.ensure_sessions_and_send_to_group(message_node, jids)
-                    return
-                else:
-                    logger.warning("Store não tem método getAllContact, enviando sem destinatários específicos")
-                    await self.ensure_sessions_and_send_to_group(message_node, [])
-                    return
+                jids = await self.axolotl_manager.get_all_contacts() 
+                logger.info(f"Enviando status para {len(jids)} contatos via status@broadcast")
+                await self.ensure_sessions_and_send_to_group(message_node, jids)
+                return
             except Exception as e:
                 logger.error(f"Erro ao obter contatos para status@broadcast: {e}")
                 await self.ensure_sessions_and_send_to_group(message_node, [])
@@ -4276,7 +4577,7 @@ class WhatsAppClient:
     async def process_plaintext_node_and_send(
         self,
         node: ProtocolNode,
-        retry_receipt_entity: Optional[ProtocolNode] = None
+        retry_receipt_entity: Optional[ProtocolNode] = None,
     ) -> None:
         """
         Processa node de mensagem plaintext e envia.
@@ -4292,26 +4593,17 @@ class WhatsAppClient:
         if not proto_node:
             raise ValueError("Node de mensagem deve ter <proto>")
         proto_bytes = proto_node.data
+
+        # Destino único
+        is_group = self._is_group_jid(to_jid)
+
+        logger.info(f"To send: {to_jid} is_group: {is_group}")
         
-        # Verifica múltiplos destinos ("," em node["to"])
-        if "," in to_jid:
-            # Múltiplos destinos - split e envia para todos
-            jids = [j.strip() for j in to_jid.split(",")]
-            logger.info(f"Múltiplos destinos detectados: {len(jids)} destinatários")
-            # Define o primeiro como destino principal
-            node.set_attribute("to", jids[0])
-            await self.ensure_sessions_and_send_to_contacts(node, jids)
+        if is_group:
+            # Envia para grupo
+            await self._send_to_group(node, proto_bytes, retry_receipt_entity)
         else:
-            # Destino único
-            account = to_jid.split('@')[0]
-            is_group = self._is_group_jid(to_jid)
-            
-            if is_group:
-                # Envia para grupo
-                await self._send_to_group(node, proto_bytes, retry_receipt_entity)
-            else:
-                jids = [to_jid]
-                await self.ensure_sessions_and_send_to_contacts(node, jids)
+            await self.ensure_sessions_and_send_to_contacts(node, [to_jid])
               
     async def _process_pending_messages(
         self,

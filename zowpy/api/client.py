@@ -6,13 +6,14 @@ Estilo whatsmeow: wait_for_message com filtros e condições.
 """
 
 import asyncio
+import random
 from typing import Optional, Callable, Dict, Any, Union
 from loguru import logger
 
 from zowpy.config.network import ProxyConfig
 from zowpy.db.config.engine import AsyncSessionMaker
 
-from ..core.client import WhatsAppClient
+from ..core.client import MediaType, WhatsAppClient
 from ..core.events import AsyncEventEmitter
 from ..core.store import AsyncStateStore
 from ..axolotl.sessioncipher import SessionCipher
@@ -117,6 +118,111 @@ class ZowPyClient:
 
 
 
+    def _generate_random_text_color(self) -> int:
+        """
+        Gera uma cor aleatória para texto no formato ARGB (uint32).
+
+        Returns:
+            int: Cor ARGB no formato uint32 (0 a 4294967295)
+                 Alpha=255 (opaco), R/G/B aleatórios
+        """
+        # Alpha sempre 255 (opaco), R/G/B aleatórios
+        alpha = 255
+        red = random.randint(0, 255)
+        green = random.randint(0, 255)
+        blue = random.randint(0, 255)
+
+        # Formato ARGB: (A << 24) | (R << 16) | (G << 8) | B
+        # Garante que o valor está no range uint32 (0 a 4294967295)
+        argb_value = (alpha << 24) | (red << 16) | (green << 8) | blue
+        
+        # Garante que está dentro do range uint32
+        # Máximo: 0xFFFFFFFF = 4294967295
+        return argb_value & 0xFFFFFFFF
+
+    def _generate_random_background_color(self) -> int:
+        """
+        Gera uma cor aleatória para fundo no formato ARGB (uint32).
+
+        Returns:
+            int: Cor ARGB no formato uint32 (0 a 4294967295)
+                 com alpha variável para transparência
+        """
+        # Alpha variável (semi-transparente a opaco)
+        alpha = random.randint(200, 255)  # 200-255 para boa visibilidade
+        red = random.randint(0, 255)
+        green = random.randint(0, 255)
+        blue = random.randint(0, 255)
+
+        # Formato ARGB: (A << 24) | (R << 16) | (G << 8) | B
+        # Garante que o valor está no range uint32 (0 a 4294967295)
+        argb_value = (alpha << 24) | (red << 16) | (green << 8) | blue
+        
+        return argb_value & 0xFFFFFFFF # Garante que está dentro do range uint32
+
+
+
+    async def get_avatar():pass
+    async def get_account_info():pass
+    async def set_2fa():pass
+
+    async def set_avatar():pass
+    async def set_name():pass
+
+    # async def 
+
+    async def delete_message(self,to:str,message_id:str):
+
+        if not self._client or not self._client.is_connected():
+            raise ConnectionError("Not connected")
+        
+        # Envia mensagem via cliente
+        message_id = await self._client.delete_message(to=to, message_id=message_id)
+        
+        return message_id
+
+    async def edit_message(self,text:str,to:str,message_id:str):
+
+        if not self._client or not self._client.is_connected():
+            raise ConnectionError("Not connected")
+        
+        # Envia mensagem via cliente
+        message_id = await self._client.edit_message(to=to, text=text, message_id=message_id)
+        
+        return message_id
+
+
+    async def send_status(        
+        self,
+        media_type:MediaType,
+        text:Optional[str]=None,
+        file_path_or_url:Optional[str]=None,
+        text_color:Optional[str]= None,
+        background_color:Optional[str] = None,
+        font:Optional[int] = None,
+        caption:Optional[str] = None,
+        preview_type:Optional[int] = None,):
+        """
+        Envio de status para contatos cadastrados
+        """
+
+        if not self._client or not self._client.is_connected():
+            raise ConnectionError("Not connected")
+
+        message_id=  await self._client.send_status(
+            media_type=media_type,
+            text=text,
+            file_path_or_url=file_path_or_url,
+            text_color=text_color,
+            background_color=background_color,
+            font=font,
+            caption=caption,
+            preview_type=preview_type,
+        )
+
+
+        return message_id
+
     async def reply_message(self,to:str,text:str,reply_message_id:str,quoted:Optional[str]=None,message_id:Optional[str]=None,from_me=False):
 
         if not self._client or not self._client.is_connected():
@@ -142,6 +248,24 @@ class ZowPyClient:
         
         # Envia mensagem via cliente
         message_id = await self._client.send_reaction(to=to, reaction=reaction,
+                                                      message_id=message_id,
+                                                      from_me=from_me)
+        
+        return message_id
+
+
+    async def remove_reaction(
+        self,
+        to: str,
+        message_id: Optional[str] = None,
+        from_me:Optional[bool] = False):
+
+
+        if not self._client or not self._client.is_connected():
+            raise ConnectionError("Not connected")
+        
+        # Envia mensagem via cliente
+        message_id = await self._client.send_reaction(to=to, reaction="",
                                                       message_id=message_id,
                                                       from_me=from_me)
         

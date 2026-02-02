@@ -1,6 +1,6 @@
 
 from zowpy.protocol.entities.attributes.attributes_message_key import MessageKeyAttributes
-
+import time
 
 class ProtocolAttributes(object):
     TYPE_REVOKE = 0
@@ -68,7 +68,7 @@ class ProtocolAttributes(object):
         self._app_state_fatal_exception_notification=app_state_fatal_exception_notification
         self._disappearing_mode=disappearing_mode
         self._edited_message=edited_message
-        self._timestamp_ms=timestamp_ms
+        self._timestamp_ms=timestamp_ms or int(time.time()*1000)
         self._peer_data_operation_request_message=peer_data_operation_request_message
         self._peer_data_operation_request_response_message=peer_data_operation_request_response_message
         self._bot_feedback_message=bot_feedback_message

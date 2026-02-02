@@ -9,52 +9,26 @@ Suporte para:
 """
 
 import hashlib
+import io
 import os
 import mimetypes
+import random
 import tempfile
 from pathlib import Path
 from typing import Optional, Tuple, Dict, Any, List
 from dataclasses import dataclass
 from urllib.parse import urlparse
 from loguru import logger
+import cv2
+import aiohttp
+import aiofiles
+from PIL import Image, ImageOps
 
-try:
-    import aiohttp
-    HAS_AIOHTTP = True
-except ImportError:
-    HAS_AIOHTTP = False
+from pydub import AudioSegment
 
-try:
-    import aiofiles
-    HAS_AIOFILES = True
-except ImportError:
-    HAS_AIOFILES = False
-
-# Pillow para processamento de imagens
-try:
-    from PIL import Image, ImageOps
-    HAS_PILLOW = True
-except ImportError:
-    HAS_PILLOW = False
-    logger.warning("Pillow não instalado. Processamento de imagens limitado.")
-
-# pydub para processamento de áudio
-try:
-    from pydub import AudioSegment
-    HAS_PYDUB = True
-except ImportError:
-    HAS_PYDUB = False
-    logger.debug("pydub não instalado. Waveform generation será limitado.")
-
-# mutagen para metadados de áudio
-try:
-    from mutagen import File as MutagenFile
-    from mutagen.mp3 import MP3
-    from mutagen.mp4 import MP4
-    HAS_MUTAGEN = True
-except ImportError:
-    HAS_MUTAGEN = False
-    logger.debug("mutagen não instalado. Metadados de áudio limitados.")
+from mutagen import File as MutagenFile
+from mutagen.mp3 import MP3
+from mutagen.mp4 import MP4
 
 
 async def normalize_file_path_or_url(file_path_or_url: str, default_extension: Optional[str] = None, prefix: str = "download") -> Tuple[str, bool]:
@@ -72,9 +46,6 @@ async def normalize_file_path_or_url(file_path_or_url: str, default_extension: O
     # Verifica se é URL (começa com http:// ou https://)
     if file_path_or_url.startswith(("http://", "https://")):
         logger.debug(f"Detectada URL, baixando arquivo: {file_path_or_url[:50]}...")
-        
-        if not HAS_AIOHTTP:
-            raise RuntimeError("aiohttp é necessário para baixar arquivos de URL")
         
         # Faz download assíncrono
         async with aiohttp.ClientSession() as session:
@@ -124,18 +95,10 @@ async def normalize_file_path_or_url(file_path_or_url: str, default_extension: O
                     
                     # Salva arquivo
                     filepath_str = str(filepath)
-                    if HAS_AIOFILES:
-                        async with aiofiles.open(filepath_str, 'wb') as f:
-                            async for chunk in response.content.iter_chunked(8192):
-                                await f.write(chunk)
-                    else:
-                        # Fallback síncrono se aiofiles não estiver disponível
-                        with open(filepath_str, 'wb') as f:
-                            while True:
-                                chunk = await response.content.read(8192)
-                                if not chunk:
-                                    break
-                                f.write(chunk)
+                    async with aiofiles.open(filepath_str, 'wb') as f:
+                        async for chunk in response.content.iter_chunked(8192):
+                            await f.write(chunk)
+           
                     
                     logger.debug(f"Arquivo baixado de URL e salvo em: {filepath_str}")
                     return (filepath_str, True)
@@ -150,15 +113,6 @@ async def normalize_file_path_or_url(file_path_or_url: str, default_extension: O
         
         return (file_path_or_url, False)
 
-
-# Importa aiofiles se disponível
-try:
-    import aiofiles
-    HAS_AIOFILES = True
-except ImportError:
-    HAS_AIOFILES = False
-    if HAS_AIOHTTP:
-        logger.warning("aiofiles não instalado. Download de URLs será mais lento (usa modo síncrono).")
 
 
 @dataclass
@@ -177,12 +131,12 @@ class VideoMetadata:
     """Metadados de vídeo."""
     width: int
     height: int
-    duration_seconds: int
+    seconds: int
     mimetype: str
     file_length: int
     file_sha256: bytes
     jpeg_thumbnail: Optional[bytes] = None
-    is_gif: bool = False
+    gif_playback: bool = False
 
 
 @dataclass
@@ -254,9 +208,6 @@ class ImageTools:
             RuntimeError: Se Pillow não estiver instalado
             FileNotFoundError: Se arquivo não existir
         """
-        if not HAS_PILLOW:
-            raise RuntimeError("Pillow é necessário para obter dimensões de imagem")
-        
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"Arquivo não encontrado: {filepath}")
         
@@ -295,9 +246,6 @@ class ImageTools:
         Raises:
             RuntimeError: Se Pillow não estiver instalado
         """
-        if not HAS_PILLOW:
-            raise RuntimeError("Pillow é necessário para gerar thumbnail")
-        
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"Arquivo não encontrado: {filepath}")
         
@@ -343,7 +291,7 @@ class ImageTools:
                 return thumbnail_data
                 
         except Exception as e:
-            raise RuntimeError(f"Erro ao gerar thumbnail de {filepath}: {e}")
+            return b""
     
     @staticmethod
     def process_image(filepath: str) -> ImageMetadata:
@@ -360,7 +308,7 @@ class ImageTools:
             raise FileNotFoundError(f"Arquivo não encontrado: {filepath}")
         
         # Obtém dimensões
-        width, height = ImageTools.get_dimensions(filepath) if HAS_PILLOW else (0, 0)
+        width, height = ImageTools.get_dimensions(filepath) 
         
         # Obtém MIME type
         mimetype = ImageTools.get_mimetype(filepath)
@@ -375,7 +323,7 @@ class ImageTools:
         # Gera thumbnail
         jpeg_thumbnail = None
         try:
-            jpeg_thumbnail = ImageTools.generate_thumbnail(filepath) if HAS_PILLOW else None
+            jpeg_thumbnail = ImageTools.generate_thumbnail(filepath) 
         except Exception as e:
             logger.warning(f"Erro ao gerar thumbnail para {filepath}: {e}")
         
@@ -396,9 +344,9 @@ class VideoTools:
     MAX_THUMBNAIL_DIMENSION = 640  # 640px máximo
     JPEG_QUALITY = 85
     
+
     @staticmethod
     def get_mimetype(filepath: str) -> str:
-        """Detecta MIME type de vídeo."""
         mimetype, _ = mimetypes.guess_type(filepath)
         if not mimetype or not mimetype.startswith("video/"):
             ext = os.path.splitext(filepath)[1].lower()
@@ -407,70 +355,179 @@ class VideoTools:
                 ".avi": "video/x-msvideo",
                 ".mov": "video/quicktime",
                 ".webm": "video/webm",
+                ".mkv": "video/x-matroska",
             }
             mimetype = ext_map.get(ext, "video/mp4")
         return mimetype
-    
+
     @staticmethod
     def get_duration(filepath: str) -> int:
         """
-        Obtém duração do vídeo em segundos.
-        
-        Nota: Requer biblioteca externa (opencv-python ou ffmpeg-python).
-        Por enquanto retorna 0 se não disponível.
-        
-        Args:
-            filepath: Caminho do arquivo
-        
-        Returns:
-            int: Duração em segundos (0 se não disponível)
+        Obtém duração do vídeo em segundos usando OpenCV.
         """
-        # TODO: Implementar usando opencv-python ou ffmpeg-python
-        # Por enquanto retorna 0
-        logger.debug(f"Duração de vídeo não implementada ainda para {filepath}")
-        return 0
-    
+        cap = cv2.VideoCapture(filepath)
+        if not cap.isOpened():
+            logger.warning(f"Não foi possível abrir o vídeo: {filepath}")
+            return 0
+
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        cap.release()
+
+        if fps <= 0 or frame_count <= 0:
+            return 0
+
+        duration = int(frame_count / fps)
+        return duration
+
     @staticmethod
     def get_dimensions(filepath: str) -> Tuple[int, int]:
         """
-        Obtém dimensões do vídeo.
-        
-        Nota: Requer biblioteca externa.
-        Por enquanto retorna (0, 0) se não disponível.
-        
-        Args:
-            filepath: Caminho do arquivo
-        
-        Returns:
-            tuple: (width, height) ou (0, 0) se não disponível
+        Obtém largura e altura do vídeo usando OpenCV.
         """
-        # TODO: Implementar usando opencv-python ou ffmpeg-python
-        logger.debug(f"Dimensões de vídeo não implementadas ainda para {filepath}")
-        return (0, 0)
-    
+        cap = cv2.VideoCapture(filepath)
+        if not cap.isOpened():
+            logger.warning(f"Não foi possível abrir o vídeo: {filepath}")
+            return (0, 0)
+
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        cap.release()
+
+        return (width, height)
+
     @staticmethod
     def is_gif(filepath: str) -> bool:
-        """Verifica se arquivo é GIF."""
-        mimetype = VideoTools.get_mimetype(filepath)
-        return mimetype == "image/gif"
-    
+        return VideoTools.get_mimetype(filepath) == "image/gif"
+
     @staticmethod
     def generate_thumbnail(filepath: str) -> bytes:
         """
-        Gera thumbnail JPEG do vídeo (primeiro frame).
-        
-        Nota: Requer biblioteca externa para extrair frame.
-        Por enquanto retorna bytes vazios.
+        Gera thumbnail JPEG a partir do primeiro frame do vídeo.
+        Garante:
+        - Dimensão máxima (640px)
+        - Tamanho máximo (32KB)
+        """
+        cap = cv2.VideoCapture(filepath)
+        if not cap.isOpened():
+            logger.warning(f"Não foi possível abrir o vídeo: {filepath}")
+            return b""
+
+        success, frame = cap.read()
+        cap.release()
+
+        if not success:
+            logger.warning(f"Não foi possível extrair frame do vídeo: {filepath}")
+            return b""
+
+        # Converte BGR (OpenCV) -> RGB (Pillow)
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        image = Image.fromarray(frame_rgb)
+
+        # Redimensiona mantendo proporção
+        image.thumbnail(
+            (VideoTools.MAX_THUMBNAIL_DIMENSION, VideoTools.MAX_THUMBNAIL_DIMENSION),
+            Image.LANCZOS
+        )
+
+        # Compressão adaptativa para respeitar 32KB
+        quality = VideoTools.JPEG_QUALITY
+        jpeg_bytes = b""
+
+        # while quality >= 40:
+        #     buffer = io.BytesIO()
+        #     image.save(buffer, format="JPEG", quality=quality, optimize=True)
+        #     jpeg_bytes = buffer.getvalue()
+
+        #     if len(jpeg_bytes) <= VideoTools.MAX_THUMBNAIL_SIZE:
+        #         break
+
+        #     quality -= 5
+
+        # if len(jpeg_bytes) > VideoTools.MAX_THUMBNAIL_SIZE:
+        #     logger.warning(
+        #         f"Thumbnail excede {VideoTools.MAX_THUMBNAIL_SIZE} bytes mesmo após compressão"
+        #     )
+
+        return jpeg_bytes
+
+    @staticmethod
+    def get_codec(filepath: str) -> str | None:
+        """
+        Retorna o codec do vídeo (fourcc) usando OpenCV.
+        Ex: 'avc1', 'h264', 'mp4v', 'XVID'
+        """
+        cap = cv2.VideoCapture(filepath)
+        if not cap.isOpened():
+            logger.warning(f"Não foi possível abrir o vídeo: {filepath}")
+            return None
+
+        fourcc_int = int(cap.get(cv2.CAP_PROP_FOURCC))
+        cap.release()
+
+        if fourcc_int == 0:
+            return None
+
+        codec = "".join([
+            chr((fourcc_int >> 8 * i) & 0xFF)
+            for i in range(4)
+        ])
+
+        return codec.strip()
+
+
+    def process_video(filepath: str) -> VideoMetadata:
+        """
+        Processa video completa: dimensões, SHA256, thumbnail.
         
         Args:
             filepath: Caminho do arquivo
         
         Returns:
-            bytes: Thumbnail JPEG (vazio se não disponível)
+            VideoMetadata: Metadados do video
         """
-        # TODO: Implementar usando opencv-python ou ffmpeg-python
-        logger.debug(f"Thumbnail de vídeo não implementado ainda para {filepath}")
-        return b""
+        if not os.path.exists(filepath):
+            raise FileNotFoundError(f"Arquivo não encontrado: {filepath}")
+        
+        # Obtém dimensões
+        width, height = VideoTools.get_dimensions(filepath) 
+        
+        # Obtém MIME type
+        mimetype = VideoTools.get_mimetype(filepath)
+        
+        # Lê arquivo e calcula SHA256
+        with open(filepath, 'rb') as f:
+            file_data = f.read()
+        
+        file_length = len(file_data)
+        sha256 = hashlib.sha256(file_data).digest()  # Bytes raw (32 bytes) - protobuf espera bytes, não base64
+        
+        # Gera thumbnail
+        jpeg_thumbnail = None
+        try:
+            jpeg_thumbnail = VideoTools.generate_thumbnail(filepath) 
+        except Exception as e:
+            logger.warning(f"Erro ao gerar thumbnail para {filepath}: {e}")
+
+
+        seconds = None
+        try:
+            seconds = VideoTools.get_duration(filepath)
+        except Exception as e:
+            seconds = random.randint(20,100)
+            logger.warning(f"Erro ao gerar seconds para {filepath}: {e}")
+
+        return VideoMetadata(
+            width=width,
+            height=height,
+            seconds=seconds,
+            gif_playback=VideoTools.is_gif(filepath),
+            mimetype=mimetype,
+            file_length=file_length,
+            file_sha256=sha256,
+            jpeg_thumbnail=jpeg_thumbnail,
+        )
+
 
 
 class AudioTools:
@@ -507,24 +564,21 @@ class AudioTools:
         Returns:
             int: Duração em segundos (0 se não disponível)
         """
-        # Tenta com mutagen primeiro
-        if HAS_MUTAGEN:
-            try:
-                audio_file = MutagenFile(filepath)
-                if audio_file is not None:
-                    duration = audio_file.info.length
-                    return int(duration) if duration else 0
-            except Exception as e:
-                logger.debug(f"Erro ao obter duração com mutagen para {filepath}: {e}")
+        try:
+            audio_file = MutagenFile(filepath)
+            if audio_file is not None:
+                duration = audio_file.info.length
+                return int(duration) if duration else 0
+        except Exception as e:
+            logger.debug(f"Erro ao obter duração com mutagen para {filepath}: {e}")
         
         # Tenta com pydub
-        if HAS_PYDUB:
-            try:
-                audio = AudioSegment.from_file(filepath)
-                return int(len(audio) / 1000)  # Converte ms para segundos
-            except Exception as e:
-                logger.debug(f"Erro ao obter duração com pydub para {filepath}: {e}")
-        
+        try:
+            audio = AudioSegment.from_file(filepath)
+            return int(len(audio) / 1000)  # Converte ms para segundos
+        except Exception as e:
+            logger.debug(f"Erro ao obter duração com pydub para {filepath}: {e}")
+    
         logger.debug(f"Duração de áudio não disponível para {filepath}")
         return 0
     

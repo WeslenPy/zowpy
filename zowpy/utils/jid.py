@@ -48,6 +48,7 @@ def to_whatsapp_jid(jid: str, is_group: bool = False) -> str:
         raise ValueError("Invalid JID")
     
     if is_group:
+        if jid.endswith("@broadcast"):return jid
         return f"{jid}@{YowConstants.WHATSAPP_GROUP_SERVER}"
     else:
         return f"{jid}@{YowConstants.WHATSAPP_SERVER}"
