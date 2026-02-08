@@ -1051,13 +1051,12 @@ class WhatsAppClient:
         """
         logger.info("Message loop iniciado (com processamento paralelo)")
         
-        # Fila assíncrona para nodes recebidos
-        # maxsize=100 para evitar acúmulo excessivo (nodes serão descartados se fila cheia)
-        node_queue = asyncio.Queue(maxsize=1000)
+        # Fila de nodes para processamento paralelo
+        # Aumentado para 5000 para evitar descarte durante login com muitas mensagens offline
+        node_queue = asyncio.Queue(maxsize=5000)
         
         # Número de workers para processar nodes em paralelo
-        # 3 workers permite processar até 3 nodes simultaneamente
-        num_workers = 10
+        num_workers = 15 # Aumentado de 10 para 15 para maior paralelismo
         
         # Task para receber nodes (não bloqueia processamento)
         async def receive_loop():
@@ -4630,15 +4629,23 @@ class WhatsAppClient:
         logger.info(f"Processando {len(pending)} mensagens pendentes para {conversation_id}")
         
         # Processa cada mensagem pendente
-        for message_node in pending:
-            try:
-                # Tenta descriptografar novamente
-                decrypted_bytes = await self._encryption_receiver.decrypt_message(message_node)
-                if decrypted_bytes:
-                    # Processa mensagem descriptografada
-                    await self._process_protocol_node(message_node, decrypted_bytes)
-            except Exception as e:
-                logger.error(f"Erro ao processar mensagem pendente: {e}", exc_info=True)
+        # Usamos asyncio.gather para processar em paralelo, mas com um semáforo para não sobrecarregar
+        semaphore = asyncio.Semaphore(10)
+        
+        async def process_with_semaphore(msg_node):
+            async with semaphore:
+                try:
+                    # Tenta descriptografar novamente
+                    decrypted_bytes = await self._encryption_receiver.decrypt_message(msg_node)
+                    if decrypted_bytes:
+                        # Processa mensagem descriptografada
+                        await self._process_protocol_node(msg_node, decrypted_bytes)
+                except Exception as e:
+                    logger.error(f"Erro ao processar mensagem pendente: {e}", exc_info=True)
+
+        tasks = [process_with_semaphore(message_node) for message_node in pending]
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         
         # Remove mensagens processadas
         del self._encryption_receiver._pending_messages[conversation_id]
