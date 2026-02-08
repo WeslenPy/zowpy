@@ -90,34 +90,36 @@ class MessageProcessor(BaseProcessor):
 
                   
             # 7. Envia receipt automático
-            await self._send_receipt(node)
+            await self._send_receipt(node) # marca como recebido
             
-            if enc_node:
-                # Mensagem criptografada - descriptografa
-                logger.debug("Mensagem criptografada, descriptografando...")
-                decrypted_bytes = await self._encryption.decrypt_message(node)
+            # if enc_node:
+            #     # Mensagem criptografada - descriptografa
+            #     logger.debug("Mensagem criptografada, descriptografando...")
+            #     decrypted_bytes = await self._encryption.decrypt_message(node)
                 
-                if not decrypted_bytes:
-                    logger.warning(f"Não foi possível descriptografar mensagem {message_id}")
-                    return None
+            #     if not decrypted_bytes:
+            #         logger.warning(f"Não foi possível descriptografar mensagem {message_id}")
+            #         return None
                 
-                # Usa bytes descriptografados para parsing
-                proto_bytes = decrypted_bytes
-            elif proto_node and proto_node.data:
-                # Mensagem não criptografada (raro, mas possível)
-                logger.debug("Mensagem não criptografada")
-                proto_bytes = proto_node.data
-            else:
-                logger.warning(f"Mensagem sem <enc> ou <proto>: {message_id}")
-                return None
+            #     # Usa bytes descriptografados para parsing
+            #     proto_bytes = decrypted_bytes
+            # elif proto_node and proto_node.data:
+            #     # Mensagem não criptografada (raro, mas possível)
+            #     logger.debug("Mensagem não criptografada")
+            #     proto_bytes = proto_node.data
+            # else:
+            #     logger.warning(f"Mensagem sem <enc> ou <proto>: {message_id}")
+            #     return None
             
-            # 2. Parseia protobuf
-            logger.debug(f"Parseando protobuf: {len(proto_bytes)} bytes")
-            parsed = await self._parser.parse(proto_bytes)
+            # # 2. Parseia protobuf
+            # logger.debug(f"Parseando protobuf: {len(proto_bytes)} bytes")
+            # parsed = await self._parser.parse(proto_bytes)
+
+            parsed = {}
             
-            if not parsed:
-                logger.warning(f"Falha ao parsear mensagem {message_id}")
-                parsed = {}
+            # if not parsed:
+            #     logger.warning(f"Falha ao parsear mensagem {message_id}")
+            #     parsed = {}
             
             # 3. Extrai informações do node
             participant = node.get_attribute("participant")
