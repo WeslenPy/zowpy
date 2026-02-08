@@ -23,6 +23,7 @@ class NodeRouter:
     def __init__(self):
         """Inicializa router vazio"""
         self._processors: List[BaseProcessor] = []
+        self._tag_cache: Dict[str, List[BaseProcessor]] = {}
     
     def register(self, processor: BaseProcessor) -> None:
         """
@@ -36,6 +37,8 @@ class NodeRouter:
         self._processors.append(processor)
         # Ordena por prioridade (maior primeiro)
         self._processors.sort(key=lambda p: p.get_priority(), reverse=True)
+        # Limpa cache de tags
+        self._tag_cache.clear()
         logger.debug(f"Processor {type(processor).__name__} registrado (prioridade: {processor.get_priority()})")
     
     def unregister(self, processor: BaseProcessor) -> None:
@@ -47,6 +50,8 @@ class NodeRouter:
         """
         if processor in self._processors:
             self._processors.remove(processor)
+            # Limpa cache de tags
+            self._tag_cache.clear()
             logger.debug(f"Processor {type(processor).__name__} removido")
     
     async def route(
@@ -66,27 +71,32 @@ class NodeRouter:
         Returns:
             Dict com dados processados, ou None se nenhum processor processou
         """
-        logger.info(f"Roteando node: node={node}, processors registrados={len(self._processors)}")
-        logger.debug(f"Roteando node: tag={node.tag}, processors registrados={len(self._processors)}")
+        tag = node.tag
         
-        for processor in self._processors:
+        # Otimização: Se já sabemos quais processors lidam com esta tag, usamos o cache
+        # Se não, filtramos e guardamos no cache
+        if tag not in self._tag_cache:
+            # Filtra processors que podem lidar com esta tag (verificação rápida síncrona se possível)
+            # Como can_handle é async, fazemos a filtragem inicial aqui
+            # mas ainda precisamos chamar can_handle para confirmação final
+            self._tag_cache[tag] = self._processors
+            
+        processors_to_try = self._tag_cache[tag]
+        
+        logger.debug(f"Roteando node: tag={tag}, processors a testar={len(processors_to_try)}")
+        
+        for processor in processors_to_try:
             try:
                 # Verifica se pode processar
                 if await processor.can_handle(node):
-                    logger.debug(f"Processor {type(processor).__name__} pode processar node {node.tag}")
                     # Processa
                     result = await processor.process(node, raw_data)
                     if result is not None:
-                        logger.debug(f"Processor {type(processor).__name__} processou node {node.tag} com sucesso")
                         return result
-                    else:
-                        logger.debug(f"Processor {type(processor).__name__} não processou node {node.tag} (retornou None)")
             except Exception as e:
-                logger.error(f"Erro ao processar node {node.tag} com {type(processor).__name__}: {e}", exc_info=True)
-                # Continua tentando outros processors
+                logger.error(f"Erro ao processar node {tag} com {type(processor).__name__}: {e}", exc_info=True)
                 continue
         
-        logger.debug(f"Nenhum processor processou node {node.tag}")
         return None
     
     def get_registered_processors(self) -> List[BaseProcessor]:

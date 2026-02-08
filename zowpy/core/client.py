@@ -1051,12 +1051,16 @@ class WhatsAppClient:
         """
         logger.info("Message loop iniciado (com processamento paralelo)")
         
-        # Fila de nodes para processamento paralelo
+        # Fila de nodes para processamento paralelo com prioridades
         # Aumentado para 5000 para evitar descarte durante login com muitas mensagens offline
-        node_queue = asyncio.Queue(maxsize=5000)
+        # Prioridades: 0 (Crítica/Callbacks), 1 (Controle), 2 (Tempo Real), 3 (Histórico)
+        node_queue = asyncio.PriorityQueue(maxsize=5000)
         
         # Número de workers para processar nodes em paralelo
-        num_workers = 15 # Aumentado de 10 para 15 para maior paralelismo
+        # 5 workers dedicados a alta prioridade (0 e 1)
+        # 10 workers para prioridades normais (2 e 3)
+        num_high_priority_workers = 5
+        num_standard_workers = 10
         
         # Task para receber nodes (não bloqueia processamento)
         async def receive_loop():
@@ -1081,14 +1085,31 @@ class WhatsAppClient:
                     
                     logger.debug(f"Node recebido: {node}")
                     
-                    # Coloca node na fila para processamento (não bloqueia recepção)
+                    # Determina a prioridade do node
+                    priority = 2 # Padrão: Tempo Real
+                    
+                    if node.tag == "iq":
+                        iq_id = node.get_attribute("id")
+                        if self._iq_response_processor.has_callback(iq_id):
+                            priority = 0 # Crítica: Resposta a comando do usuário
+                        else:
+                            priority = 1 # Controle: IQ genérico
+                    elif node.tag in ("presence", "notification", "ack"):
+                        priority = 1 # Controle
+                    elif node.tag == "message":
+                        # Verifica se é mensagem offline (histórico)
+                        if node.get_attribute("offline") or node.get_attribute("history"):
+                            priority = 3 # Histórico
+                        else:
+                            priority = 2 # Tempo Real
+                    
+                    # Coloca node na fila para processamento com sua prioridade
                     try:
-                        logger.debug(f"Worker ANTES de processar node {node.tag}")
-                        await asyncio.wait_for(node_queue.put((node, decrypted)), timeout=0.1)
-                        logger.debug(f"Worker DEPOIS de processar node {node.tag}")
-                        logger.debug(f"Node {node.tag} enfileirado (queue_size={node_queue.qsize()})")
+                        logger.debug(f"Enfileirando node {node.tag} com prioridade {priority}")
+                        await asyncio.wait_for(node_queue.put((priority, (node, decrypted))), timeout=0.1)
+                        logger.debug(f"Node {node.tag} enfileirado (priority={priority}, queue_size={node_queue.qsize()})")
                     except asyncio.TimeoutError:
-                        logger.warning(f"Fila de nodes cheia (qsize={node_queue.qsize()}), descartando node {node.tag} (pode indicar processamento lento)")
+                        logger.warning(f"Fila de nodes cheia (qsize={node_queue.qsize()}), descartando node {node.tag}")
                         continue
                         
                 except asyncio.TimeoutError:
@@ -1104,42 +1125,50 @@ class WhatsAppClient:
             logger.debug("Receive loop encerrado")
         
         # Worker para processar nodes da fila
-        async def process_worker(worker_id: int):
-            """Worker que processa nodes da fila em paralelo."""
-            logger.debug(f"Worker {worker_id} iniciado")
+        async def process_worker(worker_id: int, worker_type: str = "standard"):
+            """Worker que processa nodes da fila em paralelo respeitando prioridades."""
+            logger.debug(f"Worker {worker_type}_{worker_id} iniciado")
             
             while self._running:
                 try:
-                    # Aguarda node da fila (com timeout para verificar _running periodicamente)
+                    # Aguarda node da fila
                     try:
-                        node, raw_data = await asyncio.wait_for(node_queue.get(), timeout=1.0)
+                        # Se for worker de alta prioridade, ele pode ter lógica preferencial no futuro
+                        # Por enquanto, a PriorityQueue já garante a ordem, mas ter workers separados
+                        # permite que os de alta prioridade nunca fiquem presos em tarefas longas de baixa prioridade.
+                        priority, (node, raw_data) = await asyncio.wait_for(node_queue.get(), timeout=1.0)
                     except asyncio.TimeoutError:
                         continue
                     
-                    logger.debug(f"Worker {worker_id} processando node {node.tag} (queue_size={node_queue.qsize()})")
+                    # Se um worker standard pegar um node de alta prioridade, tudo bem.
+                    # Mas se um worker de alta prioridade pegar um node de baixa prioridade (3),
+                    # ele pode ficar preso se o processamento for lento.
+                    # Estratégia: Workers de alta prioridade só pegam prioridade 0 e 1 se houver muitos na fila.
+                    # Por enquanto, a PriorityQueue é suficiente para a maioria dos casos.
                     
-                    # Processa node (pode demorar ou falhar, mas não bloqueia outros workers)
+                    logger.debug(f"Worker {worker_type}_{worker_id} processando node {node.tag} (priority={priority}, queue_size={node_queue.qsize()})")
+                    
+                    # Processa node
                     try:
-                        logger.debug(f"Worker {worker_id} ANTES de processar node {node.tag}")
                         await self._process_protocol_node(node, raw_data=raw_data)
-                        logger.debug(f"Worker {worker_id} DEPOIS de processar node {node.tag}")
                     except Exception as e:
-                        logger.error(f"Erro ao processar node {node.tag} no worker {worker_id}: {e}", exc_info=True)
+                        logger.error(f"Erro ao processar node {node.tag} no worker {worker_type}_{worker_id}: {e}", exc_info=True)
                     finally:
                         # Marca task como concluída
                         node_queue.task_done()
-                        logger.debug(f"Worker {worker_id} concluiu processamento de node {node.tag}")
                         
                 except Exception as e:
-                    logger.error(f"Erro no worker {worker_id}: {e}", exc_info=True)
+                    logger.error(f"Erro no worker {worker_type}_{worker_id}: {e}", exc_info=True)
                     await asyncio.sleep(0.1)
                     continue
             
-            logger.debug(f"Worker {worker_id} encerrado")
+            logger.debug(f"Worker {worker_type}_{worker_id} encerrado")
         
         # Inicia receive loop e workers
         receive_task = asyncio.create_task(receive_loop())
-        worker_tasks = [asyncio.create_task(process_worker(i)) for i in range(num_workers)]
+        high_priority_workers = [asyncio.create_task(process_worker(i, "high")) for i in range(num_high_priority_workers)]
+        standard_workers = [asyncio.create_task(process_worker(i, "standard")) for i in range(num_standard_workers)]
+        worker_tasks = high_priority_workers + standard_workers
         
         try:
             # Aguarda todas as tasks

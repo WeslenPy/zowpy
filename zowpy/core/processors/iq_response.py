@@ -76,6 +76,20 @@ class IQResponseProcessor:
             del self._callbacks[iq_id]
             logger.debug(f"Callback removido para IQ {iq_id}")
     
+    def has_callback(self, iq_id: str) -> bool:
+        """
+        Verifica rapidamente se existe um callback registrado para o ID.
+        
+        Args:
+            iq_id: ID do IQ
+            
+        Returns:
+            True se existe callback, False caso contrário
+        """
+        if not iq_id:
+            return False
+        return iq_id in self._callbacks
+
     async def process_iq_response(self, node: ProtocolNode) -> bool:
         """
         Processa resposta de IQ e chama callback se registrado.
