@@ -153,10 +153,10 @@ class ContactHandler:
                                 contact_data = str(contact.data)
                     
                     if type_value == "in":                                
-                        in_users[contact_data] = user.get_attribute("jid")     
-                        in_numbers.append(contact_data)
+                        in_users[contact_data.replace("+", "")] = user.get_attribute("jid")     
+                        in_numbers.append(contact_data.replace("+", ""))
                     elif type_value == "out":
-                        out_numbers[contact_data] = user.get_attribute("jid")
+                        out_numbers[contact_data.replace("+", "")] = user.get_attribute("jid")
                         # in_numbers.append(contact_data)
                             
 

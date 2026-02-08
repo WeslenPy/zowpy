@@ -580,7 +580,7 @@ class ZowPyClient:
         if len(new_sync) > 0:
             result = await self._client.contact_handler.sync_contacts(new_sync, mode, context)
             for valid_number in result["in_numbers"]:
-                await self._client.axolotl_manager._store.addContact(valid_number)
+                await self._client.axolotl_manager._store.addContact(valid_number.replace("+", ""))
             return result
 
         return {}

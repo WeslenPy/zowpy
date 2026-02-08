@@ -20,7 +20,7 @@ def normalize(jid: str) -> Optional[str]:
         return None
     
     # Remove @s.whatsapp.net se presente
-    jid = jid.replace(f"@{YowConstants.WHATSAPP_SERVER}", "")
+    jid = jid.replace(f"@{YowConstants.WHATSAPP_SERVER}", "").replace("+", "")
     jid = jid.replace(f"@{YowConstants.WHATSAPP_GROUP_SERVER}", "")
     
     # Remove caracteres não numéricos
