@@ -5262,7 +5262,7 @@ class WhatsAppClient:
                         Account.is_logged_in==True,
                     )
                 )
-                account = result.scalar_one_or_none()
+                account = result.scalars().first()
 
                 return account
                 
