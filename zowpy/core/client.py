@@ -5245,6 +5245,29 @@ class WhatsAppClient:
                     logger.info(f"🌐 PROXY removido do banco de dados (conta: {self.account_id})")
         except Exception as e:
             logger.warning(f"Erro ao remover proxy do banco: {e}")
+
+
+
+    @staticmethod
+    async def get_account_active()->Account | None:
+        from zowpy.db.config.engine import AsyncSessionMaker
+        try:
+            from ..db.models import Account
+            from sqlalchemy import select
+            
+            async with AsyncSessionMaker() as session:
+                result = await session.execute(
+                    select(Account
+                    ).filter(
+                        Account.is_logged_in==True,
+                    )
+                )
+                account = result.scalar_one_or_none()
+
+                return account
+                
+        except Exception as e:
+            logger.warning(f"Erro ao buscar conta ativa do banco: {e}")
     
 
     @classmethod

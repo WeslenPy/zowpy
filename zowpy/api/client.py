@@ -56,6 +56,12 @@ class ZowPyClient:
         
         # Eventos
         self._events = AsyncEventEmitter()
+
+
+
+    @staticmethod
+    async def get_account_active():
+        return await WhatsAppClient.get_account_active()
     
     async def connect(self) -> None:
         """
