@@ -5269,6 +5269,27 @@ class WhatsAppClient:
         except Exception as e:
             logger.warning(f"Erro ao buscar conta ativa do banco: {e}")
     
+    @staticmethod
+    async def get_all_accounts_active()->list[Account]:
+        from zowpy.db.config.engine import AsyncSessionMaker
+        try:
+            from ..db.models import Account
+            from sqlalchemy import select
+            
+            async with AsyncSessionMaker() as session:
+                result = await session.execute(
+                    select(Account
+                    ).filter(
+                        Account.is_logged_in==True,
+                    )
+                )
+                accounts = result.scalars().all()
+
+                return accounts
+                
+        except Exception as e:
+            logger.warning(f"Erro ao buscar conta ativa do banco: {e}")
+    
 
     @classmethod
     async def _test_proxy(cls, proxy_config: ProxyConfig, test_url: str) -> bool:

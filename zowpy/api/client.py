@@ -62,6 +62,14 @@ class ZowPyClient:
     @staticmethod
     async def get_account_active():
         return await WhatsAppClient.get_account_active()
+
+
+    @staticmethod
+    async def get_all_accounts_active():
+        return await WhatsAppClient.get_all_accounts_active()
+
+
+    
     
     async def connect(self) -> None:
         """
