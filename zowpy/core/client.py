@@ -1053,11 +1053,11 @@ class WhatsAppClient:
         
         # Fila assíncrona para nodes recebidos
         # maxsize=100 para evitar acúmulo excessivo (nodes serão descartados se fila cheia)
-        node_queue = asyncio.Queue(maxsize=100)
+        node_queue = asyncio.Queue(maxsize=1000)
         
         # Número de workers para processar nodes em paralelo
         # 3 workers permite processar até 3 nodes simultaneamente
-        num_workers = 3
+        num_workers = 10
         
         # Task para receber nodes (não bloqueia processamento)
         async def receive_loop():
