@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
+import struct
 from typing import Optional
+import zlib
 from .constants import YowConstants
 import codecs, sys
 import tempfile
@@ -14,6 +16,13 @@ import re
 from loguru import logger
 import requests
 from urllib.parse import urlparse
+from Crypto.Cipher import AES
+from Crypto.Random import get_random_bytes
+import hmac
+from math import ceil
+from Crypto.Util.Padding import pad,unpad
+
+
 
 # Optional modules - importação segura de módulos opcionais
 class PILOptionalModule:
@@ -196,7 +205,100 @@ class WATools:
             return media_key_str.encode("GBK")
         except (LookupError, UnicodeEncodeError):
             # Fallback para UTF-8 se GBK não disponível
-            return media_key_str.encode("utf-8")        
+            return media_key_str.encode("utf-8")      
+
+    @staticmethod
+    def compress(uncompressed: bytes) -> bytes:
+        """
+        Comprime dados usando zlib.
+        :param uncompressed: Dados não comprimidos
+        :return: Dados comprimidos
+        :rtype: bytes
+        """
+        compressor = zlib.compressobj()
+        compressed_data = compressor.compress(uncompressed)
+        compressed_data += compressor.flush()
+        return compressed_data
+
+    @staticmethod
+    def decompress(compressed: bytes) -> bytes:
+        """
+        Descomprime dados usando zlib.
+        :param compressed: Dados comprimidos
+        :return: Dados descomprimidos
+        :rtype: bytes
+        """
+        decompressor = zlib.decompressobj()
+        decompressed_data = decompressor.decompress(compressed)
+        decompressed_data += decompressor.flush()
+        return decompressed_data          
+    
+    @staticmethod
+    def extract_and_expand(key: bytes, info: bytes = b"", output_length: int = 32,salt=None) -> bytes:         
+        return WATools.expand(hmac.new(salt if salt is not None else bytes(32) , key, hashlib.sha256).digest(), info, output_length)
+    
+    @staticmethod
+    def expand(prk: bytes, info: bytes, output_size: int) -> bytes:
+        """
+        Expande uma chave usando hmac.
+        :param prk: Chave primária
+        :param info: Info
+        :param output_size: Tamanho da saída
+        :return: Chave expandida
+        :rtype: bytes
+        """
+        HASH_OUTPUT_SIZE = 32  # SHA-256 produces a 32-byte output                
+        iterations = ceil(output_size / HASH_OUTPUT_SIZE)
+        mixin = b""
+        results = bytearray()
+        
+        for index in range(1, iterations + 1):
+            mac = hmac.new(prk, mixin, hashlib.sha256)
+            if info:
+                mac.update(info)
+            mac.update(bytes([index]))
+            step_result = mac.digest()
+            step_size = min(output_size, len(step_result))
+            results.extend(step_result[:step_size])
+            mixin = step_result
+            output_size -= step_size
+        
+        return bytes(results)
+    
+    
+    @staticmethod
+    def encryptAndPrefix(buffer,key):                
+        iv = get_random_bytes(AES.block_size)              
+        cipher = AES.new(key, AES.MODE_CBC,iv= iv)           
+        buffer_padded = pad(buffer, AES.block_size)
+        ciphered = cipher.encrypt(buffer_padded)    
+        return iv+ciphered    
+    
+    @staticmethod
+    def generateMac(opbyte,data,keyId,key):        
+        keyData = opbyte+keyId
+        last = struct.pack(">Q",len(keyData))                
+        total = keyData+data+last        
+        mac = hmac.new(key, total, hashlib.sha512).digest()                
+        return mac[0:32]
+    
+    @staticmethod
+    def generateSnapshotMac(ltHash,version,patchType,key):
+        total = ltHash+struct.pack(">Q", version)+patchType.encode()
+        mac = hmac.new(key, total, hashlib.sha256).digest()
+        return mac
+    
+
+    @staticmethod
+    def generatePatchMac(snapShotMac,valueMacs,version,patchType,key):
+        total = snapShotMac
+        for item in valueMacs:
+            total+=item
+        total+=struct.pack(">Q", version)+patchType.encode()
+        mac = hmac.new(key, total, hashlib.sha256).digest()
+        return mac        
+
+  
 
 class StorageTools:
     NAME_CONFIG = "config.json"

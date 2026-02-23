@@ -292,7 +292,45 @@ class ImageTools:
                 
         except Exception as e:
             return b""
-    
+
+    @staticmethod
+    def resize_to_jpeg(
+        filepath: str,
+        width: int,
+        height: int,
+        quality: int = JPEG_QUALITY
+    ) -> bytes:
+        """
+        Redimensiona imagem para dimensões exatas e retorna JPEG.
+
+        Usado ex.: para avatar de perfil (640x640 + preview 96x96).
+        Converte para RGB e redimensiona sem manter proporção (preenche exatamente width x height).
+
+        Args:
+            filepath: Caminho do arquivo
+            width: Largura desejada
+            height: Altura desejada
+            quality: Qualidade JPEG 1-100 (padrão: 85)
+
+        Returns:
+            bytes: Imagem JPEG redimensionada
+        """
+        if not os.path.exists(filepath):
+            raise FileNotFoundError(f"Arquivo não encontrado: {filepath}")
+        with Image.open(filepath) as img:
+            if img.mode in ("RGBA", "LA", "P"):
+                background = Image.new("RGB", img.size, (255, 255, 255))
+                if img.mode == "P":
+                    img = img.convert("RGBA")
+                background.paste(img, mask=img.split()[-1] if img.mode == "RGBA" else None)
+                img = background
+            elif img.mode != "RGB":
+                img = img.convert("RGB")
+            img = img.resize((width, height), Image.Resampling.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=quality, optimize=True)
+            return buf.getvalue()
+
     @staticmethod
     def process_image(filepath: str) -> ImageMetadata:
         """

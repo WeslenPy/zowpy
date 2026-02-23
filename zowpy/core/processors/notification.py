@@ -7,7 +7,7 @@ Fluxo alinhado ao zowsuplib NOTIFICATION.md e protocol_notifications layer:
 - Demais tipos processados: classificar, emitir evento, sempre enviar ACK (id, class=notification, type, to=from, participant).
 """
 
-from typing import Optional, Dict, Any, Callable, List
+from typing import Optional, Dict, Any, Callable, List, Awaitable
 from loguru import logger
 
 from ...protocol.structs import ProtocolNode
@@ -26,12 +26,14 @@ class NotificationProcessor(BaseProcessor):
         events: AsyncEventEmitter,
         flush_prekeys_fn: Optional[Callable] = None,
         get_keys_fn: Optional[Callable] = None,
-        send_ack_fn: Optional[Callable] = None
+        send_ack_fn: Optional[Callable] = None,
+        update_trusted_contact_fn: Optional[Callable[[str, bytes], Awaitable[Any]]] = None,
     ):
         self._events = events
         self._flush_prekeys = flush_prekeys_fn
         self._get_keys = get_keys_fn
         self._send_ack = send_ack_fn
+        self._update_trusted_contact = update_trusted_contact_fn
 
     def get_priority(self) -> int:
         return 5
@@ -85,6 +87,15 @@ class NotificationProcessor(BaseProcessor):
                     typ = child.get_attribute("type") if hasattr(child, "get_attribute") else None
                     data = getattr(child, "data", None)
                     items.append({"type": typ, "data": data})
+                    # Salva trusted_contact diretamente no store (igual zowsuplib layer)
+                    if typ == "trusted_contact" and from_jid:
+                        tctoken_bytes = data if isinstance(data, bytes) else (data or b"")
+                        if self._update_trusted_contact and tctoken_bytes:
+                            try:
+                                await self._update_trusted_contact(from_jid, tctoken_bytes)
+                                logger.debug("Trusted contact token salvo para %s", from_jid.split("@")[0])
+                            except Exception as e:
+                                logger.error("Erro ao salvar trusted contact token: %s", e)
                 if items:
                     token_data = {"tokens": items}
             notification_data = {

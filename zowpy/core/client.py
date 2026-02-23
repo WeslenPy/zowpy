@@ -13,6 +13,7 @@ import time
 from typing import Optional, Dict, Any, Tuple, List, Union
 from loguru import logger
 
+from zowpy.axolotl.ecc.curve import Curve
 from zowpy.db.config.engine import AsyncSessionMaker
 from zowpy.db.factory import AxolotlManagerFactory
 from zowpy.db.models import Account
@@ -29,6 +30,7 @@ from zowpy.protocol.entities.attributes.attributes_video import VideoAttributes
 from zowpy.protocol.entities.attributes.attributes_message_key import MessageKeyAttributes
 from zowpy.protocol.entities.attributes.attributes_protocol import ProtocolAttributes
 from zowpy.protocol.entities.message import ProtomessageProtocolEntity
+from zowpy.protocol.historysync.attributes import AppStateSyncKeyAttribute, AppStateSyncKeyDataAttribute, AppStateSyncKeyFingerprintAttribute, AppStateSyncKeyIdAttribute
 from zowpy.utils.tools import Jid, WATools
 from zowpy.config.bot_env import BotEnv
 from zowpy.config.network import NetworkConfig, ProxyConfig
@@ -65,6 +67,7 @@ from .processors.notification import NotificationProcessor
 from .processors.group import GroupProcessor
 from .processors.ib import IbProcessor
 from .processors.stream_error import StreamErrorProcessor
+from .processors.failure import FailureProcessor
 from .processors.iq_response import IQResponseProcessor
 from .encryption.receiver import EncryptionReceiver
 from .encryption.sender import EncryptionSender
@@ -83,14 +86,14 @@ from .handlers.config_handler import ConfigHandler
 
 # Builders
 from .builders.prekey_builder import PrekeyBuilder
+from .builders.message_extras_builder import add_message_extras as build_message_extras
+from .session_jid import (
+    deduplicate_jids_by_recipient_device,
+    jids_without_session,
+)
+from .keys import parse_get_keys_response
 
-# Imports para _get_keys_for_recipient
-import sys
 import binascii
-from ..axolotl.state.prekeybundle import PreKeyBundle
-from ..axolotl.identitykey import IdentityKey
-from ..axolotl.ecc.curve import Curve
-from ..axolotl.ecc.djbec import DjbECPublicKey
 from ..axolotl import exceptions
 from ..utils.constants import YowConstants
 from enum import Enum
@@ -161,7 +164,6 @@ class WhatsAppClient:
         self.axolotl_manager: Optional[AxolotlManager] = None
         
         # Stores e handlers (legacy - mantidos para compatibilidade)
-        self.state_store: Optional[AsyncStateStore] = None
         self.message_handler: Optional[AsyncMessageHandler] = None
         self.acks_handler: Optional[AsyncAcksHandler] = None
         self.receipts_handler: Optional[AsyncReceiptHandler] = None
@@ -405,9 +407,6 @@ class WhatsAppClient:
         # Profile
         self.profile = AsyncProfile(self.account_id, session_maker=self.session_maker)
         
-        # State store
-        self.state_store = AsyncStateStore(self.account_id, self.session_maker)
-        
         # Axolotl manager
         factory = AxolotlManagerFactory(session_maker=self.session_maker)
         self.axolotl_manager = await factory.get_manager(self.account_id, self.account_id)
@@ -635,9 +634,15 @@ class WhatsAppClient:
                 return
 
             if _data.get("code") == "503" or _data.get("type") == "conflict":
-                logger.warning("stream:error recebido; desconectando conta")
+                logger.warning("stream:error recebido; desconectando conta (graceful)")
                 asyncio.create_task(self.disconnect())
                 return
+
+        async def handle_failure(_data: dict) -> None:
+            if not self._running:
+                return
+            logger.warning("failure recebido; desconectando conta (graceful)")
+            asyncio.create_task(self.disconnect())
 
         async def disconnect_handler(*args, **kwargs):
             await self.disconnect()
@@ -646,10 +651,12 @@ class WhatsAppClient:
             await self.reconnect()
 
         self.events.on("stream:error", handle_stream_error)
+        self.events.on("failure", handle_failure)
         self.events.on("disconnected", disconnect_handler)
         self.events.on("reconnect", reconnect_handler)
 
         self._node_router.register(StreamErrorProcessor(self.events))
+        self._node_router.register(FailureProcessor(self.events))
         self._node_router.register(AckProcessor(self.events))
         self._node_router.register(PresenceProcessor(self.events))
         # IQProcessor precisa do IQResponseProcessor para chamar callbacks
@@ -681,7 +688,7 @@ class WhatsAppClient:
         self._node_router.register(group_processor)
         self._group_processor = group_processor
         
-        self._node_router.register(IbProcessor(self.events))
+        self._node_router.register(IbProcessor(self.events, send_node_fn=self._send_protocol_node))
         
         # Inicializa handlers públicos (serão configurados após conexão)
         # Os handlers precisam de send_iq_fn e send_presence_fn que só existem após conexão
@@ -1021,14 +1028,18 @@ class WhatsAppClient:
 
             logger.debug(f"Node recebido: {node}")
             logger.info(f"Node recebido: tag={node.tag}")
+
+            logger.info(f"self._connected: {self._connected}")
+            logger.info(f"self._authenticated: {self._authenticated}")
              
             # Processa node
             if node.tag == "success":
                 logger.info("✓ <success> recebido do servidor")
                 return  # Sucesso!
-            elif node.tag == "failure":
+            elif node.tag == "failure" and not ( self._connected and self._authenticated):
+                await self.auth_handler.handle_failure(node)
                 error_code = node.get_attribute("code") or node.get_attribute("reason") or "unknown"
-                logger.error(f"<failure> recebido: code={error_code}")
+                await self.disconnect()
                 raise AuthenticationError(f"Login falhou: code={error_code}")
             elif node.tag == "stream:features":
                 logger.info("stream:features recebido, enviando <auth>...")
@@ -1228,7 +1239,11 @@ class WhatsAppClient:
         
         self.profile_handler = ProfileHandler(
             send_iq_fn=send_iq_fn,
-            iq_response_processor=self._iq_response_processor
+            iq_response_processor=self._iq_response_processor,
+            get_app_state_key=self.get_app_state_key,
+            config=self.config,
+            profile=self.profile,
+            get_private_signing_key=lambda: self.axolotl_manager.identity.getPrivateKey(),
         )
         
         self.integrity_handler = IntegrityHandler(
@@ -1250,7 +1265,7 @@ class WhatsAppClient:
             self._encryption_receiver._send_receipt_on_error_fn = self._send_receipt_on_error
             self._encryption_receiver._get_registration_id_fn = self._get_registration_id
 
-        # Atualiza NotificationProcessor com funções disponíveis (send_ack, flush_prekeys, get_keys)
+        # Atualiza NotificationProcessor com funções disponíveis (send_ack, flush_prekeys, get_keys, update_trusted_contact)
         if self._notification_processor:
             async def _send_ack_notification(
                 nid: str, _cls: str, ntype: str, from_jid: str, participant: Optional[str] = None
@@ -1260,6 +1275,10 @@ class WhatsAppClient:
             self._notification_processor._send_ack = _send_ack_notification
             self._notification_processor._flush_prekeys = self._check_and_flush_prekeys
             self._notification_processor._get_keys = self._get_keys_for_recipient
+            if self.axolotl_manager and hasattr(self.axolotl_manager, "_store"):
+                async def _update_trusted_contact(jid: str, tctoken: bytes) -> None:
+                    await self.axolotl_manager._store.updateTrustedContact(jid, tctoken)
+                self._notification_processor._update_trusted_contact = _update_trusted_contact
 
         # Atualiza GroupProcessor com send_ack
         if self._group_processor:
@@ -1495,9 +1514,17 @@ class WhatsAppClient:
         phone = normalized_jid.split('@')[0] if '@' in normalized_jid else normalized_jid
         
         is_group = self._is_group_jid(to)
+        if is_group:
+            return await self._send_text_direct(to=to, text=text, message_id=message_id,
+                                                quoted=quoted,
+                                                options=options)
+        
+        
         to_jid = to_whatsapp_jid(to, is_group)
 
         is_new_contact = await self.axolotl_manager._store.isNewContact(to_jid)
+
+
         
         if is_new_contact:
             logger.info(f"Contato {normalized_jid} é novo, sincronizando e validando antes de enviar...")
@@ -1722,7 +1749,7 @@ class WhatsAppClient:
         to = "status@broadcast"
 
 
-        if media_type == MediaType.TEXT:
+        if media_type == MediaType.TEXT.value:
             return await self.send_status_text(
                 text=text,text_color=text_color,
                 background_color=background_color,
@@ -1731,21 +1758,21 @@ class WhatsAppClient:
             )
 
 
-        elif media_type ==  MediaType.IMAGE:
+        elif media_type ==  MediaType.IMAGE.value:
             return await self.send_image(
                 to=to,
                 file_path_or_url= file_path_or_url,
                 caption= caption
             )
 
-        elif media_type ==  MediaType.VIDEO:
+        elif media_type ==  MediaType.VIDEO.value:
             return await self.send_video(
                 to=to,
                 file_path_or_url= file_path_or_url,
                 caption= caption
             )
 
-        elif media_type ==  MediaType.AUDIO:
+        elif media_type ==  MediaType.AUDIO.value:
             return await self.send_audio(
                 to=to,
                 file_path_or_url= file_path_or_url,
@@ -1986,10 +2013,15 @@ class WhatsAppClient:
         """
         if not self._authenticated:
             raise RuntimeError("Not authenticated")
-        
-        # Usa ImageBuilder para upload
+        import time
         from .builders.video_builder import VideoBuilder
-        
+        from ..protocol.entities.attributes import (
+            DownloadableMediaMessageAttributes,
+            VideoAttributes,
+            MessageMetaAttributes,
+        )
+        from ..protocol.entities.media import VideoDownloadableMediaMessageProtocolEntity
+
         builder = await VideoBuilder.from_filepath(
             file_path_or_url=file_path_or_url,
             media_cipher=self._media_cipher,
@@ -1998,103 +2030,43 @@ class WhatsAppClient:
             caption=caption,
             progress_callback=progress_callback
         )
-        
-        # Obtém JID do remetente
-        from_jid = f"{self.account_id}@{YowConstants.WHATSAPP_SERVER}"
-        
-        # Faz upload e constrói VideoMessage protobuf
-        video_msg = await builder.upload_and_build(to, from_jid)
-        
-        # Extrai dados do protobuf
-        url = video_msg.url
-        direct_path = video_msg.direct_path if video_msg.direct_path else None
-        mimetype = video_msg.mimetype
-        file_sha256 = video_msg.file_sha256
-        file_length = video_msg.file_length
-        media_key = video_msg.media_key
-        media_key_timestamp = video_msg.media_key_timestamp
-        file_enc_sha256 = video_msg.file_enc_sha256
-        width = video_msg.width
-        seconds = video_msg.seconds
-        height = video_msg.height
-        gif_playback = video_msg.gif_playback
-        jpeg_thumbnail = video_msg.jpeg_thumbnail if video_msg.jpeg_thumbnail else None
-        
-        # Gera message_id se não fornecido
-        if not message_id:
-            message_id = self._message_builder._generate_message_id()
-        
-        # Normaliza e corrige JID de grupo se necessário
-        to = self._normalize_and_fix_group_jid(to)
-        
-        # Importa classes necessárias
-        from ..protocol.entities.attributes import (
-            DownloadableMediaMessageAttributes,
-            VideoAttributes,
-            MessageMetaAttributes,
-        )
-        from ..protocol.entities.media import (
-            VideoDownloadableMediaMessageProtocolEntity,
-        )
-        
-        # Cria DownloadableMediaMessageAttributes
-        downloadable_attrs = DownloadableMediaMessageAttributes(
-            mimetype=mimetype,
-            file_length=file_length,
-            file_sha256=file_sha256,
-            media_key=media_key,
-            media_key_timestamp=media_key_timestamp,
-            file_enc_sha256=file_enc_sha256,
-            url=url,
-            direct_path=direct_path
-        )
-        
-        # Cria ImageAttributes
-        image_attrs = VideoAttributes(
-            downloadablemedia_attributes=downloadable_attrs,
-            width=width,
-            height=height,
-            seconds=seconds,
-            caption=caption,
-            jpeg_thumbnail=jpeg_thumbnail,
-            gif_playback=gif_playback,
-        )
-        
-        # Cria MessageMetaAttributes
-        message_meta_attrs = MessageMetaAttributes(
-            id=message_id,
-            recipient=to,
-            fromMe=True,
-            timestamp=int(time.time())
-        )
-        
-        # Cria Protocol Entity
-        entity = VideoDownloadableMediaMessageProtocolEntity(
-            image_attrs,
-            message_meta_attrs
-        )
-        
-        # Converte para ProtocolNode
-        message_node = entity.to_protocol_node()
-        
-        # Extrai proto_bytes do node <proto>
-        proto_node = None
-        for child in message_node.children:
-            if child.tag == "proto":
-                proto_node = child
-                break
-        
-        if not proto_node or not proto_node.data:
-            raise ValueError("Falha ao obter dados protobuf do Protocol Entity")
-        
-        proto_bytes = proto_node.data
-        
-        # Envia usando fluxo existente
-        await self._send_to_contact(message_node, proto_bytes, to)
-        
-        return message_id
 
+        def build_node(video_msg, to_norm, msg_id):
+            url = video_msg.url
+            direct_path = video_msg.direct_path if video_msg.direct_path else None
+            downloadable_attrs = DownloadableMediaMessageAttributes(
+                mimetype=video_msg.mimetype,
+                file_length=video_msg.file_length,
+                file_sha256=video_msg.file_sha256,
+                media_key=video_msg.media_key,
+                media_key_timestamp=video_msg.media_key_timestamp,
+                file_enc_sha256=video_msg.file_enc_sha256,
+                url=url,
+                direct_path=direct_path
+            )
+            image_attrs = VideoAttributes(
+                downloadablemedia_attributes=downloadable_attrs,
+                width=video_msg.width,
+                height=video_msg.height,
+                seconds=video_msg.seconds,
+                caption=caption,
+                jpeg_thumbnail=video_msg.jpeg_thumbnail if video_msg.jpeg_thumbnail else None,
+                gif_playback=video_msg.gif_playback,
+            )
+            message_meta_attrs = MessageMetaAttributes(
+                id=msg_id,
+                recipient=to_norm,
+                fromMe=True,
+                timestamp=int(time.time())
+            )
+            entity = VideoDownloadableMediaMessageProtocolEntity(image_attrs, message_meta_attrs)
+            message_node = entity.to_protocol_node()
+            proto_node = next((c for c in message_node.children if c.tag == "proto"), None)
+            if not proto_node or not proto_node.data:
+                raise ValueError("Falha ao obter dados protobuf do Protocol Entity")
+            return message_node, proto_node.data
 
+        return await self._send_media_via_builder(to, builder, message_id, build_node)
 
     async def send_image(
         self,
@@ -2127,10 +2099,15 @@ class WhatsAppClient:
         """
         if not self._authenticated:
             raise RuntimeError("Not authenticated")
-        
-        # Usa ImageBuilder para upload
+        import time
         from .builders.image_builder import ImageBuilder
-        
+        from ..protocol.entities.attributes import (
+            DownloadableMediaMessageAttributes,
+            ImageAttributes,
+            MessageMetaAttributes,
+        )
+        from ..protocol.entities.media import ImageDownloadableMediaMessageProtocolEntity
+
         builder = await ImageBuilder.from_filepath(
             file_path_or_url=file_path_or_url,
             media_cipher=self._media_cipher,
@@ -2139,98 +2116,40 @@ class WhatsAppClient:
             caption=caption,
             progress_callback=progress_callback
         )
-        
-        # Obtém JID do remetente
-        from_jid = f"{self.account_id}@{YowConstants.WHATSAPP_SERVER}"
-        
-        # Faz upload e constrói ImageMessage protobuf
-        image_msg = await builder.upload_and_build(to, from_jid)
-        
-        # Extrai dados do protobuf
-        url = image_msg.url
-        direct_path = image_msg.direct_path if image_msg.direct_path else None
-        mimetype = image_msg.mimetype
-        file_sha256 = image_msg.file_sha256
-        file_length = image_msg.file_length
-        media_key = image_msg.media_key
-        media_key_timestamp = image_msg.media_key_timestamp
-        file_enc_sha256 = image_msg.file_enc_sha256
-        width = image_msg.width
-        height = image_msg.height
-        jpeg_thumbnail = image_msg.jpeg_thumbnail if image_msg.jpeg_thumbnail else None
-        
-        # Gera message_id se não fornecido
-        if not message_id:
-            message_id = self._message_builder._generate_message_id()
-        
-        # Normaliza e corrige JID de grupo se necessário
-        to = self._normalize_and_fix_group_jid(to)
-        
-        # Importa classes necessárias
-        from ..protocol.entities.attributes import (
-            DownloadableMediaMessageAttributes,
-            ImageAttributes,
-            MessageMetaAttributes,
-        )
-        from ..protocol.entities.media import (
-            ImageDownloadableMediaMessageProtocolEntity,
-        )
-        
-        # Cria DownloadableMediaMessageAttributes
-        downloadable_attrs = DownloadableMediaMessageAttributes(
-            mimetype=mimetype,
-            file_length=file_length,
-            file_sha256=file_sha256,
-            media_key=media_key,
-            media_key_timestamp=media_key_timestamp,
-            file_enc_sha256=file_enc_sha256,
-            url=url,
-            direct_path=direct_path
-        )
-        
-        # Cria ImageAttributes
-        image_attrs = ImageAttributes(
-            downloadable_attrs,
-            width,
-            height,
-            caption,
-            jpeg_thumbnail
-        )
-        
-        # Cria MessageMetaAttributes
-        message_meta_attrs = MessageMetaAttributes(
-            id=message_id,
-            recipient=to,
-            fromMe=True,
-            timestamp=int(time.time())
-        )
-        
-        # Cria Protocol Entity
-        entity = ImageDownloadableMediaMessageProtocolEntity(
-            image_attrs,
-            message_meta_attrs
-        )
-        
-        # Converte para ProtocolNode
-        message_node = entity.to_protocol_node()
-        
-        # Extrai proto_bytes do node <proto>
-        proto_node = None
-        for child in message_node.children:
-            if child.tag == "proto":
-                proto_node = child
-                break
-        
-        if not proto_node or not proto_node.data:
-            raise ValueError("Falha ao obter dados protobuf do Protocol Entity")
-        
-        proto_bytes = proto_node.data
-        
-        # Envia usando fluxo existente
-        await self._send_to_contact(message_node, proto_bytes, to)
-        
-        return message_id
-    
+
+        def build_node(image_msg, to_norm, msg_id):
+            downloadable_attrs = DownloadableMediaMessageAttributes(
+                mimetype=image_msg.mimetype,
+                file_length=image_msg.file_length,
+                file_sha256=image_msg.file_sha256,
+                media_key=image_msg.media_key,
+                media_key_timestamp=image_msg.media_key_timestamp,
+                file_enc_sha256=image_msg.file_enc_sha256,
+                url=image_msg.url,
+                direct_path=image_msg.direct_path if image_msg.direct_path else None
+            )
+            image_attrs = ImageAttributes(
+                downloadable_attrs,
+                image_msg.width,
+                image_msg.height,
+                caption,
+                image_msg.jpeg_thumbnail if image_msg.jpeg_thumbnail else None
+            )
+            message_meta_attrs = MessageMetaAttributes(
+                id=msg_id,
+                recipient=to_norm,
+                fromMe=True,
+                timestamp=int(time.time())
+            )
+            entity = ImageDownloadableMediaMessageProtocolEntity(image_attrs, message_meta_attrs)
+            message_node = entity.to_protocol_node()
+            proto_node = next((c for c in message_node.children if c.tag == "proto"), None)
+            if not proto_node or not proto_node.data:
+                raise ValueError("Falha ao obter dados protobuf do Protocol Entity")
+            return message_node, proto_node.data
+
+        return await self._send_media_via_builder(to, builder, message_id, build_node)
+
     async def send_media_direct(
         self,
         to: str,
@@ -2460,9 +2379,15 @@ class WhatsAppClient:
         """
         if not self._authenticated:
             raise RuntimeError("Not authenticated")
-        
+        import time
         from .builders.audio_builder import AudioBuilder
-        
+        from ..protocol.entities.attributes import (
+            DownloadableMediaMessageAttributes,
+            AudioAttributes,
+            MessageMetaAttributes,
+        )
+        from ..protocol.entities.media import AudioDownloadableMediaMessageProtocolEntity
+
         builder = await AudioBuilder.from_filepath(
             file_path_or_url=file_path_or_url,
             media_cipher=self._media_cipher,
@@ -2471,92 +2396,42 @@ class WhatsAppClient:
             ptt=ptt,
             progress_callback=progress_callback
         )
-        
-        from_jid = f"{self.account_id}@{YowConstants.WHATSAPP_SERVER}"
-        audio_msg = await builder.upload_and_build(to, from_jid)
-        
-        # Extrai dados do protobuf
-        url = audio_msg.url
-        direct_path = audio_msg.direct_path if audio_msg.direct_path else None
-        mimetype = audio_msg.mimetype
-        file_sha256 = audio_msg.file_sha256
-        file_length = audio_msg.file_length
-        media_key = audio_msg.media_key
-        media_key_timestamp = audio_msg.media_key_timestamp
-        file_enc_sha256 = audio_msg.file_enc_sha256
-        duration = audio_msg.seconds if hasattr(audio_msg, 'seconds') else 0
-        waveform = audio_msg.waveform if hasattr(audio_msg, 'waveform') and audio_msg.waveform else None
-        
-        if not message_id:
-            message_id = self._message_builder._generate_message_id()
-        
-        # Normaliza e corrige JID de grupo se necessário
-        to = self._normalize_and_fix_group_jid(to)
-        
-        # Importa classes necessárias
-        from ..protocol.entities.attributes import (
-            DownloadableMediaMessageAttributes,
-            AudioAttributes,
-            MessageMetaAttributes,
-        )
-        from ..protocol.entities.media import (
-            AudioDownloadableMediaMessageProtocolEntity,
-        )
-        
-        # Cria DownloadableMediaMessageAttributes
-        downloadable_attrs = DownloadableMediaMessageAttributes(
-            mimetype=mimetype,
-            file_length=file_length,
-            file_sha256=file_sha256,
-            media_key=media_key,
-            media_key_timestamp=media_key_timestamp,
-            file_enc_sha256=file_enc_sha256,
-            url=url,
-            direct_path=direct_path
-        )
-        
-        # Cria AudioAttributes
-        audio_attrs = AudioAttributes(
-            downloadable_attrs,
-            duration,
-            ptt,
-            None,  # streaming_sidecar
-            waveform
-        )
-        
-        # Cria MessageMetaAttributes
-        message_meta_attrs = MessageMetaAttributes(
-            id=message_id,
-            recipient=to,
-            fromMe=True,
-            timestamp=int(time.time())
-        )
-        
-        # Cria Protocol Entity
-        entity = AudioDownloadableMediaMessageProtocolEntity(
-            audio_attrs,
-            message_meta_attrs
-        )
-        
-        # Converte para ProtocolNode
-        message_node = entity.to_protocol_node()
-        
-        # Extrai proto_bytes do node <proto>
-        proto_node = None
-        for child in message_node.children:
-            if child.tag == "proto":
-                proto_node = child
-                break
-        
-        if not proto_node or not proto_node.data:
-            raise ValueError("Falha ao obter dados protobuf do Protocol Entity")
-        
-        proto_bytes = proto_node.data
-        
-        await self._send_to_contact(message_node, proto_bytes, to)
-        
-        return message_id
-    
+
+        def build_node(audio_msg, to_norm, msg_id):
+            duration = audio_msg.seconds if hasattr(audio_msg, "seconds") else 0
+            waveform = audio_msg.waveform if hasattr(audio_msg, "waveform") and audio_msg.waveform else None
+            downloadable_attrs = DownloadableMediaMessageAttributes(
+                mimetype=audio_msg.mimetype,
+                file_length=audio_msg.file_length,
+                file_sha256=audio_msg.file_sha256,
+                media_key=audio_msg.media_key,
+                media_key_timestamp=audio_msg.media_key_timestamp,
+                file_enc_sha256=audio_msg.file_enc_sha256,
+                url=audio_msg.url,
+                direct_path=audio_msg.direct_path if audio_msg.direct_path else None
+            )
+            audio_attrs = AudioAttributes(
+                downloadable_attrs,
+                duration,
+                ptt,
+                None,
+                waveform
+            )
+            message_meta_attrs = MessageMetaAttributes(
+                id=msg_id,
+                recipient=to_norm,
+                fromMe=True,
+                timestamp=int(time.time())
+            )
+            entity = AudioDownloadableMediaMessageProtocolEntity(audio_attrs, message_meta_attrs)
+            message_node = entity.to_protocol_node()
+            proto_node = next((c for c in message_node.children if c.tag == "proto"), None)
+            if not proto_node or not proto_node.data:
+                raise ValueError("Falha ao obter dados protobuf do Protocol Entity")
+            return message_node, proto_node.data
+
+        return await self._send_media_via_builder(to, builder, message_id, build_node)
+
     async def send_document(
         self,
         to: str,
@@ -2582,9 +2457,15 @@ class WhatsAppClient:
         """
         if not self._authenticated:
             raise RuntimeError("Not authenticated")
-        
+        import time
         from .builders.document_builder import DocumentBuilder
-        
+        from ..protocol.entities.attributes import (
+            DownloadableMediaMessageAttributes,
+            DocumentAttributes,
+            MessageMetaAttributes,
+        )
+        from ..protocol.entities.media import DocumentDownloadableMediaMessageProtocolEntity
+
         builder = await DocumentBuilder.from_filepath(
             file_path_or_url=file_path_or_url,
             media_cipher=self._media_cipher,
@@ -2594,95 +2475,43 @@ class WhatsAppClient:
             caption=caption,
             progress_callback=progress_callback
         )
-        
-        from_jid = f"{self.account_id}@{YowConstants.WHATSAPP_SERVER}"
-        doc_msg = await builder.upload_and_build(to, from_jid)
-        
-        # Extrai dados do protobuf
-        url = doc_msg.url
-        direct_path = doc_msg.direct_path if doc_msg.direct_path else None
-        mimetype = doc_msg.mimetype
-        file_sha256 = doc_msg.file_sha256
-        file_length = doc_msg.file_length
-        media_key = doc_msg.media_key
-        media_key_timestamp = doc_msg.media_key_timestamp
-        file_enc_sha256 = doc_msg.file_enc_sha256
-        file_name = doc_msg.file_name
-        jpeg_thumbnail = doc_msg.jpeg_thumbnail if doc_msg.jpeg_thumbnail else None
-        caption_from_proto = doc_msg.caption if doc_msg.caption else caption
-        
-        if not message_id:
-            message_id = self._message_builder._generate_message_id()
-        
-        # Normaliza e corrige JID de grupo se necessário
-        to = self._normalize_and_fix_group_jid(to)
-        
-        # Importa classes necessárias
-        from ..protocol.entities.attributes import (
-            DownloadableMediaMessageAttributes,
-            DocumentAttributes,
-            MessageMetaAttributes,
-        )
-        from ..protocol.entities.media import (
-            DocumentDownloadableMediaMessageProtocolEntity,
-        )
-        
-        # Cria DownloadableMediaMessageAttributes
-        downloadable_attrs = DownloadableMediaMessageAttributes(
-            mimetype=mimetype,
-            file_length=file_length,
-            file_sha256=file_sha256,
-            media_key=media_key,
-            media_key_timestamp=media_key_timestamp,
-            file_enc_sha256=file_enc_sha256,
-            url=url,
-            direct_path=direct_path
-        )
-        
-        # Cria DocumentAttributes
-        doc_attrs = DocumentAttributes(
-            downloadable_attrs,
-            file_name,
-            file_length,
-            None,  # title
-            None,  # page_count
-            jpeg_thumbnail,
-            caption_from_proto
-        )
-        
-        # Cria MessageMetaAttributes
-        message_meta_attrs = MessageMetaAttributes(
-            id=message_id,
-            recipient=to,
-            fromMe=True,
-            timestamp=int(time.time())
-        )
-        
-        # Cria Protocol Entity
-        entity = DocumentDownloadableMediaMessageProtocolEntity(
-            doc_attrs,
-            message_meta_attrs
-        )
-        
-        # Converte para ProtocolNode
-        message_node = entity.to_protocol_node()
-        
-        # Extrai proto_bytes do node <proto>
-        proto_node = None
-        for child in message_node.children:
-            if child.tag == "proto":
-                proto_node = child
-                break
-        
-        if not proto_node or not proto_node.data:
-            raise ValueError("Falha ao obter dados protobuf do Protocol Entity")
-        
-        proto_bytes = proto_node.data
-        
-        await self._send_to_contact(message_node, proto_bytes, to)
-        
-        return message_id
-    
+
+        def build_node(doc_msg, to_norm, msg_id):
+            caption_from_proto = doc_msg.caption if doc_msg.caption else caption
+            downloadable_attrs = DownloadableMediaMessageAttributes(
+                mimetype=doc_msg.mimetype,
+                file_length=doc_msg.file_length,
+                file_sha256=doc_msg.file_sha256,
+                media_key=doc_msg.media_key,
+                media_key_timestamp=doc_msg.media_key_timestamp,
+                file_enc_sha256=doc_msg.file_enc_sha256,
+                url=doc_msg.url,
+                direct_path=doc_msg.direct_path if doc_msg.direct_path else None
+            )
+            doc_attrs = DocumentAttributes(
+                downloadable_attrs,
+                doc_msg.file_name,
+                doc_msg.file_length,
+                None,
+                None,
+                doc_msg.jpeg_thumbnail if doc_msg.jpeg_thumbnail else None,
+                caption_from_proto
+            )
+            message_meta_attrs = MessageMetaAttributes(
+                id=msg_id,
+                recipient=to_norm,
+                fromMe=True,
+                timestamp=int(time.time())
+            )
+            entity = DocumentDownloadableMediaMessageProtocolEntity(doc_attrs, message_meta_attrs)
+            message_node = entity.to_protocol_node()
+            proto_node = next((c for c in message_node.children if c.tag == "proto"), None)
+            if not proto_node or not proto_node.data:
+                raise ValueError("Falha ao obter dados protobuf do Protocol Entity")
+            return message_node, proto_node.data
+
+        return await self._send_media_via_builder(to, builder, message_id, build_node)
+
     async def send_sticker(
         self,
         to: str,
@@ -2712,9 +2541,15 @@ class WhatsAppClient:
         """
         if not self._authenticated:
             raise RuntimeError("Not authenticated")
-        
+        import time
         from .builders.sticker_builder import StickerBuilder
-        
+        from ..protocol.entities.attributes import (
+            DownloadableMediaMessageAttributes,
+            StickerAttributes,
+            MessageMetaAttributes,
+        )
+        from ..protocol.entities.media import StickerDownloadableMediaMessageProtocolEntity
+
         builder = await StickerBuilder.from_filepath(
             file_path_or_url=file_path_or_url,
             media_cipher=self._media_cipher,
@@ -2726,97 +2561,67 @@ class WhatsAppClient:
             is_lottie=is_lottie,
             progress_callback=progress_callback
         )
-        
-        from_jid = f"{self.account_id}@{YowConstants.WHATSAPP_SERVER}"
-        sticker_msg = await builder.upload_and_build(to, from_jid)
-        
-        # Extrai dados do protobuf
-        url = sticker_msg.url
-        direct_path = sticker_msg.direct_path if sticker_msg.direct_path else None
-        mimetype = sticker_msg.mimetype
-        file_sha256 = sticker_msg.file_sha256
-        file_length = sticker_msg.file_length
-        media_key = sticker_msg.media_key
-        media_key_timestamp = sticker_msg.media_key_timestamp
-        file_enc_sha256 = sticker_msg.file_enc_sha256
-        width = sticker_msg.width
-        height = sticker_msg.height
-        png_thumbnail = None  # StickerMessage não tem thumbnail no protobuf
-        
+
+        def build_node(sticker_msg, to_norm, msg_id):
+            downloadable_attrs = DownloadableMediaMessageAttributes(
+                mimetype=sticker_msg.mimetype,
+                file_length=sticker_msg.file_length,
+                file_sha256=sticker_msg.file_sha256,
+                media_key=sticker_msg.media_key,
+                media_key_timestamp=sticker_msg.media_key_timestamp,
+                file_enc_sha256=sticker_msg.file_enc_sha256,
+                url=sticker_msg.url,
+                direct_path=sticker_msg.direct_path if sticker_msg.direct_path else None
+            )
+            sticker_attrs = StickerAttributes(
+                downloadable_attrs,
+                sticker_msg.width,
+                sticker_msg.height,
+                None,
+                is_animated,
+                sticker_msg.sticker_sent_ts if hasattr(sticker_msg, "sticker_sent_ts") else None,
+                is_avatar,
+                is_ai_sticker,
+                is_lottie
+            )
+            message_meta_attrs = MessageMetaAttributes(
+                id=msg_id,
+                recipient=to_norm,
+                fromMe=True,
+                timestamp=int(time.time())
+            )
+            entity = StickerDownloadableMediaMessageProtocolEntity(sticker_attrs, message_meta_attrs)
+            message_node = entity.to_protocol_node()
+            proto_node = next((c for c in message_node.children if c.tag == "proto"), None)
+            if not proto_node or not proto_node.data:
+                raise ValueError("Falha ao obter dados protobuf do Protocol Entity")
+            return message_node, proto_node.data
+
+        return await self._send_media_via_builder(to, builder, message_id, build_node)
+
+    async def _send_media_via_builder(
+        self,
+        to: str,
+        builder,
+        message_id: Optional[str],
+        build_node_from_upload,  # (upload_result, to, message_id) -> (ProtocolNode, bytes)
+    ) -> str:
+        """
+        Fluxo comum: normaliza to, upload_and_build, monta node via callback, envia.
+        """
+        to = self._normalize_and_fix_group_jid(to)
+        from_jid = self._own_jid()
+        upload_result = await builder.upload_and_build(to, from_jid)
         if not message_id:
             message_id = self._message_builder._generate_message_id()
-        
-        # Normaliza e corrige JID de grupo se necessário
-        to = self._normalize_and_fix_group_jid(to)
-        
-        # Importa classes necessárias
-        from ..protocol.entities.attributes import (
-            DownloadableMediaMessageAttributes,
-            StickerAttributes,
-            MessageMetaAttributes,
-        )
-        from ..protocol.entities.media import (
-            StickerDownloadableMediaMessageProtocolEntity,
-        )
-        
-        # Cria DownloadableMediaMessageAttributes
-        downloadable_attrs = DownloadableMediaMessageAttributes(
-            mimetype=mimetype,
-            file_length=file_length,
-            file_sha256=file_sha256,
-            media_key=media_key,
-            media_key_timestamp=media_key_timestamp,
-            file_enc_sha256=file_enc_sha256,
-            url=url,
-            direct_path=direct_path
-        )
-        
-        # Cria StickerAttributes
-        sticker_attrs = StickerAttributes(
-            downloadable_attrs,
-            width,
-            height,
-            png_thumbnail,
-            is_animated,
-            sticker_msg.sticker_sent_ts if hasattr(sticker_msg, 'sticker_sent_ts') else None,
-            is_avatar,
-            is_ai_sticker,
-            is_lottie
-        )
-        
-        # Cria MessageMetaAttributes
-        message_meta_attrs = MessageMetaAttributes(
-            id=message_id,
-            recipient=to,
-            fromMe=True,
-            timestamp=int(time.time())
-        )
-        
-        # Cria Protocol Entity
-        entity = StickerDownloadableMediaMessageProtocolEntity(
-            sticker_attrs,
-            message_meta_attrs
-        )
-        
-        # Converte para ProtocolNode
-        message_node = entity.to_protocol_node()
-        
-        # Extrai proto_bytes do node <proto>
-        proto_node = None
-        for child in message_node.children:
-            if child.tag == "proto":
-                proto_node = child
-                break
-        
-        if not proto_node or not proto_node.data:
-            raise ValueError("Falha ao obter dados protobuf do Protocol Entity")
-        
-        proto_bytes = proto_node.data
-        
+        message_node, proto_bytes = build_node_from_upload(upload_result, to, message_id)
         await self._send_to_contact(message_node, proto_bytes, to)
-        
         return message_id
     
+    def _own_jid(self) -> str:
+        """JID do usuário (conta) no servidor WhatsApp."""
+        return f"{self.account_id}@{YowConstants.WHATSAPP_SERVER}"
+
     def _is_group_jid(self, jid: str) -> bool:
         """
         Verifica se JID é de grupo.
@@ -2989,11 +2794,11 @@ class WhatsAppClient:
         if not proto_node:
             raise ValueError("Node de mensagem deve ter <proto>")
         
-        # Separa JIDs com sessão dos sem sessão
-
+        # Separa JIDs com sessão dos sem sessão (via session_jid helpers)
         jids_maps = await self.axolotl_manager.session_exists_bulk(jids)
         all_jids = [f"{recipient_id}@{YowConstants.WHATSAPP_SERVER}" for recipient_id, deviceid in jids_maps]
-        jids_no_session = [jid for jid in jids if jid not in all_jids]
+        jids_no_session = jids_without_session(jids, jids_maps)
+        logger.debug(f"All jids: {all_jids}")
 
 
         async def on_get_keys_success(node, success_jids, errors):
@@ -3004,8 +2809,12 @@ class WhatsAppClient:
                     logger.error(f"Erro ao obter chaves para {jid}: {error}")
                 # Continua mesmo com erros (envia para os que funcionaram)
             
+            logger.debug(f"Success jids: {success_jids}")
             # Adiciona JIDs com sucesso
-            all_jids.extend(success_jids)
+            for jid in success_jids:
+                logger.debug(f"JID: {jid}")
+                if jid not in all_jids:
+                    all_jids.append(jid)
 
             await self.contact_handler.trust_contact(success_jids)
 
@@ -3022,6 +2831,7 @@ class WhatsAppClient:
                 if category == "peer":
                     await self.send_to_peer_with_sessions(node, all_jids[0])
                 else:
+                    logger.debug(f"Enviando para {len(all_jids)} contatos com sessão after get keys success: {all_jids}")
                     await self._send_to_contacts_with_sessions(node, all_jids, retry_count)
             else:
                 logger.warning("Nenhum JID com sessão disponível após obter chaves")
@@ -3029,8 +2839,8 @@ class WhatsAppClient:
         # Se há JIDs sem sessão, obtém chaves
         if len(jids_no_session) > 0:
             logger.debug(f"Obtendo chaves para {len(jids_no_session)} JIDs sem sessão")
-            # Obtém chaves para todos os JIDs sem sessão
-            success_jids, error_jids = await self._get_keys_for_jids(jids_no_session)
+            # Obtém chaves para todos os JIDs sem sessão (reason=identity alignado com whatsmeow)
+            success_jids, error_jids = await self._get_keys_for_jids(jids_no_session, reason="identity")
             
             # Processa resultado
             await on_get_keys_success(message_node, success_jids, error_jids)
@@ -3040,6 +2850,7 @@ class WhatsAppClient:
             if category == "peer":
                 await self.send_to_peer_with_sessions(message_node, all_jids[0] if all_jids else None)
             else:
+                logger.debug(f"Enviando para {len(all_jids)} contatos com sessão out get keys success: {all_jids}")
                 await self._send_to_contacts_with_sessions(message_node, all_jids, retry_count)
     
     async def _get_keys_for_jids(
@@ -3103,8 +2914,26 @@ class WhatsAppClient:
         
         enc_entities = []
         participant = jids[0] if len(jids) == 1 and retry_count > 0 else None
-        message_type =  message_node.get_attribute_value("type")
-        
+        message_type = message_node.get_attribute_value("type")
+
+        # Whatsmeow-style: first <to> is sender (own JID) with enc type="msg"
+        if message_type != "reaction":
+            own_jid = self._own_jid()
+            own_recipient_id = own_jid.split("@")[0].split(":")[0]
+            try:
+                ciphertext_self = await self.axolotl_manager.encrypt(own_recipient_id, proto_bytes)
+                enc_type_self = EncEntity.TYPE_PKMSG if isinstance(ciphertext_self, PreKeyWhisperMessage) else EncEntity.TYPE_MSG
+                enc_node_self = EncEntity.create_enc_node(
+                    enc_type=enc_type_self,
+                    ciphertext=ciphertext_self.serialize(),
+                    type_message=message_type,
+                    mediatype=mediatype,
+                    jid=own_jid,
+                )
+                enc_entities.insert(0, enc_node_self)
+            except Exception as e:
+                logger.debug(f"Não foi possível criptografar para self ({own_jid}), seguindo sem primeiro <to>: {e}")
+
         for jid in jids:
             # Garante que jid é string
             if not isinstance(jid, str):
@@ -3112,6 +2941,8 @@ class WhatsAppClient:
                 continue
             
             logger.debug(f"JID: {jid}")
+
+
 
             # CORREÇÃO: Converte JID para formato do zowsuplib
             # get_all_session_usernames() retorna formato "recipient_id.recipient_type:device_id"
@@ -3379,13 +3210,28 @@ class WhatsAppClient:
         if isinstance(recipient_ids, str):
             recipient_ids = [recipient_ids]
 
-        jids = [f"{recipient_id.split('@')[0]}@{YowConstants.WHATSAPP_SERVER}" for recipient_id in recipient_ids]
+
         
+        jids = []
+
+        for recipient_id in recipient_ids:
+            jid = f"{recipient_id.split('@')[0]}@{YowConstants.WHATSAPP_SERVER}"
+            if jid not in jids:
+                jids.append(jid)
+
         logger.debug(f"Obtendo chaves para {jids}, reason={reason}")
         
-        # Cria IQ para obter chaves
+        # Só pedir chaves para JIDs que ainda não têm sessão (via session_jid helpers)
+        jids_maps = await self.axolotl_manager.session_exists_bulk(jids)
+        existing_session_jids = [f"{recipient_id}@{YowConstants.WHATSAPP_SERVER}" for recipient_id, deviceid in jids_maps]
+        jids_no_session = jids_without_session(jids, jids_maps)
+        if len(jids_no_session) == 0:
+            logger.debug(f"Todos os JIDs já têm sessão: {jids}, retornando sem enviar IQ")
+            return (list(dict.fromkeys(existing_session_jids)), {})
+        jids_no_session_unique = deduplicate_jids_by_recipient_device(jids_no_session)
+        # Cria IQ apenas para JIDs sem sessão (sem duplicatas por (r, d))
         iq_node = PrekeyBuilder.build_get_keys_iq(
-            jids=jids,
+            jids=jids_no_session_unique,
             reason=reason,
             iq_id=None
         )
@@ -3405,75 +3251,21 @@ class WhatsAppClient:
                 list_node = result_node.get_child("list")
                 if not list_node:
                     logger.warning("Resposta de get keys sem node <list>")
-                    future.set_result(([], {}))
+                    future.set_result((existing_session_jids, {}))
                     return
                 
-                user_nodes = list_node.children
-                for user_node in user_nodes:
-                    jid = user_node.get_attribute("jid")
-                    if not jid:
+                parsed = parse_get_keys_response(list_node)
+                for jid, prekey_bundle, parse_error in parsed:
+                    if parse_error is not None:
+                        error_jids[jid] = parse_error
                         continue
-                    
-                    # Verifica se tem erro
-                    error_child = user_node.get_child("error")
-                    if error_child:
-                        error_code = error_child.get_attribute("code")
-                        error_text = error_child.get_attribute("text")
-                        error_jids[jid] = Exception(f"Erro {error_code}: {error_text}")
+                    if await self.axolotl_manager.session_exists(jid):
+                        success_jids.append(jid)
+                        logger.debug(f"Sessão já existe para {jid}, reutilizando")
                         continue
-                    
-                    # Extrai componentes do PreKeyBundle
-                    registration_node = user_node.get_child("registration")
-                    identity_node = user_node.get_child("identity")
-                    signed_prekey_node = user_node.get_child("skey")
-                    prekey_node = user_node.get_child("key")
-                    
-                    if not registration_node or not identity_node or not signed_prekey_node:
-                        error_jids[jid] = Exception("Faltam parâmetros obrigatórios na resposta")
+                    if prekey_bundle is None:
                         continue
-                    
-                    # Converte bytes para int
-                    def _bytes_to_int(val):
-                        if sys.version_info >= (3, 0):
-                            val_enc = val.encode('latin-1') if type(val) is str else val
-                        else:
-                            val_enc = val
-                        return int(binascii.hexlify(val_enc), 16)
-                    
-                    def _enc_str(string):
-                        if sys.version_info >= (3, 0) and type(string) is str:
-                            return string.encode('latin-1')
-                        return string
-                    
-                    registration_id = _bytes_to_int(registration_node.data)
-                    identity_key = IdentityKey(DjbECPublicKey(_enc_str(identity_node.data)))
-                    
-                    # Signed prekey
-                    signed_prekey_id = _bytes_to_int(signed_prekey_node.get_child("id").data)
-                    signed_prekey_pub = DjbECPublicKey(_enc_str(signed_prekey_node.get_child("value").data))
-                    signed_prekey_sig = _enc_str(signed_prekey_node.get_child("signature").data)
-                    
-                    # Prekey (opcional)
-                    prekey_id = None
-                    prekey_public = None
-                    if prekey_node:
-                        prekey_id = _bytes_to_int(prekey_node.get_child("id").data)
-                        prekey_public = DjbECPublicKey(_enc_str(prekey_node.get_child("value").data))
-                    
-                    # Cria PreKeyBundle
-                    prekey_bundle = PreKeyBundle(
-                        registration_id,
-                        1,  # device_id
-                        prekey_id,
-                        prekey_public,
-                        signed_prekey_id,
-                        signed_prekey_pub,
-                        signed_prekey_sig,
-                        identity_key
-                    )
-                    
-                    # Cria sessão
-                    username = jid.split('@')[0]
+                    username = jid.split("@")[0]
                     try:
                         await self.axolotl_manager.create_session(username, prekey_bundle, autotrust=True)
                         success_jids.append(jid)
@@ -3486,7 +3278,8 @@ class WhatsAppClient:
                         logger.error(f"Erro ao criar sessão para {jid}: {e}")
                 
                 if not future.done():
-                    future.set_result((success_jids, error_jids))
+                    merged = list(dict.fromkeys(existing_session_jids + success_jids))
+                    future.set_result((merged, error_jids))
                 else:
                     logger.debug(f"Future já resolvida para IQ {iq_id}, ignorando set_result")
             
@@ -3498,7 +3291,7 @@ class WhatsAppClient:
                     logger.debug(f"Future já resolvida para IQ {iq_id}, ignorando set_exception")
    
 
-        pending_keys = ",".join(jids)
+        pending_keys = ",".join(jids_no_session_unique)
 
 
         async with self._pending_keys_lock:
@@ -3535,11 +3328,11 @@ class WhatsAppClient:
             
             logger.error(f"Timeout ao obter chaves para {pending_keys}")
             
+            timeout_error = Exception("Timeout ao obter chaves")
             if not future.done():
-                error_result = ([], {pending_keys: Exception("Timeout ao obter chaves")})
-                future.set_result(error_result)
+                future.set_result((list(dict.fromkeys(existing_session_jids)), {pending_keys: timeout_error}))
             
-            return ([], {pending_keys: Exception("Timeout ao obter chaves")})
+            return (list(dict.fromkeys(existing_session_jids)), {pending_keys: timeout_error})
             
         except Exception as e:
             self._iq_response_processor.unregister_callback(iq_id)
@@ -3553,10 +3346,9 @@ class WhatsAppClient:
             logger.error(f"Erro ao obter chaves para {pending_keys}: {e}")
             
             if not future.done():
-                error_result = ([], {pending_keys: e})
-                future.set_result(error_result)
+                future.set_result((list(dict.fromkeys(existing_session_jids)), {pending_keys: e}))
             
-            return ([], {pending_keys: e})
+            return (list(dict.fromkeys(existing_session_jids)), {pending_keys: e})
     
     async def _send_to_group(
         self,
@@ -3581,7 +3373,7 @@ class WhatsAppClient:
             retry_receipt_entity: Receipt de retry (se for reenvio)
         """
         group_jid = message_node.get_attribute("to")
-        own_jid = f"{self.account_id}@{YowConstants.WHATSAPP_SERVER}"
+        own_jid = self._own_jid()
         
         logger.debug(f"_send_to_group: group_jid={group_jid}, retry_receipt_entity={retry_receipt_entity is not None}")
         
@@ -3948,15 +3740,13 @@ class WhatsAppClient:
         for jid in jids:
             standard_jid = jid.replace(".0:0", "").replace(".1:", ":")
             standard_jids.append(standard_jid)
-        
-        # Separa JIDs com sessão dos sem sessão
-        
 
+
+        
+        # Separa JIDs com sessão dos sem sessão (via session_jid helpers)
         jids_maps = await self.axolotl_manager.session_exists_bulk(standard_jids)
         all_jids = [f"{recipient_id}@{YowConstants.WHATSAPP_SERVER}" for recipient_id, deviceid in jids_maps]
-
-        jids_no_session = [str(jid) for jid in standard_jids if str(jid) not in all_jids]
-
+        jids_no_session = [str(j) for j in jids_without_session(standard_jids, jids_maps)]
         logger.debug(f"jids_maps: {jids_maps}")
         logger.debug(f"jids_no_session: {jids_no_session}")
         
@@ -3969,6 +3759,10 @@ class WhatsAppClient:
             
             # Adiciona JIDs com sucesso
             all_jids.extend(success_jids)
+            for jid in all_jids:
+                new_contact = await self.axolotl_manager._store.isNewContact(jid)
+                if new_contact:
+                    await self.axolotl_manager._store.addContact(jid)
             
             # Envia para grupo com todos os JIDs
             await self._send_to_group_with_sessions(message_node, all_jids, retry_count=0)
@@ -3990,73 +3784,30 @@ class WhatsAppClient:
         tctoken: Optional[bytes] = None
     ) -> None:
         """
-        Adiciona elementos extras à mensagem (reporting, device-identity, tctoken, biz, etc.).
-        
-        Baseado em AxolotlSendLayer.sendEncEntities()
-        Ordem: reporting → tctoken → biz → device-identity
+        Adiciona elementos extras à mensagem (reporting, tctoken, device-identity).
+        Delega para message_extras_builder.
         """
-        import os
-        import base64
-        
-        # Adiciona reporting token (se não for peer message)
-        # Baseado em AxolotlSendLayer.sendEncEntities() linha 184-191
         category = message_node.get_attribute("category")
-        if category != "peer":
-            reporting = ProtocolNode(
-                tag="reporting",
-                attributes={},
-                children=[]
-            )
-            reporting_token = ProtocolNode(
-                tag="reporting_token",
-                attributes={"v": "2"},
-                data=os.urandom(16)
-            )
-            reporting.children.append(reporting_token)
-            message_node.children.append(reporting)
-        
-        # Adiciona tctoken se fornecido (para trusted contacts)
-        # Baseado em AxolotlSendLayer.sendEncEntities() linha 193-195
-        if tctoken:
-            tctoken_node = ProtocolNode(
-                tag="tctoken",
-                attributes={},
-                data=tctoken
-            )
-            message_node.children.append(tctoken_node)
-        
-        # Adiciona biz node se presente (já foi copiado pelo EncryptedMessageBuilder)
-        # Baseado em AxolotlSendLayer.sendEncEntities() linha 197-199
-        # O biz node já está no message_node.children se existir
-        
-        # Adiciona device-identity se houver
-        # Baseado em AxolotlSendLayer.sendEncEntities() linha 201-205
-        if self.profile and self.config:
-            if hasattr(self.config, 'device_identity') and self.config.device_identity:
-                try:
-                    did_data = base64.b64decode(self.config.device_identity)
-                    device_identity = ProtocolNode(
-                        tag="device-identity",
-                        attributes={},
-                        data=did_data
-                    )
-                    message_node.children.append(device_identity)
-                except Exception as e:
-                    logger.warning(f"Erro ao adicionar device-identity: {e}")
+        device_identity_b64 = None
+        if self.profile and self.config and hasattr(self.config, "device_identity") and self.config.device_identity:
+            device_identity_b64 = self.config.device_identity
+        build_message_extras(message_node, category, tctoken=tctoken, device_identity_b64=device_identity_b64)
     
 
+
     
-    async def start_typing(self, to: str) -> None:
+    async def start_typing(self, to: str, media_type: str = None) -> None:
         """
         Envia indicador de "digitando" para um contato.
         
         Args:
             to: JID do destinatário
         """
+        from ..protocol.entities import OutgoingChatstateProtocolEntity, ChatstateProtocolEntity
+
         if not self._authenticated:
             raise RuntimeError("Not authenticated")
         
-        from ..protocol.entities import OutgoingChatstateProtocolEntity, ChatstateProtocolEntity
         
         # Normaliza JID
         is_group = self._is_group_jid(to)
@@ -4072,23 +3823,24 @@ class WhatsAppClient:
         chatstate = OutgoingChatstateProtocolEntity(
             ChatstateProtocolEntity.STATE_COMPOSING,
             to=to_jid,
-            participant=participant if is_group else None
+            participant=participant if is_group else None,
+            media_type=media_type
         )
         
         logger.debug(f"Enviando indicador de typing para {to_jid}")
         await self._send_protocol_node(chatstate.to_protocol_node())
     
-    async def stop_typing(self, to: str) -> None:
+    async def stop_typing(self, to: str, media_type: str = None) -> None:
         """
         Para o indicador de "digitando" para um contato.
         
         Args:
             to: JID do destinatário
         """
+        from ..protocol.entities import OutgoingChatstateProtocolEntity, ChatstateProtocolEntity
         if not self._authenticated:
             raise RuntimeError("Not authenticated")
         
-        from ..protocol.entities import OutgoingChatstateProtocolEntity, ChatstateProtocolEntity
         
       # Normaliza JID
         is_group = self._is_group_jid(to)
@@ -4100,7 +3852,8 @@ class WhatsAppClient:
         chatstate = OutgoingChatstateProtocolEntity(
             ChatstateProtocolEntity.STATE_PAUSED,
             to=to_jid,
-            participant=participant if is_group else None
+            participant=participant if is_group else None,
+            media_type=media_type
         )
         
         logger.debug(f"Parando indicador de typing para {to_jid}")
@@ -4273,8 +4026,6 @@ class WhatsAppClient:
             elif isinstance(unsent_prekeys_result, list):
                 self._unsent_prekeys = unsent_prekeys_result
 
-
-
             if len(self._unsent_prekeys) > 0:
                 logger.info(f"Encontradas {len(self._unsent_prekeys)} prekeys não enviadas, enviando...")
                 signed_prekey = await self.axolotl_manager.load_latest_signed_prekey(generate=True)
@@ -4298,138 +4049,32 @@ class WhatsAppClient:
     ) -> None:
         """
         Envia prekeys para o servidor.
-        
-        Baseado em AxolotlControlLayer.flush_keys()
-        
-        Args:
-            signed_prekey: SignedPreKeyRecord
-            prekeys: Lista de PreKeyRecord
-            reboot_connection: Se deve reiniciar conexão após enviar
-            retry_count: Contador de retry (para retry automático)
+        Payload preparado via PrekeyBuilder.prepare_flush_payload().
         """
-        import random
-        import binascii
-        
-        logger.info("=" * 80)
-        logger.info("[ZOWPY] _flush_prekeys() INICIADO")
-        logger.info(f"[ZOWPY] Parâmetros: prekeys_count={len(prekeys)}, reboot_connection={reboot_connection}, retry_count={retry_count}")
-        
-        # Armazena informações para retry se necessário
         async with self._keys_retry_lock:
             self._pending_keys_retry = (signed_prekey, prekeys, reboot_connection, retry_count)
-        
-        # Prepara dicionário de prekeys
-        logger.info("[ZOWPY] Preparando prekeys_dict...")
-        prekeys_dict = {}
-        for i, prekey in enumerate(prekeys):
-            key_pair = prekey.getKeyPair()
-            prekey_id_orig = prekey.getId()
-            logger.debug(f"[ZOWPY] Prekey[{i}] ID={prekey_id_orig}, public_key serialized len={len(key_pair.getPublicKey().serialize())}")
-            
-            # Serializa public key (remove primeiro byte)
-            public_key_bytes = key_pair.getPublicKey().serialize()[1:]
-            logger.debug(f"[ZOWPY] Prekey[{i}] public_key after [1:] len={len(public_key_bytes)}")
-            
-            # Ajusta array e ID (como no zowsuplib)
-            adjusted_id = PrekeyBuilder._adjust_id(prekey_id_orig)
-            adjusted_key = PrekeyBuilder._adjust_array(public_key_bytes)
-            prekeys_dict[adjusted_id] = adjusted_key
-            
-            logger.debug(f"[ZOWPY] Prekey[{i}] ID ajustado: {prekey_id_orig} (int) -> {len(adjusted_id)} bytes: {binascii.hexlify(adjusted_id).decode()}")
-            logger.debug(f"[ZOWPY] Prekey[{i}] Key ajustado: raw_len={len(public_key_bytes)}, adjusted_len={len(adjusted_key)}, first_20_hex={binascii.hexlify(adjusted_key[:20]).decode() if len(adjusted_key) >= 20 else binascii.hexlify(adjusted_key).decode()}")
-            
-            # Log detalhado para os primeiros 3 prekeys
-            if i < 3:
-                logger.info(f"[ZOWPY] Prekey[{i}] FINAL: id_hex={binascii.hexlify(adjusted_id).decode()}, key_first_40_hex={binascii.hexlify(adjusted_key[:40]).decode() if len(adjusted_key) >= 40 else binascii.hexlify(adjusted_key).decode()}...")
-        
-        logger.info(f"[ZOWPY] preKeysDict criado com {len(prekeys_dict)} prekeys")
-        
-        # Prepara signed prekey
-        logger.info("[ZOWPY] Preparando signedKeyTuple...")
-        signed_prekey_id = signed_prekey.getId()
-        logger.info(f"[ZOWPY] Signed prekey ID original: {signed_prekey_id} (int, tipo={type(signed_prekey_id)})")
-        
-        # Ajusta signed prekey ID
-        adjusted_signed_id = PrekeyBuilder._adjust_id(signed_prekey_id)
-        logger.info(f"[ZOWPY] Signed prekey ID ajustado: {len(adjusted_signed_id)} bytes: {binascii.hexlify(adjusted_signed_id).decode()}")
-        
-        # Serializa signed prekey public key
-        signed_public_key_serialized = signed_prekey.getKeyPair().getPublicKey().serialize()
-        logger.debug(f"[ZOWPY] Signed prekey public_key serialized len={len(signed_public_key_serialized)}")
-        signed_public_key_trimmed = signed_public_key_serialized[1:]
-        logger.debug(f"[ZOWPY] Signed prekey public_key after [1:] len={len(signed_public_key_trimmed)}")
-        
-        # Ajusta signed prekey public key
-        adjusted_signed_key = PrekeyBuilder._adjust_array(signed_public_key_trimmed)
-        logger.info(f"[ZOWPY] Signed prekey key ajustado: raw_len={len(signed_public_key_trimmed)}, adjusted_len={len(adjusted_signed_key)}, first_40_hex={binascii.hexlify(adjusted_signed_key[:40]).decode() if len(adjusted_signed_key) >= 40 else binascii.hexlify(adjusted_signed_key).decode()}...")
-        
-        # Serializa signature
-        signature_raw = signed_prekey.getSignature()
-        logger.debug(f"[ZOWPY] Signed prekey signature raw len={len(signature_raw)}, first_40_hex={binascii.hexlify(signature_raw[:40]).decode() if len(signature_raw) >= 40 else binascii.hexlify(signature_raw).decode()}...")
-        
-        # Ajusta signature
-        adjusted_signature = PrekeyBuilder._adjust_array(signature_raw)
-        logger.info(f"[ZOWPY] Signed prekey signature ajustado: raw_len={len(signature_raw)}, adjusted_len={len(adjusted_signature)}, first_40_hex={binascii.hexlify(adjusted_signature[:40]).decode() if len(adjusted_signature) >= 40 else binascii.hexlify(adjusted_signature).decode()}...")
-        
-        signed_key_tuple = (adjusted_signed_id, adjusted_signed_key, adjusted_signature)
-        logger.info(f"[ZOWPY] signedKeyTuple criado: id_len={len(adjusted_signed_id)}, key_len={len(adjusted_signed_key)}, sig_len={len(adjusted_signature)}")
-        
-        # Prepara identity key
-        logger.info("[ZOWPY] Preparando identity key...")
-        identity_public_key_serialized = self.axolotl_manager.identity.getPublicKey().serialize()
-        logger.debug(f"[ZOWPY] Identity public_key serialized len={len(identity_public_key_serialized)}")
-        identity_public_key_trimmed = identity_public_key_serialized[1:]
-        logger.debug(f"[ZOWPY] Identity public_key after [1:] len={len(identity_public_key_trimmed)}")
-        
-        adjusted_identity = PrekeyBuilder._adjust_array(identity_public_key_trimmed)
-        logger.info(f"[ZOWPY] Identity key ajustado: raw_len={len(identity_public_key_trimmed)}, adjusted_len={len(adjusted_identity)}, first_40_hex={binascii.hexlify(adjusted_identity[:40]).decode() if len(adjusted_identity) >= 40 else binascii.hexlify(adjusted_identity).decode()}...")
-        
-        # Prepara registration ID
-        logger.info("[ZOWPY] Preparando registration_id...")
+
+        identity_trimmed = self.axolotl_manager.identity.getPublicKey().serialize()[1:]
         registration_id_int = self.axolotl_manager.registration_id
-        logger.info(f"[ZOWPY] Registration ID original: {registration_id_int} (int, tipo={type(registration_id_int)})")
-        
-        adjusted_registration_id = PrekeyBuilder._adjust_id(registration_id_int, byte_count=4)
-        logger.info(f"[ZOWPY] Registration ID ajustado: {len(adjusted_registration_id)} bytes: {binascii.hexlify(adjusted_registration_id).decode()}")
-        
-        # Cria IQ node
-        logger.info("[ZOWPY] Criando SetKeysIqProtocolEntity...")
-        logger.info("[ZOWPY] Parâmetros do SetKeysIqProtocolEntity:")
-        logger.info(f"[ZOWPY]   - identityKey: {len(adjusted_identity)} bytes")
-        logger.info(f"[ZOWPY]   - signedPreKey: tuple({len(adjusted_signed_id)}, {len(adjusted_signed_key)}, {len(adjusted_signature)})")
-        logger.info(f"[ZOWPY]   - preKeys: dict com {len(prekeys_dict)} chaves")
-        logger.info(f"[ZOWPY]   - djbType: 5")
-        logger.info(f"[ZOWPY]   - registrationId: {len(adjusted_registration_id)} bytes")
-        
-        iq_node = PrekeyBuilder.build_set_keys_iq(
-            identity_key=adjusted_identity,
-            signed_prekey=signed_key_tuple,
-            prekeys=prekeys_dict,
-            registration_id=adjusted_registration_id,
-            djb_type=5,
-            iq_id=None
+        payload = PrekeyBuilder.prepare_flush_payload(
+            signed_prekey,
+            prekeys,
+            identity_trimmed,
+            registration_id_int,
         )
-        
+        iq_node = PrekeyBuilder.build_set_keys_iq(
+            djb_type=5,
+            iq_id=None,
+            **payload
+        )
         iq_id = iq_node.get_attribute("id")
-        logger.info(f"[ZOWPY] IQ node criado, ID: {iq_id}")
-   
-        async def on_error(node: ProtocolNode):
-            """Callback de erro"""
-            logger.info(f"Callback flush keys de erro: {node}")
-            await self._on_sent_keys_error(node, iq_node, signed_prekey, prekeys, reboot_connection, retry_count)
+        logger.debug(f"Flush prekeys: {len(prekeys)} prekeys, signed_id={signed_prekey.getId()}")
 
         async def on_success(node):
             await self._on_keys_flushed(prekeys, reboot_connection=reboot_connection)
 
-        # Registra callbacks e envia
         self._iq_response_processor.register_callback(iq_id, on_success, timeout=30.0)
-
         await self._send_protocol_node(iq_node)
-        
-        logger.info(f"[ZOWPY] Enviando IQ node para servidor...")
-        logger.info(f"[ZOWPY] Prekeys enviadas: {len(prekeys)} prekeys, signed_prekey_id={signed_prekey.getId()}")
-        logger.info("[ZOWPY] _flush_prekeys() FINALIZADO")
-        logger.info("=" * 80)
     
     async def _on_keys_flushed(self, prekeys: list, reboot_connection: bool = False) -> None:
         """
@@ -4448,9 +4093,9 @@ class WhatsAppClient:
         
         logger.info(f"[ZOWPY] Prekeys marcadas como enviadas: {len(prekeys)} prekeys")
         
-        # if reboot_connection:
-        #     logger.info("[ZOWPY] Reiniciando conexão após envio de prekeys...")
-        #     await self.reconnect()
+        if reboot_connection:
+            logger.info("[ZOWPY] Reiniciando conexão após envio de prekeys...")
+            await self.reconnect()
         
         logger.info("[ZOWPY] _on_keys_flushed() FINALIZADO")
         logger.info("=" * 80)
@@ -5365,5 +5010,50 @@ class WhatsAppClient:
 
 
 
+    #profile
 
 
+    async def get_app_state_key(self)->AppStateSyncKeyAttribute:
+        key = await self.axolotl_manager._store.getOneAppStateKey()
+        if not key:
+            # Se não houver chaves, gera automaticamente
+            logger.warning("No AppState keys found. Generating new keys...")
+            sync_keys = await self.generate_app_state_sync_keys(10)
+            await self.axolotl_manager._store.addAppStateKeys(sync_keys)
+            key = await self.axolotl_manager._store.getOneAppStateKey()
+            if not key:
+                raise Exception("Failed to generate AppState keys")
+        
+        return key
+    
+    async def generate_app_state_sync_keys(self,n:int=10)->list[AppStateSyncKeyAttribute]:
+        keys = []
+        for i in range(0,n):
+            key = AppStateSyncKeyAttribute(
+                key_id= AppStateSyncKeyIdAttribute(key_id=random.randint(10000,20000).to_bytes(6,'big')),
+                key_data=AppStateSyncKeyDataAttribute(
+                    key_data=Curve.generateKeyPair().publicKey.serialize()[1:],
+                    fingerprint=AppStateSyncKeyFingerprintAttribute(
+                       raw_id = random.randint(10000,2000000000),
+                       current_index=i,
+                       device_indexes=self.config.device_list or []
+                    ),
+                    timestamp=int(time.time())
+                )
+            )
+            keys.append(key)        
+        return keys
+
+
+
+    async def set_profile_name(self, name: str):
+        """Define o nome da conta (pushname) usando AppState Sync. Retorna ProfileResponse."""
+        if not self.profile_handler:
+            raise Exception("Cliente não conectado")
+        return await self.profile_handler.set_profile_name(name)
+
+    async def set_business_name(self, name: str):
+        """Define o nome de negócio verificado (business / SMB). Retorna ProfileResponse."""
+        if not self.profile_handler:
+            raise Exception("Cliente não conectado")
+        return await self.profile_handler.set_business_name(name)

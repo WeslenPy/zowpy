@@ -15,6 +15,7 @@ from zowpy.db.config.engine import AsyncSessionMaker
 
 from ..core.client import MediaType, WhatsAppClient
 from ..core.events import AsyncEventEmitter
+from ..core.handlers.profile_response import ProfileResponse
 from ..core.store import AsyncStateStore
 from ..axolotl.sessioncipher import SessionCipher
 from ..protocol.messages import AsyncMessageHandler
@@ -47,7 +48,6 @@ class ZowPyClient:
         self.env = env
         
         # Componentes internos
-        self._state_store: Optional[AsyncStateStore] = None
         self._session_cipher: Optional[SessionCipher] = None
         self._message_handler: Optional[AsyncMessageHandler] = None
         self._client: Optional[WhatsAppClient] = None
@@ -84,36 +84,27 @@ class ZowPyClient:
             await create_db()
             
             # Cria cliente completo
-            # CORREÇÃO: Endpoint None = seleção aleatória (igual ao zowsuplib)
             self._client = WhatsAppClient(
                 self.account_id,
-                # endpoint=None,  # Seleciona aleatoriamente da lista do zowsuplib
                 session_maker=self.session_maker,
                 env=self.env,
                 proxy=self.proxy,
             )
             
             # Conecta eventos do cliente aos eventos públicos
-            # CORREÇÃO: Handlers devem ser async e aguardar emit() para evitar RuntimeWarning
-            # Os eventos são emitidos com dados como argumentos posicionais (*args)
             async def forward_connected(*args, **kwargs):
-                # O evento "connected" é emitido com um dicionário como primeiro argumento posicional
-                # Extrai o primeiro argumento se existir, senão usa kwargs
                 event_data = args[0] if args else kwargs
                 await self._events.emit("connected", event_data)
             
             async def forward_disconnected(*args, **kwargs):
-                # O evento "disconnected" é emitido com um dicionário como primeiro argumento posicional
                 event_data = args[0] if args else kwargs
                 await self._events.emit("disconnected", event_data)
             
             async def forward_message(*args, **kwargs):
-                # O evento "message" pode vir como argumento posicional ou kwargs
                 message_data = args[0] if args else kwargs
                 await self._events.emit("message", message_data)
             
             async def forward_connection_error(*args, **kwargs):
-                # O evento "connection:error" pode vir como argumento posicional ou kwargs
                 error_data = args[0] if args else kwargs
                 await self._events.emit("connection:error", error_data)
             
@@ -122,7 +113,6 @@ class ZowPyClient:
             self._client.events.on("message", forward_message)
             self._client.events.on("connection:error", forward_connection_error)
             
-            # Conecta - await, não bloqueia
             await self._client.connect()
             
             logger.info(f"Cliente {self.account_id} conectado")
@@ -175,13 +165,44 @@ class ZowPyClient:
         return argb_value & 0xFFFFFFFF # Garante que está dentro do range uint32
 
 
+    async def get_user_info(self, jid: str) -> ProfileResponse:
+        """Obtém informações do usuário. Retorna ProfileResponse."""
+        if not self._client or not self._client.is_connected():
+            raise ConnectionError("Not connected")
+        return await self._client.profile_handler.get_user_info(jid)
 
-    async def get_avatar():pass
-    async def get_account_info():pass
+    async def set_description_business(self, description: str) -> ProfileResponse:
+        """Define a descrição do perfil business. Retorna ProfileResponse."""
+        if not self._client or not self._client.is_connected():
+            raise ConnectionError("Not connected")
+        return await self._client.profile_handler.set_description_business(description)
+
+    async def get_business_profile(self, jid: str) -> ProfileResponse:
+        """Obtém o perfil business. Retorna ProfileResponse."""
+        if not self._client or not self._client.is_connected():
+            raise ConnectionError("Not connected")
+        return await self._client.profile_handler.get_business_profile(jid)
+
+    async def get_account_info(self) -> ProfileResponse:
+        """Obtém informações da conta (creation, last_reg). Retorna ProfileResponse."""
+        if not self._client or not self._client.is_connected():
+            raise ConnectionError("Not connected")
+        return await self._client.profile_handler.get_account_info()
+
+
     async def set_2fa():pass
 
-    async def set_avatar():pass
-    async def set_name():pass
+    async def set_business_name(self, name: str) -> ProfileResponse:
+        """Define o nome de negócio verificado (conta business / SMB). Retorna ProfileResponse."""
+        if not self._client or not self._client.is_connected():
+            raise ConnectionError("Not connected")
+        return await self._client.profile_handler.set_business_name(name)
+
+    async def set_profile_name(self, name: str) -> ProfileResponse:
+        """Define o nome da conta (pushname). Retorna ProfileResponse."""
+        if not self._client or not self._client.is_connected():
+            raise ConnectionError("Not connected")
+        return await self._client.profile_handler.set_profile_name(name)
 
     # async def 
 
@@ -612,7 +633,38 @@ class ZowPyClient:
         return await self._client.contact_handler.sync_devices(jids, mode, context)
     
     # ========== Typing Indicators ==========
-    
+
+
+    async def start_recording(self, to: str) -> None:
+        """
+        Envia indicador de "digitando" para um contato.
+        
+        Args:
+            to: JID do destinatário
+        """
+        if not self._client:
+            raise ConnectionError("Cliente não conectado")
+        
+        from ..protocol.entities import ChatstateProtocolEntity
+        
+        await self._client.start_typing(to, media_type = ChatstateProtocolEntity.CHAT_MEDIA_TYPE_AUDIO)
+
+
+    async def stop_recording(self, to: str) -> None:
+        """
+        Envia indicador de "digitando" para um contato.
+        
+        Args:
+            to: JID do destinatário
+        """
+        if not self._client:
+            raise ConnectionError("Cliente não conectado")
+
+            
+        from ..protocol.entities import ChatstateProtocolEntity
+        await self._client.stop_typing(to, media_type = ChatstateProtocolEntity.CHAT_MEDIA_TYPE_AUDIO)
+
+
     async def start_typing(self, to: str) -> None:
         """
         Envia indicador de "digitando" para um contato.
@@ -686,21 +738,31 @@ class ZowPyClient:
         return await self._client.get_proxy_status()
     
     # ========== Perfil ==========
-    
-    async def get_profile_picture(self, jid: str) -> bytes:
-        """Obtém foto de perfil."""
+
+    async def get_my_avatar(self) -> ProfileResponse:
+        """Obtém avatar da conta. Retorna ProfileResponse (data com has_avatar/url ou error_code)."""
         if not self._client or not self._client.profile_handler:
             raise ConnectionError("Cliente não conectado")
-        return await self._client.profile_handler.get_profile_picture(jid)
-    
-    async def set_profile_picture(self, picture_data: bytes) -> bool:
-        """Define foto de perfil."""
+        return await self._client.profile_handler.get_avatar(self.account_id)
+
+    async def get_avatar(self, jid: str) -> ProfileResponse:
+        """Obtém URL e metadados do avatar de um contato. Retorna ProfileResponse."""
         if not self._client or not self._client.profile_handler:
             raise ConnectionError("Cliente não conectado")
-        return await self._client.profile_handler.set_profile_picture(picture_data)
-    
-    async def get_status(self, jid: str) -> str:
-        """Obtém status de um contato."""
+        return await self._client.profile_handler.get_avatar(jid)
+
+    async def set_avatar(self, avatar_source: str) -> ProfileResponse:
+        """
+        Define o avatar da conta a partir de URL ou arquivo local.
+        Redimensiona para 640x640 (foto) e 96x96 (preview) em JPEG.
+        Retorna ProfileResponse.
+        """
+        if not self._client or not self._client.profile_handler:
+            raise ConnectionError("Cliente não conectado")
+        return await self._client.profile_handler.set_avatar(avatar_source)
+
+    async def get_status(self, jid: str) -> ProfileResponse:
+        """Obtém status de um contato. Retorna ProfileResponse (data com texto ou None)."""
         if not self._client or not self._client.profile_handler:
             raise ConnectionError("Cliente não conectado")
         return await self._client.profile_handler.get_status(jid)

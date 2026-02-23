@@ -8,6 +8,8 @@ import time
 from typing import List, Optional
 from loguru import logger
 
+from zowpy.utils.jid import to_whatsapp_jid
+
 from ...protocol.structs import ProtocolNode
 from .iq_builder import IQBuilder
 
@@ -28,6 +30,7 @@ class ContactBuilder:
     MODE_DELTA = "delta"
     CONTEXT_REGISTRATION = "registration"
     CONTEXT_INTERACTIVE = "interactive"
+    CONTEXT_BACKGROUND = "background"
     MODE_QUERY = "query"
     CONTEXT_MESSAGE = "message"
     
@@ -50,7 +53,8 @@ class ContactBuilder:
         sid: Optional[str] = None,
         index: int = 0,
         last: bool = True,
-        iq_id: Optional[str] = None
+        iq_id: Optional[str] = None,
+        query: Optional[List[str]] = None
     ) -> ProtocolNode:
         """
         Constrói IQ para sincronizar contatos.
@@ -65,6 +69,7 @@ class ContactBuilder:
             index: Índice do sync
             last: Se é o último chunk
             iq_id: ID do IQ (gerado se None)
+            query: Lista de query para sincronizar contatos
         
         Returns:
             ProtocolNode: Node IQ para sincronizar contatos
@@ -101,7 +106,7 @@ class ContactBuilder:
         query_node = ProtocolNode(
             tag="query",
             attributes={},
-            children=[
+            children=query or [
                 ProtocolNode(tag="lid", attributes={}, children=[]),
                 ProtocolNode(tag="status", attributes={}, children=[]),
                 ProtocolNode(tag="contact", attributes={}, children=[])
@@ -118,8 +123,8 @@ class ContactBuilder:
         
         for number in numbers:
             # Garante que número começa com +
-            if not number.startswith("+"):
-                number = "+" + number
+            # if not number.startswith("+"):
+            #     number = "+" + number
             
             # Cria estrutura: <user><contact>number</contact></user>
             contact_node = ProtocolNode(
@@ -129,8 +134,8 @@ class ContactBuilder:
             )
             user_node = ProtocolNode(
                 tag="user",
-                attributes={},
-                children=[contact_node]
+                attributes={"jid": to_whatsapp_jid(number)},
+                children=[]
             )
             list_node.add_child(user_node)
         

@@ -17,11 +17,18 @@ from .iq import IqProtocolEntity, GetKeysIqProtocolEntity, SetKeysIqProtocolEnti
 from .iq_push import PushIqProtocolEntity
 from .iq_props import PropsIqProtocolEntity
 from .iq_trust_contact import TrustContactIqProtocolEntity
+from .iq_clean_dirty import CleanDirtyIqProtocolEntity
+from .iq_set_business_name import SetBusinessNameIqProtocolEntity
+from .iq_update_business_profile import (
+    UpdateBusinessProfileIqProtocolEntity,
+    InvalidBusinessUpdateInfoType,
+    VALID_INFO_TYPES,
+)
 from .iq_wmex import WmexQueryIqProtocolEntity, WmexResultIqProtocolEntity
 from .ib import IbProtocolEntity, EdgeRoutingIbProtocolEntity
 from .presence import PresenceProtocolEntity
 from .chatstate import ChatstateProtocolEntity, OutgoingChatstateProtocolEntity
-from .receipt import ReceiptProtocolEntity, RetryOutgoingReceiptProtocolEntity
+from .receipt import ReceiptProtocolEntity, IncomingReceiptProtocolEntity, RetryOutgoingReceiptProtocolEntity
 from .ack import AckProtocolEntity
 from .enc import EncProtocolEntity
 
@@ -67,6 +74,11 @@ __all__ = [
     "PushIqProtocolEntity",
     "PropsIqProtocolEntity",
     "TrustContactIqProtocolEntity",
+    "CleanDirtyIqProtocolEntity",
+    "SetBusinessNameIqProtocolEntity",
+    "UpdateBusinessProfileIqProtocolEntity",
+    "InvalidBusinessUpdateInfoType",
+    "VALID_INFO_TYPES",
     "WmexQueryIqProtocolEntity",
     "WmexResultIqProtocolEntity",
     "IbProtocolEntity",
@@ -75,6 +87,7 @@ __all__ = [
     "ChatstateProtocolEntity",
     "OutgoingChatstateProtocolEntity",
     "ReceiptProtocolEntity",
+    "IncomingReceiptProtocolEntity",
     "RetryOutgoingReceiptProtocolEntity",
     "AckProtocolEntity",
     "EncProtocolEntity",

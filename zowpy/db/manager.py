@@ -333,8 +333,13 @@ class AxolotlManager(object):
         usernames_maps = []
         for username in usernames:
             jid = str(username).split('@')[0]
-            recipient,a,deviceid = WATools.jidDecode(str(jid))
-            usernames_maps.append((recipient,deviceid))
+            recipient, a, deviceid = WATools.jidDecode(str(jid))
+            # Normaliza recipient para int para consistência com recipient_id (BigInteger) no store
+            try:
+                recipient_id = int(recipient)
+            except (ValueError, TypeError):
+                recipient_id = recipient
+            usernames_maps.append((recipient_id, deviceid))
 
         return await self._store.containsSessionBulk(usernames_maps)
 

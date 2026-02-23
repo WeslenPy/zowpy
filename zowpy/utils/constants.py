@@ -44,6 +44,8 @@ class YowConstants:
 
     WHATSAPP_SERVER = "s.whatsapp.net"
     WHATSAPP_GROUP_SERVER = "g.us"
+    WHATSAPP_BROADCAST_SERVER = "@broadcast"
+    WHATSAPP_STATUS_SERVER = "status@broadcast"
 
     LID_SUFFIX = "lid"
 

@@ -35,7 +35,11 @@ class ProtocolNode:
     children: List['ProtocolNode'] = field(default_factory=list)
     data: Optional[bytes] = None
 
-   
+    def __post_init__(self) -> None:
+        """Garante que children nunca seja None (evita TypeError em hasChildren, __str__, etc.)."""
+        if self.children is None:
+            object.__setattr__(self, "children", [])
+
     def __str__(self):
         try:
             out = "<%s" % self.tag
@@ -69,7 +73,6 @@ class ProtocolNode:
         except Exception as e:
             logger.error(f"Error in ProtocolNode.__str__: {e}")
             return f"<{self.tag} />"
-
 
     @classmethod
     def generate_key(cls) -> str:

@@ -28,7 +28,7 @@ class AckProcessor(BaseProcessor):
     
     async def can_handle(self, node: ProtocolNode) -> bool:
         """Verifica se é um ack"""
-        return node.tag == "ack"
+        return node.tag == "ack" 
     
     async def process(
         self,

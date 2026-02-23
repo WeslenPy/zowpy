@@ -37,7 +37,7 @@ class AsyncProfile(object):
         await self._config_manager.save(self._profile_name, config, session_maker=session_maker or self._session_maker)
 
     @property
-    async def config(self):
+    async def config(self)->Config:
         if self._config is None:
             self._config = await self._load_config()
         return self._config

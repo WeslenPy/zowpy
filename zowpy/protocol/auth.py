@@ -87,11 +87,12 @@ class AsyncAuthHandler:
             "code": error_code,
             "reason": error_reason
         })
-        await self.events.emit("connection:disconnect", {
+        await self.events.emit("disconnected", {
             "reason": "Authentication Failure",
             "code": error_code,
             "error_reason": error_reason,
         })
+
 
     async def handle_stream_error(self, node: ProtocolNode) -> None:
         """

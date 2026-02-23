@@ -1,392 +1,284 @@
 """
 Phone Utilities - Utilitários para números de telefone.
 
-Substitui zowsuplib.common.utils.Utils
+Fonte de dados: proto/countries.json (estrutura por código de país).
+Substitui zowsuplib.common.utils.Utils.
 """
 
-from typing import Tuple, Optional
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+# Caminho do JSON em relação ao pacote proto
+_COUNTRIES_JSON_PATH = Path(__file__).resolve().parent.parent / "proto" / "countries.json"
+
+# Fallbacks quando o código não está no JSON
+_DEFAULT_LOCALE = "us"
+_DEFAULT_LANGUAGE = "en"
+_DEFAULT_MCC = "000"
+_DEFAULT_MNC = "000"
 
 
-# Mapeamento de código de país para código de localização
-COUNTRY_TO_LOCALE = {
-    "1": "us",  # USA/Canada
-    "7": "ru",  # Russia
-    "20": "eg",  # Egypt
-    "27": "za",  # South Africa
-    "30": "gr",  # Greece
-    "31": "nl",  # Netherlands
-    "32": "be",  # Belgium
-    "33": "fr",  # France
-    "34": "es",  # Spain
-    "36": "hu",  # Hungary
-    "39": "it",  # Italy
-    "40": "ro",  # Romania
-    "41": "ch",  # Switzerland
-    "43": "at",  # Austria
-    "44": "gb",  # UK
-    "45": "dk",  # Denmark
-    "46": "se",  # Sweden
-    "47": "no",  # Norway
-    "48": "pl",  # Poland
-    "49": "de",  # Germany
-    "51": "pe",  # Peru
-    "52": "mx",  # Mexico
-    "53": "cu",  # Cuba
-    "54": "ar",  # Argentina
-    "55": "br",  # Brazil
-    "56": "cl",  # Chile
-    "57": "co",  # Colombia
-    "58": "ve",  # Venezuela
-    "60": "my",  # Malaysia
-    "61": "au",  # Australia
-    "62": "id",  # Indonesia
-    "63": "ph",  # Philippines
-    "64": "nz",  # New Zealand
-    "65": "sg",  # Singapore
-    "66": "th",  # Thailand
-    "81": "jp",  # Japan
-    "82": "kr",  # South Korea
-    "84": "vn",  # Vietnam
-    "86": "cn",  # China
-    "90": "tr",  # Turkey
-    "91": "in",  # India
-    "92": "pk",  # Pakistan
-    "93": "af",  # Afghanistan
-    "94": "lk",  # Sri Lanka
-    "95": "mm",  # Myanmar
-    "98": "ir",  # Iran
-    "212": "ma",  # Morocco
-    "213": "dz",  # Algeria
-    "216": "tn",  # Tunisia
-    "218": "ly",  # Libya
-    "220": "gm",  # Gambia
-    "221": "sn",  # Senegal
-    "222": "mr",  # Mauritania
-    "223": "ml",  # Mali
-    "224": "gn",  # Guinea
-    "225": "ci",  # Ivory Coast
-    "226": "bf",  # Burkina Faso
-    "227": "ne",  # Niger
-    "228": "tg",  # Togo
-    "229": "bj",  # Benin
-    "230": "mu",  # Mauritius
-    "231": "lr",  # Liberia
-    "232": "sl",  # Sierra Leone
-    "233": "gh",  # Ghana
-    "234": "ng",  # Nigeria
-    "235": "td",  # Chad
-    "236": "cf",  # Central African Republic
-    "237": "cm",  # Cameroon
-    "238": "cv",  # Cape Verde
-    "239": "st",  # Sao Tome and Principe
-    "240": "gq",  # Equatorial Guinea
-    "241": "ga",  # Gabon
-    "242": "cg",  # Republic of the Congo
-    "243": "cd",  # Democratic Republic of the Congo
-    "244": "ao",  # Angola
-    "245": "gw",  # Guinea-Bissau
-    "246": "io",  # British Indian Ocean Territory
-    "248": "sc",  # Seychelles
-    "249": "sd",  # Sudan
-    "250": "rw",  # Rwanda
-    "251": "et",  # Ethiopia
-    "252": "so",  # Somalia
-    "253": "dj",  # Djibouti
-    "254": "ke",  # Kenya
-    "255": "tz",  # Tanzania
-    "256": "ug",  # Uganda
-    "257": "bi",  # Burundi
-    "258": "mz",  # Mozambique
-    "260": "zm",  # Zambia
-    "261": "mg",  # Madagascar
-    "262": "re",  # Reunion
-    "263": "zw",  # Zimbabwe
-    "264": "na",  # Namibia
-    "265": "mw",  # Malawi
-    "266": "ls",  # Lesotho
-    "267": "bw",  # Botswana
-    "268": "sz",  # Swaziland
-    "269": "km",  # Comoros
-    "290": "sh",  # Saint Helena
-    "291": "er",  # Eritrea
-    "297": "aw",  # Aruba
-    "298": "fo",  # Faroe Islands
-    "299": "gl",  # Greenland
-    "350": "gi",  # Gibraltar
-    "351": "pt",  # Portugal
-    "352": "lu",  # Luxembourg
-    "353": "ie",  # Ireland
-    "354": "is",  # Iceland
-    "355": "al",  # Albania
-    "356": "mt",  # Malta
-    "357": "cy",  # Cyprus
-    "358": "fi",  # Finland
-    "359": "bg",  # Bulgaria
-    "370": "lt",  # Lithuania
-    "371": "lv",  # Latvia
-    "372": "ee",  # Estonia
-    "373": "md",  # Moldova
-    "374": "am",  # Armenia
-    "375": "by",  # Belarus
-    "376": "ad",  # Andorra
-    "377": "mc",  # Monaco
-    "378": "sm",  # San Marino
-    "380": "ua",  # Ukraine
-    "381": "rs",  # Serbia
-    "382": "me",  # Montenegro
-    "383": "xk",  # Kosovo
-    "385": "hr",  # Croatia
-    "386": "si",  # Slovenia
-    "387": "ba",  # Bosnia and Herzegovina
-    "389": "mk",  # North Macedonia
-    "420": "cz",  # Czech Republic
-    "421": "sk",  # Slovakia
-    "423": "li",  # Liechtenstein
-    "500": "fk",  # Falkland Islands
-    "501": "bz",  # Belize
-    "502": "gt",  # Guatemala
-    "503": "sv",  # El Salvador
-    "504": "hn",  # Honduras
-    "505": "ni",  # Nicaragua
-    "506": "cr",  # Costa Rica
-    "507": "pa",  # Panama
-    "508": "pm",  # Saint Pierre and Miquelon
-    "509": "ht",  # Haiti
-    "590": "gp",  # Guadeloupe
-    "591": "bo",  # Bolivia
-    "592": "gy",  # Guyana
-    "593": "ec",  # Ecuador
-    "594": "gf",  # French Guiana
-    "595": "py",  # Paraguay
-    "596": "mq",  # Martinique
-    "597": "sr",  # Suriname
-    "598": "uy",  # Uruguay
-    "599": "cw",  # Curacao
-    "670": "tl",  # East Timor
-    "672": "nf",  # Norfolk Island
-    "673": "bn",  # Brunei
-    "674": "nr",  # Nauru
-    "675": "pg",  # Papua New Guinea
-    "676": "to",  # Tonga
-    "677": "sb",  # Solomon Islands
-    "678": "vu",  # Vanuatu
-    "679": "fj",  # Fiji
-    "680": "pw",  # Palau
-    "681": "wf",  # Wallis and Futuna
-    "682": "ck",  # Cook Islands
-    "683": "nu",  # Niue
-    "685": "ws",  # Samoa
-    "686": "ki",  # Kiribati
-    "687": "nc",  # New Caledonia
-    "688": "tv",  # Tuvalu
-    "689": "pf",  # French Polynesia
-    "690": "tk",  # Tokelau
-    "691": "fm",  # Micronesia
-    "692": "mh",  # Marshall Islands
-    "850": "kp",  # North Korea
-    "852": "hk",  # Hong Kong
-    "853": "mo",  # Macau
-    "855": "kh",  # Cambodia
-    "856": "la",  # Laos
-    "880": "bd",  # Bangladesh
-    "886": "tw",  # Taiwan
-    "960": "mv",  # Maldives
-    "961": "lb",  # Lebanon
-    "962": "jo",  # Jordan
-    "963": "sy",  # Syria
-    "964": "iq",  # Iraq
-    "965": "kw",  # Kuwait
-    "966": "sa",  # Saudi Arabia
-    "967": "ye",  # Yemen
-    "968": "om",  # Oman
-    "970": "ps",  # Palestine
-    "971": "ae",  # UAE
-    "972": "il",  # Israel
-    "973": "bh",  # Bahrain
-    "974": "qa",  # Qatar
-    "975": "bt",  # Bhutan
-    "976": "mn",  # Mongolia
-    "977": "np",  # Nepal
-    "992": "tj",  # Tajikistan
-    "993": "tm",  # Turkmenistan
-    "994": "az",  # Azerbaijan
-    "995": "ge",  # Georgia
-    "996": "kg",  # Kyrgyzstan
-    "998": "uz",  # Uzbekistan
-}
+_countries_cache: Optional[Dict[str, Any]] = None
 
+
+def _load_countries_data() -> Dict[str, Any]:
+    """Carrega countries.json uma vez (cache em módulo)."""
+    global _countries_cache
+    if _countries_cache is None:
+        with open(_COUNTRIES_JSON_PATH, "r", encoding="utf-8") as f:
+            _countries_cache = json.load(f)
+    return _countries_cache
+
+
+class CountryPhoneData:
+    """
+    Dados de país/telefone a partir de proto/countries.json.
+
+    Expõe código de país (cc), locale, language, MCC/MNC, nome do país e
+    operadoras de forma estruturada via properties e métodos auxiliares.
+    """
+
+    __slots__ = ("_cc", "_raw")
+
+    def __init__(self, country_code: str):
+        """
+        :param country_code: Código de discagem do país (ex: "55", "1").
+        """
+        self._cc = country_code
+        data = _load_countries_data()
+        self._raw: Optional[Dict[str, Any]] = data.get(country_code)
+
+    @property
+    def country_code(self) -> str:
+        """Código de discagem do país (cc)."""
+        return self._cc
+
+    @property
+    def locale(self) -> str:
+        """Código de localização (lc), ex: br, us, gb."""
+        if self._raw and "locale" in self._raw and self._raw["locale"]:
+            return self._raw["locale"]
+        op = self._first_operator
+        if op and op.get("iso"):
+            return op["iso"]
+        return _DEFAULT_LOCALE
+
+    @property
+    def language(self) -> str:
+        """Código de idioma (lg), ex: pt, en."""
+        if self._raw and "language" in self._raw and self._raw["language"]:
+            return self._raw["language"]
+        return _DEFAULT_LANGUAGE
+
+    @property
+    def country_name(self) -> str:
+        """Nome do país em inglês."""
+        op = self._first_operator
+        if op and op.get("country"):
+            return op["country"].strip()
+        return ""
+
+    @property
+    def _first_operator(self) -> Optional[Dict[str, Any]]:
+        """Primeiro operador da lista (usado para mcc, mnc, iso, country)."""
+        if not self._raw:
+            return None
+        ddi = self._raw.get("ddi") or {}
+        operators = ddi.get("operators") or []
+        if not operators:
+            return None
+        first = operators[0]
+        return first.get("operator") if isinstance(first, dict) else None
+
+    @property
+    def default_mcc(self) -> str:
+        """MCC (Mobile Country Code) padrão para o país."""
+        op = self._first_operator
+        if op and op.get("mcc"):
+            return op["mcc"]
+        return _DEFAULT_MCC
+
+    @property
+    def default_mnc(self) -> str:
+        """MNC (Mobile Network Code) padrão para o país."""
+        op = self._first_operator
+        if op and op.get("mnc"):
+            return op["mnc"]
+        return _DEFAULT_MNC
+
+    def get_lg_lc(self) -> Tuple[str, str]:
+        """Retorna (language, locale) para uso em registro/API."""
+        return self.language, self.locale
+
+    def get_mcc_mnc(self) -> Tuple[str, str]:
+        """Retorna (MCC, MNC) padrão para o país."""
+        return self.default_mcc, self.default_mnc
+
+    @property
+    def operators(self) -> List[Dict[str, Any]]:
+        """Lista de operadoras (operator dicts: mcc, mnc, iso, country, network)."""
+        if not self._raw:
+            return []
+        ddi = self._raw.get("ddi") or {}
+        operators = ddi.get("operators") or []
+        out = []
+        for item in operators:
+            if isinstance(item, dict) and "operator" in item:
+                out.append(item["operator"])
+        return out
+
+    @property
+    def is_known(self) -> bool:
+        """True se o código de país existe no JSON."""
+        return self._raw is not None
+
+    def __repr__(self) -> str:
+        return f"CountryPhoneData(cc={self._cc!r}, locale={self.locale!r}, language={self.language!r})"
+
+
+class PhoneCountryHelper:
+    """
+    Acesso central aos dados de países/telefone a partir de countries.json.
+
+    Uso:
+        helper = PhoneCountryHelper()
+        cc = helper.get_country_code("+5511999999999")
+        data = helper.get_data(cc)
+        data.locale, data.language, data.get_mcc_mnc()
+    """
+
+    def __init__(self) -> None:
+        self._data = _load_countries_data()
+        self._cc_set = set(self._data.keys())
+
+    @property
+    def country_codes(self) -> List[str]:
+        """Lista de códigos de país presentes no JSON (ordenados por tamanho desc para matching)."""
+        return sorted(self._cc_set, key=lambda x: (-len(x), x))
+
+    def get_country_code(self, phone_number: str) -> str:
+        """
+        Obtém o código de país a partir do número (apenas dígitos, matching no JSON).
+        Tenta prefixos mais longos primeiro (3, 2, 1 dígito).
+        """
+        digits = "".join(c for c in phone_number if c.isdigit())
+        if not digits:
+            return "1"
+        # Código 1 (EUA/Canadá): só aceita se tiver pelo menos 10 dígitos
+        if digits.startswith("1") and len(digits) >= 10:
+            return "1"
+        for length in (3, 2, 1):
+            if len(digits) >= length:
+                code = digits[:length]
+                if code in self._cc_set:
+                    return code
+        return digits[0] if digits else "1"
+
+    def get_data(self, country_code: str) -> CountryPhoneData:
+        """Retorna um CountryPhoneData para o código informado."""
+        return CountryPhoneData(country_code)
+
+    def get_locale(self, country_code: str) -> str:
+        """Atalho para locale do país."""
+        return self.get_data(country_code).locale
+
+    def get_language(self, country_code: str) -> str:
+        """Atalho para idioma do país."""
+        return self.get_data(country_code).language
+
+    def get_lg_lc(self, country_code: str) -> Tuple[str, str]:
+        """Retorna (language, locale) para o código de país."""
+        return self.get_data(country_code).get_lg_lc()
+
+    def get_mcc_mnc(self, country_code: str) -> Tuple[str, str]:
+        """Retorna (MCC, MNC) padrão para o código de país."""
+        return self.get_data(country_code).get_mcc_mnc()
+
+
+# Instância global para uso pelas funções legadas e PhoneUtils
+_helper: Optional[PhoneCountryHelper] = None
+
+
+def _get_helper() -> PhoneCountryHelper:
+    global _helper
+    if _helper is None:
+        _helper = PhoneCountryHelper()
+    return _helper
+
+
+# ---- Funções auxiliares (compatibilidade com código existente) ----
 
 def get_mobile_cc(phone_number: str) -> str:
     """
     Obtém código de país (country code) do número de telefone.
-    
+
     Args:
         phone_number: Número de telefone (com ou sem código de país)
-    
+
     Returns:
         Código de país (ex: "55" para Brasil)
     """
-    # Remove caracteres não numéricos
-    digits = ''.join(filter(str.isdigit, phone_number))
-    
-    if not digits:
-        return "1"  # Default USA
-    
-    # Tenta códigos de 1 a 3 dígitos
-    # Códigos de 1 dígito
-    if digits.startswith("1") and len(digits) >= 10:
-        return "1"
-    
-    # Códigos de 2 dígitos
-    for code_len in [2, 3]:
-        if len(digits) >= code_len:
-            code = digits[:code_len]
-            if code in COUNTRY_TO_LOCALE:
-                return code
-    
-    # Se não encontrou, assume código de 1 dígito
-    return digits[0] if digits else "1"
+    return _get_helper().get_country_code(phone_number)
 
 
 def get_lg_lc(country_code: str) -> Tuple[str, str]:
     """
     Obtém código de idioma (lg) e localização (lc) a partir do código de país.
-    
+
     Args:
         country_code: Código de país (ex: "55")
-    
+
     Returns:
         Tupla (lg, lc) - código de idioma e localização
     """
-    locale = COUNTRY_TO_LOCALE.get(country_code, "us")
-    
-    # Mapeamento básico de locale para idioma
-    locale_to_lang = {
-        "us": "en",
-        "gb": "en",
-        "br": "pt",
-        "pt": "pt",
-        "es": "es",
-        "mx": "es",
-        "ar": "es",
-        "fr": "fr",
-        "de": "de",
-        "it": "it",
-        "ru": "ru",
-        "cn": "zh",
-        "jp": "ja",
-        "kr": "ko",
-        "in": "hi",
-        "pk": "ur",
-        "tr": "tr",
-        "sa": "ar",
-        "ae": "ar",
-        "eg": "ar",
-        "il": "he",
-        "th": "th",
-        "id": "id",
-        "my": "ms",
-        "ph": "en",
-        "vn": "vi",
-        "sg": "en",
-        "au": "en",
-        "nz": "en",
-        "ca": "en",
-    }
-    
-    lg = locale_to_lang.get(locale, "en")
-    
-    return lg, locale
-
-
-# Mapeamento de código de país para MCC (Mobile Country Code)
-# Valores padrão comuns para WhatsApp
-COUNTRY_TO_MCC = {
-    "1": "310",  # USA/Canada
-    "7": "250",  # Russia
-    "20": "602",  # Egypt
-    "27": "655",  # South Africa
-    "30": "202",  # Greece
-    "31": "204",  # Netherlands
-    "32": "206",  # Belgium
-    "33": "208",  # France
-    "34": "214",  # Spain
-    "36": "216",  # Hungary
-    "39": "222",  # Italy
-    "40": "226",  # Romania
-    "41": "228",  # Switzerland
-    "43": "232",  # Austria
-    "44": "234",  # UK
-    "45": "238",  # Denmark
-    "46": "240",  # Sweden
-    "47": "242",  # Norway
-    "48": "260",  # Poland
-    "49": "262",  # Germany
-    "51": "716",  # Peru
-    "52": "334",  # Mexico
-    "53": "368",  # Cuba
-    "54": "722",  # Argentina
-    "55": "724",  # Brazil
-    "56": "730",  # Chile
-    "57": "732",  # Colombia
-    "58": "734",  # Venezuela
-    "60": "502",  # Malaysia
-    "61": "505",  # Australia
-    "62": "510",  # Indonesia
-    "63": "515",  # Philippines
-    "64": "530",  # New Zealand
-    "65": "525",  # Singapore
-    "66": "520",  # Thailand
-    "81": "440",  # Japan
-    "82": "450",  # South Korea
-    "84": "452",  # Vietnam
-    "86": "460",  # China
-    "90": "286",  # Turkey
-    "91": "404",  # India
-    "92": "410",  # Pakistan
-    "351": "268",  # Portugal
-    "351": "268",  # Portugal
-    "55": "724",  # Brazil (mais comum)
-}
-
-# MNC padrão (Mobile Network Code) - geralmente "05" ou "01"
-DEFAULT_MNC = "05"
+    return _get_helper().get_lg_lc(country_code)
 
 
 def get_mcc_mnc(phone_number: str) -> Tuple[str, str]:
     """
-    Obtém MCC (Mobile Country Code) e MNC (Mobile Network Code) do número de telefone.
-    
+    Obtém MCC (Mobile Country Code) e MNC (Mobile Network Code) do número.
+
     Args:
         phone_number: Número de telefone (com ou sem código de país)
-    
+
     Returns:
-        Tupla (MCC, MNC) - códigos de país móvel e rede móvel
+        Tupla (MCC, MNC)
     """
-    country_code = get_mobile_cc(phone_number)
-    mcc = COUNTRY_TO_MCC.get(country_code, "724")  # Default Brasil
-    mnc = DEFAULT_MNC
-    return mcc, mnc
+    cc = get_mobile_cc(phone_number)
+    return _get_helper().get_mcc_mnc(cc)
+
+
+def get_country_data(country_code: str) -> CountryPhoneData:
+    """Retorna dados estruturados do país (locale, language, mcc, mnc, etc.)."""
+    return _get_helper().get_data(country_code)
+
+
+def get_country_data_from_phone(phone_number: str) -> CountryPhoneData:
+    """Obtém CountryPhoneData a partir do número (extrai cc e retorna dados)."""
+    cc = get_mobile_cc(phone_number)
+    return _get_helper().get_data(cc)
 
 
 class PhoneUtils:
     """
-    Utilitários para números de telefone.
-    Substitui zowsuplib.common.utils.Utils
+    Utilitários para números de telefone (fachada estática).
+    Dados vêm de proto/countries.json.
     """
-    
+
     @staticmethod
     def getMobileCC(phone_number: str) -> str:
         """Obtém código de país do número de telefone."""
         return get_mobile_cc(phone_number)
-    
+
     @staticmethod
     def getLGLC(country_code: str) -> Tuple[str, str]:
-        """Obtém código de idioma e localização."""
+        """Obtém código de idioma e localização (lg, lc)."""
         return get_lg_lc(country_code)
-    
+
     @staticmethod
     def get_mcc_mnc(phone_number: str) -> Tuple[str, str]:
         """Obtém MCC e MNC do número de telefone."""
-        return get_mcc_mnc(phone_number)  # Chama função global
-
+        return get_mcc_mnc(phone_number)

@@ -10,6 +10,7 @@ from typing import Optional, Dict, Any, Callable, List
 from loguru import logger
 
 from ...protocol.structs import ProtocolNode
+from ...protocol.entities import IncomingReceiptProtocolEntity
 from ...core.processors.base import BaseProcessor
 from ...core.events import AsyncEventEmitter
 
@@ -33,30 +34,19 @@ class ReceiptProcessor(BaseProcessor):
     async def can_handle(self, node: ProtocolNode) -> bool:
         return node.tag == "receipt"
 
-    def _parse_items(self, node: ProtocolNode) -> Optional[List[str]]:
-        """Extrai lista de IDs de <list><item id="..."/> (múltiplas mensagens)."""
-        list_node = node.get_child("list")
-        if not list_node:
-            return None
-        items: List[str] = []
-        for child in list_node.get_all_children("item"):
-            sid = child.get_attribute("id") if hasattr(child, "get_attribute") else None
-            if sid:
-                items.append(sid)
-        return items if items else None
-
     async def process(
         self,
         node: ProtocolNode,
         raw_data: Optional[bytes] = None,
     ) -> Optional[Dict[str, Any]]:
-        receipt_id = node.get_attribute("id")
-        receipt_type = node.get_attribute("type")
-        from_jid = node.get_attribute("from")
-        participant = node.get_attribute("participant")
-        offline = node.get_attribute("offline")
-        timestamp = node.get_attribute("t")
-
+        entity = IncomingReceiptProtocolEntity.from_protocol_node(node)
+        receipt_id = entity.get_id()
+        receipt_type = entity.get_type()
+        from_jid = entity.get_from()
+        participant = entity.get_participant()
+        offline = entity.get_offline()
+        timestamp = entity.get_timestamp()
+        items = entity.get_items()
 
         logger.debug(f"Recebido receipt: {node}")
         logger.debug(f"Processando receipt: id={receipt_id}, type={receipt_type}, from={from_jid}")
@@ -65,7 +55,6 @@ class ReceiptProcessor(BaseProcessor):
         #     await self._process_retry_receipt(node)
         #     return None
 
-        items = self._parse_items(node)
         status = "read" if receipt_type == "read" else "received"
         receipt_data: Dict[str, Any] = {
             "id": receipt_id,
@@ -74,21 +63,21 @@ class ReceiptProcessor(BaseProcessor):
             "participant": participant,
             "timestamp": timestamp,
             "offline": offline,
-            "items": items,
+            "items": items if items else None,
             "status": status,
         }
 
         await self._events.emit("receipt", receipt_data)
         await self._events.emit("msg_log", {"status": status, **receipt_data})
-        
 
-        await self._send_ack_for_receipt(
-            message_id=receipt_id,
-            to=from_jid,
-            receipt_type=receipt_type,
-            participant=participant,
-        )
-
+        logger.debug(f"Enviando ACK para receipt: id={receipt_id}, type={receipt_type}, from={from_jid}")
+        if receipt_type is None or receipt_type != "delivered":
+            await self._send_ack_for_receipt(
+                message_id=receipt_id,
+                to=from_jid,
+                receipt_type=receipt_type,
+                participant=participant,
+            )
 
         return receipt_data
 

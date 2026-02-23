@@ -1,12 +1,13 @@
 """
 Receipt Protocol Entities - Entidades de receipt e ack.
 
-Baseado em ReceiptProtocolEntity e AckProtocolEntity do zowsuplib.
+Baseado em ReceiptProtocolEntity, IncomingReceiptProtocolEntity e AckProtocolEntity do zowsuplib.
 """
 
 import time
 import binascii
 from typing import Optional, List
+from ...protocol.structs import ProtocolNode
 from .base import ProtocolEntity
 
 
@@ -69,6 +70,83 @@ class ReceiptProtocolEntity(ProtocolEntity):
         self.receipt_type = receipt_type
         self.message_ids = message_ids
         self.receipt_id = receipt_id
+
+
+class IncomingReceiptProtocolEntity:
+    """
+    Entidade de receipt recebido (incoming) <receipt from="..." id="..." t="..." ...>.
+
+    Representa um receipt enviado pelo servidor (entrega/leitura/retry).
+    Baseado em IncomingReceiptProtocolEntity do zowsuplib (protocol_receipts).
+    """
+
+    def __init__(
+        self,
+        receipt_id: str,
+        from_jid: str,
+        timestamp: Optional[str],
+        offline: Optional[str] = None,
+        receipt_type: Optional[str] = None,
+        participant: Optional[str] = None,
+        items: Optional[List[str]] = None,
+    ):
+        self._id = receipt_id
+        self._from = from_jid
+        self.timestamp = timestamp
+        self.offline = offline  # "1" / "0" ou None
+        self.type = receipt_type  # "read", "delivered", "retry", etc.
+        self.participant = participant
+        self.items = items or []
+
+    def get_id(self) -> str:
+        return self._id
+
+    def get_from(self, full: bool = True) -> str:
+        if full:
+            return self._from
+        return self._from.split("@")[0] if self._from else ""
+
+    def get_timestamp(self) -> Optional[str]:
+        return self.timestamp
+
+    def get_type(self) -> Optional[str]:
+        return self.type
+
+    def get_participant(self, full: bool = True) -> Optional[str]:
+        if not self.participant:
+            return None
+        return self.participant if full else self.participant.split("@")[0]
+
+    def get_offline(self) -> Optional[str]:
+        return self.offline
+
+    def get_items(self) -> List[str]:
+        return self.items or []
+
+    @classmethod
+    def from_protocol_node(cls, node: ProtocolNode) -> "IncomingReceiptProtocolEntity":
+        """
+        Cria entidade a partir de um node <receipt> recebido.
+
+        Baseado em IncomingReceiptProtocolEntity.fromProtocolTreeNode() do zowsuplib.
+        """
+        items: Optional[List[str]] = None
+        list_node = node.get_child("list")
+        if list_node:
+            items = []
+            for child in list_node.get_all_children("item"):
+                sid = child.get_attribute("id") if hasattr(child, "get_attribute") else None
+                if sid:
+                    items.append(sid)
+        return cls(
+            receipt_id=node.get_attribute("id") or "",
+            from_jid=node.get_attribute("from") or "",
+            timestamp=node.get_attribute("t"),
+            offline=node.get_attribute("offline"),
+            receipt_type=node.get_attribute("type"),
+            participant=node.get_attribute("participant"),
+            items=items,
+        )
 
 
 class RetryOutgoingReceiptProtocolEntity(ProtocolEntity):

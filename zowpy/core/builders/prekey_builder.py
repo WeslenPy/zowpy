@@ -72,7 +72,54 @@ class PrekeyBuilder:
         result = HexUtil.decodeHex(arr_hex)
         logger.debug(f"[ZOWPY] adjustArray: input_len={len(arr)}, input_hex_first_40={arr_hex[:40]}..., output_len={len(result)}, output_hex_first_40={binascii.hexlify(result[:40]).decode() if len(result) >= 40 else binascii.hexlify(result).decode()}...")
         return result
-    
+
+    @staticmethod
+    def prepare_flush_payload(
+        signed_prekey,
+        prekeys: List,
+        identity_public_key_trimmed: bytes,
+        registration_id_int: int,
+    ) -> Dict:
+        """
+        Prepara o payload para build_set_keys_iq a partir de signed_prekey, prekeys e identity/registration_id.
+
+        Args:
+            signed_prekey: SignedPreKeyRecord
+            prekeys: Lista de PreKeyRecord
+            identity_public_key_trimmed: identity.getPublicKey().serialize()[1:]
+            registration_id_int: registration_id (int)
+
+        Returns:
+            Dict com identity_key, signed_prekey (tuple), prekeys (dict), registration_id (bytes)
+        """
+        prekeys_dict = {}
+        for prekey in prekeys:
+            key_pair = prekey.getKeyPair()
+            prekey_id_orig = prekey.getId()
+            public_key_bytes = key_pair.getPublicKey().serialize()[1:]
+            adjusted_id = PrekeyBuilder._adjust_id(prekey_id_orig)
+            adjusted_key = PrekeyBuilder._adjust_array(public_key_bytes)
+            prekeys_dict[adjusted_id] = adjusted_key
+
+        signed_prekey_id = signed_prekey.getId()
+        adjusted_signed_id = PrekeyBuilder._adjust_id(signed_prekey_id)
+        signed_public_key_serialized = signed_prekey.getKeyPair().getPublicKey().serialize()
+        signed_public_key_trimmed = signed_public_key_serialized[1:]
+        adjusted_signed_key = PrekeyBuilder._adjust_array(signed_public_key_trimmed)
+        signature_raw = signed_prekey.getSignature()
+        adjusted_signature = PrekeyBuilder._adjust_array(signature_raw)
+        signed_key_tuple = (adjusted_signed_id, adjusted_signed_key, adjusted_signature)
+
+        adjusted_identity = PrekeyBuilder._adjust_array(identity_public_key_trimmed)
+        adjusted_registration_id = PrekeyBuilder._adjust_id(registration_id_int, byte_count=4)
+
+        return {
+            "identity_key": adjusted_identity,
+            "signed_prekey": signed_key_tuple,
+            "prekeys": prekeys_dict,
+            "registration_id": adjusted_registration_id,
+        }
+
     @staticmethod
     def build_set_keys_iq(
         identity_key: bytes,
@@ -265,8 +312,10 @@ class PrekeyBuilder:
         )
         
         for jid in jids:
-            normalized_jid = jid.split("@")[0].split(":")[0]
-            user_attrs = {"jid": f"{normalized_jid}@s.whatsapp.net"}
+            # Preserve full JID including device (e.g. 559885700260:37@s.whatsapp.net)
+            # Only append domain when missing (align with whatsmeow get-keys IQ)
+            jid_for_request = jid if "@" in jid else f"{jid}@s.whatsapp.net"
+            user_attrs = {"jid": jid_for_request}
             if reason:
                 user_attrs["reason"] = reason
             

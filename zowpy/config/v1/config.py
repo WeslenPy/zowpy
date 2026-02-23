@@ -31,7 +31,8 @@ class Config(config.Config):
             device_model_type=None,
             c2dm_reg_id=None,
             fcm_creds=None,
-            fcm_cat=None         
+            fcm_cat=None,
+            business_name=None
     ):
         super(Config, self).__init__(1)
 
@@ -64,7 +65,7 @@ class Config(config.Config):
         self._c2dm_reg_id = c2dm_reg_id
         self._fcm_creds = fcm_creds
         self._fcm_cat = fcm_cat
-
+        self._business_name = business_name
     def __str__(self):
         from ...config.v1.serialize import ConfigSerialize
         from ...config.transforms.dict_json import DictJsonTransform
@@ -307,4 +308,17 @@ class Config(config.Config):
     @fcm_cat.setter
     def fcm_cat(self,value):
         self._fcm_cat = value
+
+    @property
+    def business_name(self):
+        return self._business_name
+
+    @business_name.setter
+    def business_name(self, value):
+        self._business_name = value
+
+
+    @property
+    def is_business(self):
+        return self.os_name in ["SMBA","SMBI"]
 

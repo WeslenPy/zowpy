@@ -22,7 +22,7 @@ class ReceiptBuilder:
     - played: Mensagem reproduzida (áudio/vídeo)
     """
     
-    TYPE_DELIVERED = "delivered"  # Padrão, não precisa especificar type
+    TYPE_DELIVERED = ""  # Padrão, não precisa especificar type
     TYPE_READ = "read"
     TYPE_PLAYED = "played"
     
