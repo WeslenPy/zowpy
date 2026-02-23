@@ -55,9 +55,6 @@ class EncEntity:
             attribs["decrypt-fail"] = 'hide'
             # attribs["type"] = 'msg'
 
-
-
-
         # Adiciona mediatype se fornecido (zowsuplib adiciona mediatype no <enc> node)
         # Baseado no log do zowsuplib: <enc type="pkmsg" v="2" mediatype="image">
         if mediatype and mediatype != "text":

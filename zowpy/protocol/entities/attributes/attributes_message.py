@@ -11,7 +11,7 @@ from .attributes_video import VideoAttributes
 from .attributes_audio import AudioAttributes
 from .attributes_document import DocumentAttributes
 from .attributes_sticker import StickerAttributes
-
+import os
 
 class MessageAttributes:
     """
@@ -44,7 +44,8 @@ class MessageAttributes:
         sender_key_distribution_message: Optional[Any] = None,
         protocol: Optional[Any] = None,
         fromMe: bool = False,
-        to: Optional[str] = None
+        to: Optional[str] = None,
+        message_secret: Optional[bytes] = None
     ):
         """
         Inicializa MessageAttributes.
@@ -97,7 +98,7 @@ class MessageAttributes:
         self._protocol = protocol
         self._fromMe = fromMe
         self._to = to
-    
+        self._message_secret = message_secret or os.urandom(32)
     def __str__(self):
         attrs = []
         if self.conversation is not None:
@@ -145,6 +146,9 @@ class MessageAttributes:
         if self.fromMe:
             attrs.append(("fromMe", self.fromMe))
             attrs.append(("to", self.to))
+
+        if self._message_secret:
+            attrs.append(("message_secret", self._message_secret))
         
         return "[%s]" % " ".join((map(lambda item: "%s=%s" % item, attrs)))
     
@@ -378,3 +382,12 @@ class MessageAttributes:
         """Define atributos de protocolo."""
         self._protocol = value
 
+    @property
+    def message_secret(self) -> Optional[bytes]:
+        """Chave de segredo da mensagem."""
+        return self._message_secret
+    
+    @message_secret.setter
+    def message_secret(self, value: Optional[bytes]):
+        """Define chave de segredo da mensagem."""
+        self._message_secret = value

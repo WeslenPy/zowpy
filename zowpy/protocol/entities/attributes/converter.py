@@ -361,7 +361,7 @@ class AttributesConverter:
         message = Message()
         mctx = MessageContextInfo()
 
-        mctx.message_secret = os.urandom(32)
+        mctx.message_secret = message_attributes.message_secret
         mctx.device_list_metadata.sender_timestamp = int(time.time())
         mctx.device_list_metadata_version = 2
         #mctx.device_list_metadata.sender_account_type = 0

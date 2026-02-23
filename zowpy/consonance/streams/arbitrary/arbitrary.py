@@ -1,6 +1,3 @@
-import logging
-
-logger = logging.getLogger(__file__)
 
 
 class ArbitraryStream(object):

@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 import struct
-from typing import Optional
+from typing import Optional, Tuple, Union
 import zlib
 from .constants import YowConstants
 import codecs, sys
@@ -21,6 +21,8 @@ from Crypto.Random import get_random_bytes
 import hmac
 from math import ceil
 from Crypto.Util.Padding import pad,unpad
+
+from ..protocol.structs import ProtocolNode
 
 
 
@@ -83,6 +85,16 @@ class HexTools:
 
 class WATools:
 
+    # Tipos de modificação para generate_msg_secret_key 
+    MSG_SECRET_TYPE_POLL_VOTE = "Poll Vote"
+    MSG_SECRET_TYPE_REACTION = "Enc Reaction"
+    MSG_SECRET_TYPE_COMMENT = "Enc Comment"
+    MSG_SECRET_TYPE_REPORT_TOKEN = "Report Token"
+    MSG_SECRET_TYPE_EVENT_RESPONSE = "Event Response"
+    MSG_SECRET_TYPE_EVENT_EDIT = "Event Edit"
+    MSG_SECRET_TYPE_BOT_MSG = "Bot Message"
+
+
     @staticmethod
     def normalizeJid(tos):
 
@@ -127,7 +139,20 @@ class WATools:
             recipientType = 1
 
         deviceId = int(nps[2]) if len(nps)>=3 else 0
-        return [recipientId,recipientType,deviceId] 
+        return [recipientId,recipientType,deviceId]
+
+    @staticmethod
+    def jid_to_non_ad_string(jid: str) -> str:
+        """
+        Retorna o JID em forma string sem sufixo agent/device (equivalente a ToNonAD().String()).
+        Ex.: "5511999.0:0@s.whatsapp.net" -> "5511999@s.whatsapp.net"
+        """
+        normalized = WATools.normalizeJid(jid).split(",")[0].strip()
+        if "@" not in normalized:
+            return normalized
+        recipient_id, _, _ = WATools.jidDecode(normalized)
+        server = normalized.split("@")[1]
+        return f"{recipient_id}@{server}"
 
     @staticmethod
     def generateIdentity():
@@ -234,9 +259,67 @@ class WATools:
         return decompressed_data          
     
     @staticmethod
-    def extract_and_expand(key: bytes, info: bytes = b"", output_length: int = 32,salt=None) -> bytes:         
+    def extract_and_expand(key: bytes, info: bytes = b"", output_length: int = 32,salt=None) -> bytes:
         return WATools.expand(hmac.new(salt if salt is not None else bytes(32) , key, hashlib.sha256).digest(), info, output_length)
-    
+
+
+    @staticmethod
+    def generate_msg_secret_key(
+        modification_type: Union[str, bytes],
+        modification_sender: str,
+        orig_msg_id: Union[str, bytes],
+        orig_msg_sender: str,
+        orig_msg_secret: bytes,
+    ) -> Tuple[bytes, bytes]:
+        """
+        Gera chave secreta e additional_data para criptografia de modificações (ex.: voto em poll, reação, comentário).
+        Equivalente a generateMsgSecretKey no Go (HKDF-SHA256 com orig_msg_secret e use_case_secret).
+        Para modification_type em (Poll Vote, Event Response, vazio), retorna additional_data no formato
+        orig_msg_id + '\\x00' + modification_sender_str; nos demais tipos retorna additional_data vazio.
+        """
+        orig_msg_sender_str = WATools.jid_to_non_ad_string(orig_msg_sender)
+        modification_sender_str = WATools.jid_to_non_ad_string(modification_sender)
+        orig_id_bytes = orig_msg_id if isinstance(orig_msg_id, bytes) else orig_msg_id.encode("utf-8")
+        mod_type_bytes = modification_type if isinstance(modification_type, bytes) else (modification_type or "").encode("utf-8")
+        use_case_secret = orig_id_bytes + orig_msg_sender_str.encode("utf-8") + modification_sender_str.encode("utf-8") + mod_type_bytes
+        secret_key = WATools.extract_and_expand(orig_msg_secret, use_case_secret, 32, salt=None)
+        mod_type_str = modification_type.decode("utf-8") if isinstance(modification_type, bytes) else (modification_type or "")
+        if not mod_type_str or mod_type_str in (
+            WATools.MSG_SECRET_TYPE_POLL_VOTE,
+            WATools.MSG_SECRET_TYPE_EVENT_RESPONSE,
+        ):
+            additional_data = orig_id_bytes + b"\x00" + modification_sender_str.encode("utf-8")
+        else:
+            additional_data = b""
+        return secret_key, additional_data
+
+    @staticmethod
+    def get_message_reporting_token(
+        msg_protobuf: bytes,
+        message_secret: bytes,
+        sender_jid: str,
+        remote_jid: str,
+        message_id: Union[str, bytes],
+    ) -> ProtocolNode:
+        """
+        Gera o node <reporting> com <reporting_token> para mensagem (token HMAC-SHA256).
+        Equivalente a getMessageReportingToken no Go: reportingSecret via generateMsgSecretKey(Report Token),
+        depois HMAC-SHA256(reportingSecret, getReportingToken(msgProtobuf))[:16].
+        getReportingToken(msgProtobuf) é o input ao HMAC; aqui usa-se msg_protobuf como tal.
+        """
+        reporting_secret, _ = WATools.generate_msg_secret_key(
+            WATools.MSG_SECRET_TYPE_REPORT_TOKEN,
+            sender_jid,
+            message_id,
+            remote_jid,
+            message_secret,
+        )
+        data_to_hash = msg_protobuf
+        hasher = hmac.new(reporting_secret, data_to_hash, hashlib.sha256)
+        token_reporting = hasher.digest()[:16]
+      
+        return token_reporting
+
     @staticmethod
     def expand(prk: bytes, info: bytes, output_size: int) -> bytes:
         """

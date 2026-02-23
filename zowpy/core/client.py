@@ -11,6 +11,7 @@ import json
 import random
 import time
 from typing import Optional, Dict, Any, Tuple, List, Union
+import loguru
 from loguru import logger
 
 from zowpy.axolotl.ecc.curve import Curve
@@ -19,7 +20,7 @@ from zowpy.db.factory import AxolotlManagerFactory
 from zowpy.db.models import Account
 from zowpy.profile.profile import AsyncProfile
 from zowpy.config.v1.config import Config
-from zowpy.protocol.entities import ExtendedTextMessageProtocolEntity
+from zowpy.protocol.entities import ExtendedTextMessageProtocolEntity, TextMessageProtocolEntity
 from zowpy.protocol.entities.attributes import ExtendedTextAttributes, MessageMetaAttributes
 from zowpy.protocol.entities.attributes.attributes_disappearing_mode import DisappearingModeAttributes
 from zowpy.protocol.entities.attributes.attributes_message import MessageAttributes
@@ -83,6 +84,7 @@ from .handlers.presence_handler import PresenceHandler
 from .handlers.profile_handler import ProfileHandler
 from .handlers.integrity_handler import IntegrityHandler
 from .handlers.config_handler import ConfigHandler
+from .handlers.chat_handler import ChatHandler
 
 # Builders
 from .builders.prekey_builder import PrekeyBuilder
@@ -182,6 +184,7 @@ class WhatsAppClient:
         self.contact_handler: Optional[ContactHandler] = None
         self.presence_handler_public: Optional[PresenceHandler] = None
         self.profile_handler: Optional[ProfileHandler] = None
+        self.chat_handler: Optional[ChatHandler] = None
         
         # Config
         self.profile: Optional[AsyncProfile] = None
@@ -1257,6 +1260,10 @@ class WhatsAppClient:
             iq_response_processor=self._iq_response_processor
         )
         
+        self.chat_handler = ChatHandler(
+            send_message_fn=self.process_plaintext_node_and_send
+        )
+        
         # Atualiza EncryptionReceiver com funções disponíveis
         if self._encryption_receiver:
             self._encryption_receiver._get_keys = self._get_keys_for_recipient
@@ -1846,7 +1853,8 @@ class WhatsAppClient:
         text: str,
         message_id: Optional[str] = None,
         quoted:Optional[QuotedAttributes]=None,
-        options: Optional[dict] = None
+        options: Optional[dict] = None,
+        disappearing:Optional[int] = None,
     ) -> str:
         """
         Envia mensagem de texto diretamente (sem validações de contato).
@@ -1884,44 +1892,54 @@ class WhatsAppClient:
         from ..protocol.entities.attributes import MessageMetaAttributes, ExtendedTextAttributes
         from ..protocol.entities import ExtendedTextMessageProtocolEntity
         
-        # Cria atributos de texto estendido
-        extended_text_attrs = ExtendedTextAttributes(
-            text=text,
-            context_info=context_info,
-            matched_text=options.get("matched_text"),
-            canonical_url=options.get("canonical_url"),
-            description=options.get("description"),
-            title=options.get("title"),
-            jpeg_thumbnail=options.get("jpeg_thumbnail"),
-            text_argb=options.get("text_argb"),
-            background_argb=options.get("background_argb"),
-            font=options.get("font"),
-            preview_type=options.get("preview_type",0),
-            invite_link_group_type_v2=options.get("invite_link_group_type_v2",0),
-        )
+
+        if disappearing:
+            # Cria atributos de texto estendido
+            extended_text_attrs = ExtendedTextAttributes(
+                text=text,
+                context_info=context_info,
+                matched_text=options.get("matched_text"),
+                canonical_url=options.get("canonical_url"),
+                description=options.get("description"),
+                title=options.get("title"),
+                jpeg_thumbnail=options.get("jpeg_thumbnail"),
+                text_argb=options.get("text_argb"),
+                background_argb=options.get("background_argb"),
+                font=options.get("font"),
+                preview_type=options.get("preview_type",0),
+                invite_link_group_type_v2=options.get("invite_link_group_type_v2",0),
+            )
 
 
-        normalized_to = Jid.normalize(to)
+            normalized_to = Jid.normalize(to)
 
-        # Cria metadados
-        meta = MessageMetaAttributes(
-            id=message_id,
-            recipient=normalized_to,
-            timestamp=int(time.time()),
-            # participant=normalized_to
-        )
-        
-        # 3. Cria ExtendedTextMessageProtocolEntity
-        message_entity = ExtendedTextMessageProtocolEntity(
-            extended_text_attributes=extended_text_attrs,
-            meta_attributes=meta,
-            message_id=message_id,
-        )
-        
-        # 4. Converte para ProtocolNode (isso já gera o <proto> internamente)
-        message_node = message_entity.to_protocol_node()
+            # Cria metadados
+            meta = MessageMetaAttributes(
+                id=message_id,
+                recipient=normalized_to,
+                timestamp=int(time.time()),
+                # participant=normalized_to
+            )
+            
+            # 3. Cria ExtendedTextMessageProtocolEntity
+            message_entity = ExtendedTextMessageProtocolEntity(
+                extended_text_attributes=extended_text_attrs,
+                meta_attributes=meta,
+                message_id=message_id,
+            )
+            
+            # 4. Converte para ProtocolNode (isso já gera o <proto> internamente)
+            message_node = message_entity.to_protocol_node()
 
-        logger.debug(f"Message node: {message_node}")
+            logger.debug(f"Message node: {message_node}")
+
+        else:
+            message_entity = TextMessageProtocolEntity(
+                to=to_jid,
+                text=text,
+                message_id=message_id,
+            )
+            message_node = message_entity.to_protocol_node()
         
         # 5. Processa e envia mensagem
         await self.process_plaintext_node_and_send(message_node)
@@ -2916,7 +2934,6 @@ class WhatsAppClient:
         
         # Obtém tctoken se necessário
         target_jid = message_node.get_attribute("to")
-        tctoken = None
         tctoken = await self.axolotl_manager._store.getTcToken(target_jid)
         
         enc_entities = []
@@ -3016,7 +3033,10 @@ class WhatsAppClient:
 
         if message_type !="reaction":
             # Adiciona elementos extras (reporting, device-identity, tctoken, etc.)
-            await self._add_message_extras(message_node, tctoken=tctoken)
+            await self._add_message_extras(message_node,
+                message_secret=message_node.message_secret, 
+                sender_jid=to_whatsapp_jid(self.account_id),
+                proto_bytes=proto_bytes, tctoken=tctoken)
         
         # Enfileira mensagem antes de enviar (para retry)
         self._enqueue_sent_message(message_node)
@@ -3084,12 +3104,14 @@ class WhatsAppClient:
         )
         
         # Obtém tctoken se necessário
-        tctoken = None
-        if hasattr(self, 'axolotl_manager') and hasattr(self.axolotl_manager, '_store'):
-            tctoken = await self.axolotl_manager._store.getTcToken(jid)
+        tctoken = await self.axolotl_manager._store.getTcToken(jid)
         
         # Adiciona elementos extras
-        await self._add_message_extras(message_node, tctoken=tctoken)
+        await self._add_message_extras(message_node,
+            message_secret=message_node.message_secret,
+            proto_bytes=proto_bytes,
+            sender_jid=to_whatsapp_jid(self.account_id),
+            tctoken=tctoken)
         
         # Enfileira mensagem antes de enviar (para retry)
         self._enqueue_sent_message(message_node)
@@ -3168,12 +3190,14 @@ class WhatsAppClient:
             )
             
             # Obtém tctoken se necessário
-            tctoken = None
-            if hasattr(self, 'axolotl_manager') and hasattr(self.axolotl_manager, '_store'):
-                tctoken = await self.axolotl_manager._store.getTcToken(to_jid)
+            tctoken = await self.axolotl_manager._store.getTcToken(to_jid)
             
             # Adiciona elementos extras
-            await self._add_message_extras(message_node, tctoken=tctoken)
+            await self._add_message_extras(message_node,
+                message_secret=message_node.message_secret,
+                proto_bytes=proto_bytes,
+                sender_jid=to_whatsapp_jid(self.account_id),
+                tctoken=tctoken)
             
             # Enfileira mensagem antes de enviar (para retry)
             self._enqueue_sent_message(message_node)
@@ -3437,40 +3461,28 @@ class WhatsAppClient:
         await self.axolotl_manager.group_create_skmsg(group_jid)
         
         # Obtém participantes do grupo
-        if self.group_handler:
-            try:
-                participants = await self.group_handler.get_group_participants(group_jid, own_jid=own_jid)
-                logger.debug(f"Participantes obtidos: {len(participants)}")
-                
-                # Garante sessões e envia
-                await self.ensure_sessions_and_send_to_group(message_node, participants)
-                return
-            except Exception as e:
-                logger.error(f"Erro ao obter participantes do grupo via group_handler: {e}")
-                # Fallback: tenta IQ request direto
-                logger.debug("Tentando obter participantes via IQ request como fallback...")
-                try:
-                    participants = await self._get_group_participants_via_iq(group_jid, own_jid)
-                    logger.debug(f"Participantes obtidos via IQ: {len(participants)}")
-                    await self.ensure_sessions_and_send_to_group(message_node, participants)
-                    return
-                except Exception as iq_error:
-                    logger.error(f"Erro ao obter participantes via IQ request: {iq_error}")
-                    # Fallback final: envia sem distribution
-                await self._send_to_group_with_sessions(message_node, [], retry_count=0)
-                return
-        else:
-            logger.warning("GroupHandler não disponível, tentando IQ request direto...")
+        try:
+            participants = await self.group_handler.get_group_participants(group_jid, own_jid=own_jid)
+            logger.debug(f"Participantes obtidos: {len(participants)}")
+            
+            # Garante sessões e envia
+            await self.ensure_sessions_and_send_to_group(message_node, participants)
+            return
+        except Exception as e:
+            loguru.logger.exception(e)
+            # Fallback: tenta IQ request direto
+            loguru.logger.debug("Tentando obter participantes via IQ request como fallback...")
             try:
                 participants = await self._get_group_participants_via_iq(group_jid, own_jid)
-                logger.debug(f"Participantes obtidos via IQ: {len(participants)}")
+                loguru.logger.debug(f"Participantes obtidos via IQ: {len(participants)}")
                 await self.ensure_sessions_and_send_to_group(message_node, participants)
                 return
             except Exception as iq_error:
-                logger.error(f"Erro ao obter participantes via IQ request: {iq_error}")
+                loguru.logger.error(f"Erro ao obter participantes via IQ request: {iq_error}")
                 # Fallback final: envia sem distribution
             await self._send_to_group_with_sessions(message_node, [], retry_count=0)
             return
+       
        
         # await self._send_to_group_with_sessions(message_node, jids_need_sender_key, retry_count=retry_count)
     
@@ -3598,9 +3610,15 @@ class WhatsAppClient:
         proto_node = message_node.get_child("proto")
         if not proto_node:
             raise ValueError("Node de mensagem deve ter <proto>")
-        
+
+
         proto_bytes = proto_node.data
         mediatype = proto_node.get_attribute("mediatype") if proto_node else "text"
+        logger.debug(f"proto_node: {proto_node}")
+        
+        message_secret = message_node.message_secret
+
+        logger.debug(f"Message secret: {message_secret}")
         
         jids_need_sender_key = jids_need_sender_key or []
         enc_entities = []
@@ -3708,17 +3726,15 @@ class WhatsAppClient:
         
         # Obtém tctoken se necessário (para grupos, pode não ser necessário, mas verificamos)
         tctoken = None
-        if hasattr(self, 'axolotl_manager') and hasattr(self.axolotl_manager, '_store'):
-            # Para grupos, tctoken geralmente não é usado, mas verificamos se houver participant específico
-            if participant:
-                tctoken = await self.axolotl_manager._store.getTcToken(participant)
-            else:
-                # Verifica se há algum JID individual na lista que precisa de tctoken
-                # (geralmente grupos não usam tctoken, mas mantemos compatibilidade)
-                pass
-        
+        if participant:
+            tctoken = await self.axolotl_manager._store.getTcToken(participant)
+
         # Adiciona elementos extras
-        await self._add_message_extras(message_node, tctoken=tctoken)
+        await self._add_message_extras(message_node,
+            message_secret=message_node.message_secret,
+            proto_bytes=proto_bytes,
+            sender_jid=to_whatsapp_jid(self.account_id),
+            tctoken=tctoken)
         
         # Enfileira mensagem antes de enviar (para retry)
         self._enqueue_sent_message(message_node)
@@ -3786,6 +3802,9 @@ class WhatsAppClient:
     async def _add_message_extras(
         self, 
         message_node: ProtocolNode, 
+        message_secret:bytes,
+        proto_bytes:bytes,
+        sender_jid:str,
         tctoken: Optional[bytes] = None
     ) -> None:
         """
@@ -3796,7 +3815,9 @@ class WhatsAppClient:
         device_identity_b64 = None
         if self.profile and self.config and hasattr(self.config, "device_identity") and self.config.device_identity:
             device_identity_b64 = self.config.device_identity
-        build_message_extras(message_node, category, tctoken=tctoken, device_identity_b64=device_identity_b64)
+
+
+        build_message_extras(message_node, message_secret, proto_bytes, sender_jid, category, tctoken=tctoken, device_identity_b64=device_identity_b64)
     
 
 
@@ -4377,7 +4398,7 @@ class WhatsAppClient:
                 recipient=normalized_sender_jid,
                 timestamp=int(time.time())
             )
-            message_entity = TextMessageProtocolEntity(text="", message_meta_attributes=meta)
+            message_entity = TextMessageProtocolEntity(to=normalized_sender_jid, text="", message_meta_attributes=meta)
             message_node = message_entity.to_protocol_node()
             message_node.setAttribute("to", normalized_sender_jid)
             message_node.setAttribute("type", "text")
@@ -4430,7 +4451,15 @@ class WhatsAppClient:
                     participant=participant
                 )
                 tctoken = await self.axolotl_manager._store.getTcToken(normalized_sender_jid)
-                await self._add_message_extras(message_node, tctoken=tctoken)
+
+                
+                await self._add_message_extras(message_node,
+                    message_secret=message_node.message_secret,
+                    proto_bytes=proto_bytes,
+                    sender_jid=to_whatsapp_jid(self.account_id),
+                    tctoken=tctoken)
+
+
                 self._enqueue_sent_message(message_node)
                 await self._send_protocol_node(message_node)
                 logger.info(f"PKMSG de sincronização enviado para {normalized_sender_jid} (sync_message_id={sync_message_id})")

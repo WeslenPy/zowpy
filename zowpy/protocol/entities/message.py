@@ -114,6 +114,16 @@ class ProtomessageProtocolEntity(MessageProtocolEntity):
         # Atualiza atributos extras do nó <message> a partir do meta
         self.attributes.update(message_meta_attributes.to_dict())
 
+    @property
+    def message_secret(self) -> Optional[bytes]:
+        """Chave de segredo da mensagem."""
+        return self._message_attributes.message_secret
+    
+    @message_secret.setter
+    def message_secret(self, message_secret: Optional[bytes]):
+        """Define chave de segredo da mensagem."""
+        self._message_attributes.message_secret = message_secret
+
     def to_protocol_node(self) -> 'ProtocolNode':
         """
         Converte para ProtocolNode, adicionando o nó <proto>.
@@ -153,11 +163,8 @@ class TextMessageProtocolEntity(ProtomessageProtocolEntity):
         self,
         to: str,
         text: str,
-        enc_node: Optional[EncProtocolEntity] = None,
         message_meta_attributes: Optional[bytes] = None,
         message_id: Optional[str] = None,
-        from_jid: Optional[str] = None,
-        participant: Optional[str] = None
     ):
         """
         Cria mensagem de texto.
@@ -165,18 +172,15 @@ class TextMessageProtocolEntity(ProtomessageProtocolEntity):
         Args:
             to: JID do destinatário
             text: Texto da mensagem
-            enc_node: Node <enc> com dados criptografados
             message_meta_attributes: Metadados da mensagem (opcional, para node <proto>)
             message_id: ID da mensagem (gerado se None)
-            from_jid: JID do remetente (opcional)
-            participant: JID do participante (opcional, para grupos)
         """
 
         from .attributes.attributes_message import MessageAttributes
         if to:
             message_meta_attributes = MessageMetaAttributes(recipient=to)
 
-        super(TextMessageProtocolEntity, self).__init__("text", MessageAttributes(conversation = text), message_meta_attributes)
+        super(TextMessageProtocolEntity, self).__init__(message_type="text", message_attributes=MessageAttributes(conversation = text), message_meta_attributes=message_meta_attributes, message_id=message_id)
         
         children = []
         self.text = text
@@ -218,19 +222,21 @@ class ExtendedTextMessageProtocolEntity(ProtomessageProtocolEntity):
         from .attributes.attributes_message import MessageAttributes
         
         # Cria MessageAttributes envolvendo os atributos de texto estendido
-        message_attributes = MessageAttributes(
+        self.message_attributes = MessageAttributes(
             extended_text=extended_text_attributes
         )
         
         # Inicializa via ProtomessageProtocolEntity
         super().__init__(
-            message_attributes=message_attributes,
+            message_attributes=self.message_attributes,
             message_meta_attributes=meta_attributes,
             message_id=message_id,
         )
         
         self.extended_text_attributes = extended_text_attributes
         self.meta_attributes = meta_attributes
+
+
     
     def to_protobuf(self):
         """

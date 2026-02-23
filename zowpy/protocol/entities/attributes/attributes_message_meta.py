@@ -32,7 +32,7 @@ class MessageMetaAttributes:
         phash: Optional[str] = None,
         edit: Optional[str] = None,
         sender_pn: Optional[str] = None,
-        from_pn: Optional[str] = None
+        from_pn: Optional[str] = None,
     ):
         """
         Inicializa MessageMetaAttributes.

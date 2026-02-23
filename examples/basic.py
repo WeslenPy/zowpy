@@ -42,7 +42,9 @@ async def main():
     # six_parts = "5555924810649,4ljWhbt1yKIN/APYKt8taDPj4kbsULb552rxRJvX0Wk=,cPjOBZVjlURZBJxZOzE4HdkUEjrAA9K/ApZyo4rgiEU=,yIdbWY5IFfBhxhGT6AO3xwlYGQ21ZThe98Lr/Cg0phM=,6CYNIsougyZ3ymOJbfI8lwK+P+6sd/WOLwMO/a2OUHU=,NTU1NTkyNDgxMDY0OSMFw8GN5rYImqEJAm9pObYCtwosxw=="
     # six_parts = "201201814380,do2SERU4/9Yj55lReaRN6aZKJQ9K3RiKXrw3da4rHm8=,6D00PFIHKSnRufG7+9NU9T5WTxuViefuu61LIxUl8Hg=,kr9WxLubsiVQmcdRsOiZ31h0khcADnA6zBmiRU1TvGk=,wCCqKCgpt1FRJxq3Q0kydhXmnk9h8Oixw94Y9FZCzEE=,MjAxMjAxODE0MzgwI1RJcf7mAfypjMTAyTeeZgV3J9ZD"
     # six_parts = "201289168953,MCVXsjVe8MawoI1knngwMgG3jT9uIiMkQaomKIy+2h8=,AHO8TSNhrJZS2fCvuW4J4tkeBknhCyQx16EYyKsrNng=,JfoetzyUPj6oUokxsftZa6o3eukx6WXNTtfKj6eVhQk=,6GR1abYzZeA95EYpoSTr1abe50JnHH0fNt4NqyMqy3Q=,MjAxMjg5MTY4OTUzIwiPgotfI6grLeCaitnx2+gEC9jc"
-    six_parts =  "201208108556,Nx3Ni5cNC3XpmhmJApujeA1l1FzRlB6fBYMaXCx+gmI=,GGEWBJ70vQXCKf1aiDaUmAR/yfSk26S4PTYnuCEdHHo=,uVghuaGt5Cok6UAGoimjvlCxr8wNJTr0ZvSNu4PsS1M=,WAoem7S3Bb5lsuSJ+9j9oVK9cLO6G+KD++f88YRm+H4=,MjAxMjA4MTA4NTU2I8jdbLMwW3N0ICF+3qxYPpjYtuqo"
+    # six_parts =  "201210896277,hMkBA8B2dK101mhvnk3y5mBWAYUASUfqe6WQhQg1KWg=,gNIKqwc/WKnlYteV3vneHDpNUHIwA7d6+tiqx5Dyn3k=,+l+DOhFZwjeY/Mh23GC//LAK0L2WLKqOkayjXdTXo2c=,uO/+fQmp1OAJF5WUWvgwjCDaWm7golH1xQZ9EiNTo1c=,MjAxMjEwODk2Mjc3I1VT8iO0dHfiwRtqM/JebBGW9aNf"
+    
+    six_parts = "201211619577,q2sUtNbFCJPjH9dlk4dH8zGoZlc5ojreQRl114jLhjY=,oMKC6LMYm4r0cjp2qPNzVaSjlWIll6adX1Xxi3lY4nw=,fP3TfhvhKdpQkWJKVtFmi0idDM0wdmBTAilf4ZQfXEo=,oA97pQfwRM2ZEEDIVY+7if1DW+lmMrYJKHTaJK0x3lo=,MjAxMjExNjE5NTc3I70F3fbxeyzY4kHIcdPN+VfT+qoZ"
     env = "smb_android"
 
     await import_account_from_six_parts(six_parts,env=env)
@@ -84,6 +86,7 @@ async def main():
         # Envia mensagem inicial (opcional)
         # to = "120363425653832734"
         to = "5511930023692"
+        # to = "559885700260"
         print(f" Enviando mensagem para {to}...")
 
         print(f"\n📤 Exemplo: Enviando mídia usando send_media_direct...")
@@ -91,6 +94,12 @@ async def main():
 
         text = "Ola, tudo bem?"
 
+        await client.set_disappearing_disabled(to)
+        await client.start_typing(to)
+        await asyncio.sleep(4)
+        message_id = await client.send_text(to, text)
+        print(f"Mensagem enviada: {message_id}")
+        await client.stop_typing(to)
 
         # code = "FHeOqMRR7r4BNB7hvXHudd"
 
@@ -129,11 +138,11 @@ async def main():
             # await client.send_sticker(to,"https://s3-bucket-waconnect.s3.us-west-2.amazonaws.com/static/api/5981fc257c8d45b8dd74eeccc674637baff025d19de3eeec877e571e8015732a7777214b675efc19f8d319f6daebb011f5b0d3ea0f52f721dbe015345c37a805.webp")
             # await asyncio.sleep(10)
 
-            await client.start_typing(to)
-            await asyncio.sleep(4)
-            message_id = await client.send_text(to, text)
-            print(f"Mensagem enviada: {message_id}")
-            await client.stop_typing(to)
+            # await client.start_typing(to)
+            # await asyncio.sleep(4)
+            # message_id = await client.send_text(to, text)
+            # print(f"Mensagem enviada: {message_id}")
+            # await client.stop_typing(to)
 
 
             await asyncio.sleep(30)

@@ -8,11 +8,15 @@ import base64
 import os
 from typing import Optional
 
+from zowpy.utils.tools import WATools
 from ...protocol.structs import ProtocolNode
 
 
 def add_message_extras(
     message_node: ProtocolNode,
+    message_secret:bytes,
+    proto_bytes:bytes,
+    sender_jid:str,
     category: Optional[str],
     tctoken: Optional[bytes] = None,
     device_identity_b64: Optional[str] = None,
@@ -27,6 +31,8 @@ def add_message_extras(
         tctoken: Token para trusted contacts (opcional)
         device_identity_b64: device_identity em base64 (opcional)
     """
+    from loguru import logger
+
     extras_to_append = []
 
     if device_identity_b64:
@@ -42,6 +48,14 @@ def add_message_extras(
             from loguru import logger
             logger.warning(f"Erro ao adicionar device-identity: {e}")
 
+    remote_jid = message_node.get_attribute("to")
+    message_id = message_node.get_attribute("id")
+
+    logger.debug(f"Adicionando reporting ao message_node: {message_node}")
+
+    reporting_token = WATools.get_message_reporting_token(proto_bytes, message_secret, sender_jid, remote_jid, message_id)
+    logger.debug(f"Reporting token: {reporting_token}")
+
     if category != "peer":
         reporting = ProtocolNode(
             tag="reporting",
@@ -51,8 +65,9 @@ def add_message_extras(
         reporting_token = ProtocolNode(
             tag="reporting_token",
             attributes={"v": "2"},
-            data=os.urandom(16)
+            data=reporting_token
         )
+
         reporting_tag = ProtocolNode(
             tag="reporting_tag",
             attributes={},
