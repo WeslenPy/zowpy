@@ -137,6 +137,7 @@ class ContactBuilder:
                 attributes={"jid": to_whatsapp_jid(number)},
                 children=[]
             )
+            user_node.add_child(contact_node)
             list_node.add_child(user_node)
         
         usync_node.add_child(list_node)

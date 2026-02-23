@@ -13,6 +13,10 @@ from ...axolotl import exceptions
 from ...utils.tools import WATools
 
 
+# Enc selection: (type, version, data, mediatype)
+EncSelection = Tuple[str, Optional[str], bytes, Optional[str]]
+
+
 class EncryptionReceiver:
     """
     Descriptografa mensagens E2E recebidas.
@@ -53,8 +57,27 @@ class EncryptionReceiver:
         self._send_retry_receipt_fn = None  # Será configurado pelo client
         self._send_receipt_on_error_fn = None  # OutgoingReceipt (delivered) em erros
         self._get_registration_id_fn = None  # Será configurado pelo client
-    
-    async def decrypt_message(self, node: ProtocolNode) -> Optional[bytes]:
+
+    def _select_enc_node(self, node: ProtocolNode) -> Optional[EncSelection]:
+        """
+        Obtém todos os <enc> e escolhe por tipo (SKMSG / PKMSG / MSG), alinhado ao zowsup.
+        Grupo: prefere SKMSG; 1:1: prefere PKMSG depois MSG.
+        Retorna (type, version, data, mediatype) ou None.
+        """
+        enc_children = node.get_all_children("enc")
+        if not enc_children:
+            return None
+        is_group = node.get_attribute("participant") is not None
+        order = [self.TYPE_SKMSG, self.TYPE_PKMSG, self.TYPE_MSG] if is_group else [self.TYPE_PKMSG, self.TYPE_MSG]
+        for enc_type in order:
+            for enc_node in enc_children:
+                if enc_node.get_attribute("type") == enc_type and enc_node.data:
+                    version = enc_node.get_attribute("v")
+                    mediatype = enc_node.get_attribute("mediatype") or enc_node.get_attribute("media_type")
+                    return (enc_type, version, enc_node.data, mediatype)
+        return None
+
+    async def decrypt_message(self, node: ProtocolNode) -> Optional[Tuple[bytes, Optional[str]]]:
         """
         Descriptografa mensagem E2E.
         
@@ -64,28 +87,20 @@ class EncryptionReceiver:
             node: Protocol node com <enc> contendo mensagem criptografada
         
         Returns:
-            bytes: Dados descriptografados (protobuf Message) ou None se erro
+            (bytes, mediatype): Dados descriptografados e mediatype do enc, ou None se erro
         
         Raises:
             exceptions.InvalidMessageException: Se mensagem inválida
             exceptions.NoSessionException: Se não há sessão
             exceptions.DuplicateMessageException: Se mensagem duplicada
         """
-        # Extrai node <enc>
-        enc_node = node.get_child("enc")
-        if not enc_node:
-            logger.warning("Mensagem sem node <enc>, não é criptografada")
+        selection = self._select_enc_node(node)
+        if not selection:
+            logger.warning("Mensagem sem node <enc> válido, não é criptografada")
             return None
-        
-        # Identifica tipo e versão
-        enc_type = enc_node.get_attribute("type")
-        enc_version = enc_node.get_attribute("v")
-        enc_data = enc_node.data
-        
-        if not enc_data:
-            logger.warning("Node <enc> sem dados")
-            return None
-        
+
+        enc_type, enc_version, enc_data, enc_mediatype = selection
+
         logger.debug(f"Descriptografando mensagem: type={enc_type}, version={enc_version}, data_len={len(enc_data)}")
         
         # Identifica se é grupo
@@ -106,18 +121,18 @@ class EncryptionReceiver:
             if enc_type == self.TYPE_SKMSG:
                 out = await self._decrypt_skmsg(node, enc_data, real_target_jid)
                 self.reset_retries(msg_id)
-                return out
+                return (out, enc_mediatype)
             elif enc_type == self.TYPE_PKMSG:
                 out = await self._decrypt_pkmsg(node, enc_data, real_target_jid, enc_version)
                 self.reset_retries(msg_id)
-                return out
+                return (out, enc_mediatype)
             elif enc_type == self.TYPE_MSG:
                 out = await self._decrypt_msg(node, enc_data, real_target_jid, enc_version)
                 self.reset_retries(msg_id)
-                return out
+                return (out, enc_mediatype)
             else:
                 logger.warning(f"Tipo de mensagem criptografada não suportado: {enc_type}")
-                await self._send_receipt_for_node(node)
+                # await self._send_receipt_for_node(node)
                 return None
 
         except exceptions.InvalidKeyIdException:

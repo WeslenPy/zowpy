@@ -12,6 +12,7 @@ from ...core.processors.base import BaseProcessor
 from ...core.encryption.receiver import EncryptionReceiver
 from ...core.events import AsyncEventEmitter
 from ...proto.messages import AsyncMessageParser
+from ...db.manager import AxolotlManager
 
 
 class MessageProcessor(BaseProcessor):
@@ -34,23 +35,26 @@ class MessageProcessor(BaseProcessor):
         message_parser: AsyncMessageParser,
         events: AsyncEventEmitter,
         receipt_builder=None,  # Será implementado depois
-        send_receipt_fn=None  # Função para enviar receipt
+        send_receipt_fn=None,  # Função para enviar receipt
+        axolotl_manager: Optional[AxolotlManager] = None,
     ):
         """
         Inicializa processor.
-        
+
         Args:
             encryption_receiver: Receiver para descriptografar mensagens
             message_parser: Parser para parsear protobuf
             events: Event emitter para emitir eventos
             receipt_builder: Builder para criar receipts (opcional)
             send_receipt_fn: Função async para enviar receipt (opcional)
+            axolotl_manager: Manager para group_create_session (sender_key_distribution_message)
         """
         self._encryption = encryption_receiver
         self._parser = message_parser
         self._events = events
         self._receipt_builder = receipt_builder
         self._send_receipt_fn = send_receipt_fn
+        self._axolotl_manager = axolotl_manager
     
     def get_priority(self) -> int:
         """Mensagens têm alta prioridade"""
@@ -92,14 +96,14 @@ class MessageProcessor(BaseProcessor):
             await self._send_receipt(node) # marca como recebido
             
             proto_bytes = None
+            enc_mediatype = None
             if enc_node:
                 # Mensagem criptografada - descriptografa se raw_data não foi fornecido
-                if raw_data:
-                    proto_bytes = raw_data
-                else:
-                    logger.debug("Mensagem criptografada, descriptografando...")
-                    proto_bytes = await self._encryption.decrypt_message(node)
-                
+                logger.debug("Mensagem criptografada, descriptografando...")
+                result = await self._encryption.decrypt_message(node)
+                if result is not None:
+                    proto_bytes, enc_mediatype = result
+            
                 if not proto_bytes:
                     logger.warning(f"Não foi possível obter bytes descriptografados para mensagem {message_id}")
                     return None
@@ -110,10 +114,18 @@ class MessageProcessor(BaseProcessor):
             else:
                 logger.warning(f"Mensagem sem <enc> ou <proto>: {message_id}")
                 return None
-            
+
+            logger.debug(f"proto_bytes: {proto_bytes}")
+
+            parsed = await self._parser.parse(proto_bytes)
+
+            logger.debug(f"parsed: {parsed}")
+
+            # E2E: tratar sender_key_distribution_message antes do parse app
+            await self._handle_e2e_proto(proto_bytes, node, self._axolotl_manager)
+
             # 2. Parseia protobuf
             logger.debug(f"Parseando protobuf: {len(proto_bytes)} bytes")
-            parsed = await self._parser.parse(proto_bytes)
 
             if not parsed:
                 logger.warning(f"Falha ao parsear mensagem {message_id}")
@@ -134,6 +146,8 @@ class MessageProcessor(BaseProcessor):
                 "timestamp": node.get_attribute("t"),
                 "notify": node.get_attribute("notify"),
             }
+            if enc_mediatype is not None:
+                message_data["enc_mediatype"] = enc_mediatype
             
             # 5. Adiciona dados parseados
             if parsed:
@@ -151,9 +165,40 @@ class MessageProcessor(BaseProcessor):
             return message_data
         
         except Exception as e:
+            logger.exception(e)
             logger.error(f"Erro ao processar mensagem {message_id}: {e}", exc_info=True)
             # Não re-raise - permite que outros processors tentem
             return None
+    
+    async def _handle_e2e_proto(
+        self,
+        proto_bytes: bytes,
+        node: ProtocolNode,
+        manager: Optional[AxolotlManager],
+    ) -> None:
+        """
+        Parse do proto E2E; se sender_key_distribution_message, chama group_create_session.
+        Alinhado ao zowsup parseAndHandleMessageProto.
+        """
+        if not manager:
+            return
+        try:
+            m = await self._parser.bytes_to_proto(proto_bytes)
+
+            if not m.HasField("sender_key_distribution_message"):
+                return
+            sk = m.sender_key_distribution_message
+            if not sk.axolotl_sender_key_distribution_message:
+                return
+            group_id = node.get_attribute("from")
+            participant_id = node.get_attribute("participant") or group_id
+            if not group_id:
+                return
+            skmsgdata = sk.axolotl_sender_key_distribution_message
+            await manager.group_create_session(group_id, participant_id, skmsgdata)
+            logger.debug(f"group_create_session: group={group_id}, participant={participant_id}")
+        except Exception as e:
+            logger.debug(f"_handle_e2e_proto: {e}")
     
     async def _send_receipt(self, node: ProtocolNode) -> None:
         """

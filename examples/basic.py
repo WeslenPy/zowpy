@@ -13,7 +13,7 @@ from zowpy.core.import_account import import_account_from_six_parts
 from loguru import logger
 
 # Configura logging
-logger.add("logs/log_message_first.log", level="DEBUG")
+logger.add("logs/tc_token.log", level="DEBUG")
 
 
 async def main():
@@ -82,14 +82,15 @@ async def main():
         print("Cliente online - Mantendo conexão ativa indefinidamente...")
         
         # Envia mensagem inicial (opcional)
-        to = "120363425653832734"
-        # to = "5511930023692"
+        # to = "120363425653832734"
+        to = "5511930023692"
         print(f" Enviando mensagem para {to}...")
 
         print(f"\n📤 Exemplo: Enviando mídia usando send_media_direct...")
 
 
         text = "Ola, tudo bem?"
+
 
         # code = "FHeOqMRR7r4BNB7hvXHudd"
 
@@ -111,7 +112,6 @@ async def main():
         
         # print(f"Avatar: {avatar}")
 
-        # await client.send_text(to, text)
         while True:
             # print(f"Mensagem: {text}")
             # await client.send_status(media_type="image",file_path_or_url="https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png")
@@ -129,14 +129,14 @@ async def main():
             # await client.send_sticker(to,"https://s3-bucket-waconnect.s3.us-west-2.amazonaws.com/static/api/5981fc257c8d45b8dd74eeccc674637baff025d19de3eeec877e571e8015732a7777214b675efc19f8d319f6daebb011f5b0d3ea0f52f721dbe015345c37a805.webp")
             # await asyncio.sleep(10)
 
-            # await client.start_typing(to)
-            # await asyncio.sleep(4)
-            # message_id = await client.send_text(to, text)
-            # print(f"Mensagem enviada: {message_id}")
-            # await client.stop_typing(to)
+            await client.start_typing(to)
+            await asyncio.sleep(4)
+            message_id = await client.send_text(to, text)
+            print(f"Mensagem enviada: {message_id}")
+            await client.stop_typing(to)
 
 
-            await asyncio.sleep(300)
+            await asyncio.sleep(30)
 
 
 

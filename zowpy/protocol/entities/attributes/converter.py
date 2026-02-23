@@ -12,6 +12,7 @@ from zowpy.protocol.entities.attributes.attributes_contact import ContactAttribu
 from zowpy.protocol.entities.attributes.attributes_disappearing_mode import DisappearingModeAttributes
 from zowpy.protocol.entities.attributes.attributes_history_sync_notification import HistorySyncNotificationAttribute
 from zowpy.protocol.entities.attributes.attributes_list_response import ListResponseAttributes
+from zowpy.protocol.entities.attributes.attributes_message_key import MessageKeyAttributes
 from zowpy.protocol.entities.attributes.attributes_poll_creation import PollCreationAttributes
 from zowpy.protocol.entities.attributes.attributes_poll_updates import PollUpdateAttributes
 from zowpy.protocol.entities.attributes.attributes_product import ProductAttributes
@@ -218,6 +219,14 @@ class AttributesConverter:
         for idx in app_state_sync_key_fingerprint_attribute.device_indexes:
             message.device_indexes.append(idx)
         return message
+
+
+    
+    def proto_to_message_key(self, proto):
+        return MessageKeyAttributes(
+            proto.remote_jid, proto.from_me, proto.id, proto.participant 
+        )
+
 
     def proto_to_protocol(self, proto):
         return ProtocolAttributes(
@@ -1115,13 +1124,13 @@ class AttributesConverter:
 
 
     def protobytes_to_proto(self,protobytes):
+        from ....proto.e2e_pb2 import Message
         m = Message()
         m.ParseFromString(protobytes)          
         return m
         
-    def protobytes_to_message(self, protobytes,from_jid=None,message_db=None):        
-        m = Message()                
-        m.ParseFromString(protobytes)                
+    def protobytes_to_message(self, protobytes,from_jid=None,message_db=None):
+        m = self.protobytes_to_proto(protobytes)        
         return self.proto_to_message(m,from_jid,message_db)
 
     def message_to_protobytes(self, message):

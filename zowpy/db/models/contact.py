@@ -1,5 +1,6 @@
 from __future__ import annotations
 from time import time
+from typing import Optional
 
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,9 +36,9 @@ class Contact(Model,BaseModel):
 
     account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
 
-    name = Column(String(255), nullable=True)
     jid = Column(String(255), nullable=False)
-    lid = Column(String(255), nullable=False)
+    name = Column(String(255), nullable=True)
+    lid = Column(String(255), nullable=True)
 
     pushname = Column(String(255), nullable=True)
     profile_picture_url = Column(String(255), nullable=True)
@@ -56,7 +57,20 @@ class Contact(Model,BaseModel):
     )
 
     @classmethod
-    async def add_contact(cls, session: AsyncSession, account_id: int, jid: str, name: str | None = None):
+    async def add_contact(cls, 
+        session: AsyncSession, 
+        account_id: int, 
+        jid: str, 
+        name: str | None = None,
+        lid: str | None = None,
+        pushname: str | None = None,
+        profile_picture_url: str | None = None,
+        business_name: str | None = None,
+        verified_name: str | None = None,
+        verified_level: str | None = None,
+        notify: str | None = None,
+        sender_pn: str | None = None,
+        ):
 
         if not (jid.endswith(YowConstants.WHATSAPP_SERVER) or jid.endswith(YowConstants.LID_SUFFIX)):
             return None
@@ -64,17 +78,41 @@ class Contact(Model,BaseModel):
         if name is None:
             name = ""
 
+        if lid is None:
+            lid = ""
+
         if not await cls.find_contact(session, account_id, jid):
             new_contact = cls(
                 account_id=account_id,
                 jid=jid,
                 name=name,
-                timestamp=int(time())
+                lid=lid,
+                timestamp=int(time()),
+                pushname=pushname,
+                profile_picture_url=profile_picture_url,
+                business_name=business_name,
+                verified_name=verified_name,
+                verified_level=verified_level,
+                notify=notify,
+                sender_pn=sender_pn,
             )
             session.add(new_contact)
             await session.commit()
             return jid
         return None
+
+
+    @classmethod
+    async def update_contact(cls, session: AsyncSession, account_id: int, jid: str, name: Optional[str] = None, lid: Optional[str] = None):
+        if not await cls.find_contact(session, account_id, jid):
+            return None
+        contact = await cls.find_contact(session, account_id, jid)
+        contact.name = name
+        contact.lid = lid
+        session.add(contact)
+        await session.commit()
+        return jid
+
 
     @classmethod
     async def find_contact(cls, session: AsyncSession, account_id: int, jid: str):

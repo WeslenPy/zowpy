@@ -583,8 +583,7 @@ class ZowPyClient:
             raise ConnectionError("Cliente não conectado")
 
         result = await self._client.contact_handler.sync_contacts(numbers, mode, context)
-        return result
-
+        return result.to_dict()
 
     async def sync_contacts(self, numbers: list, mode: str = "full", context: str = "interactive") -> dict:
         """Sincroniza contatos."""
@@ -600,9 +599,15 @@ class ZowPyClient:
 
         if len(new_sync) > 0:
             result = await self._client.contact_handler.sync_contacts(new_sync, mode, context)
-            for valid_number in result["in_numbers"]:
-                await self._client.axolotl_manager._store.addContact(valid_number.replace("+", ""))
-            return result
+            for valid_number in result.in_numbers:
+
+                if await self._client.axolotl_manager._store.isNewContact(valid_number):
+                    await self._client.axolotl_manager._store.addContact(valid_number,result.lids[valid_number])
+                else:
+                    await self._client.axolotl_manager._store.updateContact(valid_number,result.lids[valid_number])
+
+
+            return result.to_dict()
 
         return {}
 

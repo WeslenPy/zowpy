@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from loguru import logger
 
 from zowpy.protocol.entities.attributes.converter import AttributesConverter
+from zowpy.protocol.entities.attributes.attributes_message import MessageAttributes
 
 from .helpers import serialize_async, deserialize_async
 
@@ -296,18 +297,115 @@ class AsyncMessageBuilder:
         return await serialize_async(message)
 
 
+def _message_attributes_to_dict(attrs: MessageAttributes) -> Dict[str, Any]:
+    """
+    Converte MessageAttributes em dict com chaves type, text, data.
+    Contrato explícito para o MessageProcessor (Fase 1 do plano).
+    """
+    text = ""
+    msg_type = "unknown"
+    data: Optional[Any] = None
+
+    if attrs.conversation is not None:
+        text = attrs.conversation
+        msg_type = "text"
+        data = None
+    elif attrs.extended_text is not None:
+        text = attrs.extended_text.text or ""
+        msg_type = "text"
+        data = attrs.extended_text
+    elif attrs.image is not None:
+        msg_type = "image"
+        text = attrs.image.caption or ""
+        data = attrs.image
+    elif attrs.video is not None:
+        msg_type = "video"
+        text = attrs.video.caption or ""
+        data = attrs.video
+    elif attrs.audio is not None:
+        msg_type = "audio"
+        data = attrs.audio
+    elif attrs.document is not None:
+        msg_type = "document"
+        text = attrs.document.title or ""
+        data = attrs.document
+    elif attrs.sticker is not None:
+        msg_type = "sticker"
+        data = attrs.sticker
+    elif attrs.contact is not None:
+        msg_type = "contact"
+        data = attrs.contact
+    elif attrs.location is not None:
+        msg_type = "location"
+        data = attrs.location
+    elif attrs.reaction is not None:
+        msg_type = "reaction"
+        data = attrs.reaction
+    elif attrs.buttons_response is not None:
+        msg_type = "buttons_response"
+        data = attrs.buttons_response
+    elif attrs.list_response is not None:
+        msg_type = "list_response"
+        data = attrs.list_response
+    elif attrs.poll_creation is not None:
+        msg_type = "poll"
+        data = attrs.poll_creation
+    elif attrs.poll_update is not None:
+        msg_type = "poll_response"
+        data = attrs.poll_update
+    elif attrs.product is not None:
+        msg_type = "product"
+        data = attrs.product
+    elif attrs.template is not None:
+        msg_type = "template"
+        data = attrs.template
+    elif attrs.protocol is not None:
+        msg_type = "protocol"
+        data = attrs.protocol
+    elif attrs.sender_key_distribution_message is not None:
+        msg_type = "sender_key_distribution"
+        data = attrs.sender_key_distribution_message
+
+    return {
+        "type": msg_type,
+        "text": text,
+        "data": data,
+    }
+
+
 class AsyncMessageParser:
     """
     Parser assíncrono para mensagens protobuf.
     Estilo whatsmeow: parsing centralizado e assíncrono.
     """
+
+
+    @staticmethod
+    async def bytes_to_proto(data: bytes) :
+        """
+        Converte bytes para proto.
+        """
+        converter = AttributesConverter()
+        return converter.protobytes_to_proto(data)
     
     @staticmethod
     async def parse(data: bytes) -> Dict[str, Any]:
         """
         Parse mensagem protobuf de forma assíncrona.
-        
-        :param data: Dados da mensagem
-        :return: Dicionário com dados da mensagem
+
+        Usa protobytes_to_message (bytes -> Message) e converte MessageAttributes
+        em dict com type, text, data para o MessageProcessor.
         """
-        return AttributesConverter().proto_to_message(data)
+        converter = AttributesConverter()
+
+        if isinstance(data, bytes):
+            data= converter.protobytes_to_proto(data)
+
+        attrs = converter.proto_to_message(data)
+
+        logger.debug(f"attrs: {attrs}")
+        if attrs is None:
+            return {}
+        if isinstance(attrs, MessageAttributes):
+            return _message_attributes_to_dict(attrs)
+        return {}

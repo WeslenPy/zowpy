@@ -5,14 +5,52 @@ Handler público para todas as operações de contatos do WhatsApp.
 """
 
 import asyncio
+from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 from loguru import logger
+
+from zowpy.utils.constants import YowConstants
 
 from ...protocol.structs import ProtocolNode
 from ...utils.jid import to_whatsapp_jid
 from ...protocol.entities.iq_trust_contact import TrustContactIqProtocolEntity
 from ..builders.contact_builder import ContactBuilder
 from ..processors.iq_response import IQResponseProcessor
+
+
+@dataclass
+class ContactResponse:
+    """
+    Resposta estruturada do sync de contatos (usync).
+
+    Atributos:
+        version: Versão do usync.
+        mode: Modo (full/delta).
+        numbers: Mapeamento número normalizado -> JID para contatos "in".
+        in_numbers: Lista de números que estão no WhatsApp ("in").
+        out_numbers: Mapeamento número -> JID para contatos "out" (não usuários).
+        wait: Atributo wait do usync, se presente.
+        lids: Mapeamento JID -> LID (ex: "559885700260@s.whatsapp.net" -> "5356260450362:0@lid").
+    """
+    version: str
+    mode: str
+    numbers: Dict[str, str] = field(default_factory=dict)
+    in_numbers: List[str] = field(default_factory=list)
+    out_numbers: Dict[str, str] = field(default_factory=dict)
+    wait: Optional[str] = None
+    lids: Dict[str, str] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Converte para dict (compatibilidade com código que espera dict)."""
+        return {
+            "version": self.version,
+            "mode": self.mode,
+            "numbers": self.numbers,
+            "in_numbers": self.in_numbers,
+            "out_numbers": self.out_numbers,
+            "wait": self.wait,
+            "lids": self.lids,
+        }
 
 
 class ContactHandler:
@@ -42,18 +80,18 @@ class ContactHandler:
         numbers: List[str],
         mode: str = ContactBuilder.MODE_DELTA,
         context: str = ContactBuilder.CONTEXT_INTERACTIVE
-    ) -> Dict[str, Any]:
+    ) -> ContactResponse:
         """
         Sincroniza contatos.
-        
+
         Args:
             numbers: Lista de números de telefone (com ou sem +, ou JIDs)
             mode: Modo de sync (full ou delta)
             context: Contexto (registration ou interactive)
-        
+
         Returns:
-            Dict com informações dos contatos sincronizados
-        
+            ContactResponse com version, mode, numbers, in_numbers, out_numbers, lids, etc.
+
         Raises:
             Exception: Se sync falhar
         """
@@ -108,38 +146,55 @@ class ContactHandler:
 
 
                 """
-                <iq id="3E13BF54FB6C05A6D7812A94C82079ED" type="get" xmlns="usync">
-                <usync sid="134143021780000000" index="0" last="true" mode="delta" context="interactive">
-                    <query>
-                        <lid />
-                        <status />
-                        <contact />
-                    </query>
+                <usync sid="134162807190000000" index="0" last="true" mode="full" context="background">
+                    <result>
+                    <status refresh="546107" />
+                    <business refresh="762563" />
+                    <picture refresh="570153" />
+                    <devices refresh="519460" />
+                    <lid refresh="577636" />
+                    </result>
                     <list>
-                        <user>
-                            <contact>
-                                0x2b353539383835373030323630
-                            </contact>
+                        <user jid="559885700260@s.whatsapp.net">
+                            <status t="1762827573">
+                            0x536f66747761726520446576656c6f706572
+                            </status>
+                            <business>
+                            <verified_name verified_level="unknown" v="1">
+                                0x0a1e08fdd9e7a799b8d2b43e1206736d623a7761220a4879706572204475636b1240b84b054d50bdb5332d250445bd54decbbc0b6b00084118007b09fd26c37a06feec66a0db219efc0db3e43f1f7bf728bae357bf79c580434d5a6dd977ac3a9703
+                            </verified_name>
+                            </business>
+                            <picture id="1577185411" />
+                            <devices>
+                            <device-list>
+                                <device id="0" />
+                                <device id="37" key-index="1" />
+                            </device-list>
+                            <key-index-list ts="1771617046">
+                                0x0a1308d58d911b1096f6e2cc06180122020001280012401fec9fccb1d9e732586d16b0615a1215388eb632203b00e3159b8058edfcf14669505aaf410f20f09b5331807dcb34ba89152d34c24b071b2bb3a4311f37400f
+                            </key-index-list>
+                            </devices>
+                            <lid val="5356260450362:0@lid" />
                         </user>
                     </list>
                 </usync>
-                </iq>
                 """
 
                 # result_node = usync_node.get_child("result")
-                list_node =  usync_node.get_child("list")
+                list_node = usync_node.get_child("list")
 
-                in_users = {} #lista de usuarios validos
-                out_numbers = {} #lista de numeros invalidos
-                in_numbers = [] #lista de numeros validos
+                in_users = {}
+                out_numbers = {}
+                in_numbers = []
+                lids = {}
 
-                        
                 users = list_node.get_all_children() if list_node else []
                 for user in users:
                     contact = user.get_child("contact")
                     if contact is None:
                         continue
                     type_value = contact.get_attribute("type")
+                    jid = user.get_attribute("jid") or ""
 
                     # Decodifica os dados do contact (já vem como bytes)
                     contact_data = ""
@@ -149,29 +204,35 @@ class ContactHandler:
                         except (UnicodeDecodeError, AttributeError):
                             try:
                                 contact_data = contact.data.decode('latin-1')
-                            except:
+                            except Exception:
                                 contact_data = str(contact.data)
-                    
-                    if type_value == "in":                                
-                        in_users[contact_data.replace("+", "")] = user.get_attribute("jid")     
+
+                    if type_value == "in":
+                        in_users[contact_data.replace("+", "")] = jid
                         in_numbers.append(contact_data.replace("+", ""))
                     elif type_value == "out":
-                        out_numbers[contact_data.replace("+", "")] = user.get_attribute("jid")
-                        # in_numbers.append(contact_data)
-                            
+                        out_numbers[contact_data.replace("+", "")] = jid
 
-                result = {
-                    "version": usync_node.get_attribute("version") or "",
-                    "mode": usync_node.get_attribute("mode") or mode,
-                    "numbers": in_users,
-                    "in_numbers": in_numbers,
-                    "out_numbers": out_numbers,
-                    "wait": usync_node.get_attribute("wait") or None
-                }
+                    # LID do usuário (ex: <lid val="5356260450362:0@lid" />)
+                    lid_node = user.get_child("lid")
+                    if lid_node and jid:
+                        lid_val = lid_node.get_attribute("val")
+                        if lid_val:
+                            lids[jid] = lid_val
 
-                logger.info(f"On Contact Handler: {result}")
+                result = ContactResponse(
+                    version=usync_node.get_attribute("version") or "",
+                    mode=usync_node.get_attribute("mode") or mode,
+                    numbers=in_users,
+                    in_numbers=in_numbers,
+                    out_numbers=out_numbers,
+                    wait=usync_node.get_attribute("wait") or None,
+                    lids=lids,
+                )
+
+                logger.info(f"On Contact Handler: {result.to_dict()}")
                 
-                # AUTOMAÇÃO: Confia nos contatos sincronizados com sucesso
+                # Confia nos contatos sincronizados com sucesso
                 if in_numbers:
                     try:
                         # Converte números para JIDs completos para o TrustContact
@@ -181,10 +242,9 @@ class ContactHandler:
                     except Exception as e:
                         logger.warning(f"Erro na automação de trust_contact: {e}")
 
-                # Extrai números in e out
-                # A estrutura pode variar, mas geralmente está em nodes filhos
-                # Por enquanto, retorna estrutura básica
-                logger.info(f"Contatos sincronizados: version={result['version']}, mode={result['mode']}")
+                logger.info(
+                    f"Contatos sincronizados: version={result.version}, mode={result.mode}, lids={len(result.lids)}"
+                )
                 future.set_result(result)
             
             except Exception as e:
@@ -311,7 +371,7 @@ class ContactHandler:
                                                 if ":" in number:
                                                     number = number.split(":")[0]
                                                 
-                                                device_jid = f"{number}:{device_id}@s.whatsapp.net"
+                                                device_jid = f"{number}:{device_id}@{YowConstants.WHATSAPP_SERVER}"
                                                 if device_jid not in devices:
                                                     devices.append(device_jid)
                 

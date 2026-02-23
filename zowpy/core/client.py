@@ -602,7 +602,8 @@ class WhatsAppClient:
                 message_parser=message_parser,
                 events=self.events,
                 receipt_builder=receipt_builder,
-                send_receipt_fn=send_receipt_fn
+                send_receipt_fn=send_receipt_fn,
+                axolotl_manager=self.axolotl_manager,
             )
         )
         # ReceiptProcessor precisa de funções do client
@@ -1524,12 +1525,8 @@ class WhatsAppClient:
 
         is_new_contact = await self.axolotl_manager._store.isNewContact(to_jid)
 
-
-        
         if is_new_contact:
             logger.info(f"Contato {normalized_jid} é novo, sincronizando e validando antes de enviar...")
-            
-            await self.axolotl_manager._store.addContact(to_jid)
             
             # 8. Sincroniza contato
             if self.contact_handler:
@@ -1537,6 +1534,16 @@ class WhatsAppClient:
                     # sync_contacts agora automatiza o trust_contact internamente
                     result = await self.contact_handler.sync_contacts([phone], mode="delta", context="interactive")
                     logger.info(f"Contato {normalized_jid} sincronizado com sucesso")
+
+
+                    logger.info(f"Result: {result}")
+                    if result.in_numbers:
+                        for number in result.in_numbers:
+                            jid = result.numbers[number]
+                            lid = result.lids[jid]
+
+                            await self.axolotl_manager._store.addContact(jid,lid)
+                            await self.axolotl_manager._store.addLidMapping(jid,lid)
 
                     return await self._send_text_direct(to=to, text=text, message_id=message_id,
                                                         quoted=quoted,
@@ -4308,8 +4315,9 @@ class WhatsAppClient:
             async with semaphore:
                 try:
                     # Tenta descriptografar novamente
-                    decrypted_bytes = await self._encryption_receiver.decrypt_message(msg_node)
-                    if decrypted_bytes:
+                    result = await self._encryption_receiver.decrypt_message(msg_node)
+                    if result:
+                        decrypted_bytes, _ = result
                         # Processa mensagem descriptografada
                         await self._process_protocol_node(msg_node, decrypted_bytes)
                 except Exception as e:

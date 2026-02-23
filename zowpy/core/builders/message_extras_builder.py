@@ -58,7 +58,7 @@ def add_message_extras(
             attributes={},
             data=os.urandom(20)
         )
-        reporting.children.append(reporting_tag)
+        # reporting.children.append(reporting_tag)
         reporting.children.append(reporting_token)
         extras_to_append.append(reporting)
 

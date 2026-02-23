@@ -21,7 +21,7 @@ from ..axolotl.invalidkeyidexception import InvalidKeyIdException
 from ..db.models import (Account, Identity, 
                         PreKey, SignedPreKey, 
                         SessionKey, SenderKey, Poll, 
-                        AppStateKey, Contact, Broadcast, 
+                        AppStateKey, Contact, Broadcast, LidMap, 
                         TrustedContact, TaskMsg)
 
 
@@ -261,13 +261,29 @@ class SqlAppStateStore(BaseStore):
         return await AppStateKey.delete_app_state_key(session, account_id, key_id)
 
 
+class SqlLidMappingStore(BaseStore):
+    async def addLidMapping(self, session: AsyncSession,  jid: str, lid: str):
+        return await LidMap.add_lid_mapping(session, jid, lid)
+
+    async def getLidMappingByJid(self, session: AsyncSession,  jid: str):
+        return await LidMap.get_lid_mapping_by_jid(session, jid)
+
+    async def deleteLidMapping(self, session: AsyncSession,  jid: str):
+        return await LidMap.delete_lid_mapping(session,  jid)
+    
+    async def getAllLidMapping(self, session: AsyncSession):
+        return await LidMap.get_all_lid_mapping(session)
+    
+    async def getLidMappingByLid(self, session: AsyncSession,  lid: str):
+        return await LidMap.get_lid_mapping_by_lid(session,  lid)
+
 class SqlContactStore(BaseStore):
     """
     Contact store backed by SQLAlchemy.
     """
 
-    async def addContact(self, session: AsyncSession, account_id: int, jid: str, name: Optional[str] = None):
-        return await Contact.add_contact(session, account_id, jid, name)
+    async def addContact(self, session: AsyncSession, account_id: int, jid: str, name: Optional[str] = None, lid: Optional[str] = None):
+        return await Contact.add_contact(session, account_id, jid, name, lid)
 
     async def findContact(self, session: AsyncSession, account_id: int, jid: str):
         return await Contact.find_contact(session, account_id, jid)
@@ -280,6 +296,11 @@ class SqlContactStore(BaseStore):
 
     async def getAllContact(self, session: AsyncSession, account_id: int):
         return await Contact.get_all_contacts(session, account_id)
+
+    async def updateContact(self, session: AsyncSession, account_id: int, jid: str, name: Optional[str] = None, lid: Optional[str] = None):
+        return await Contact.update_contact(session, account_id, jid, name, lid)
+
+    
 
 
 class SqlBroadcastStore(BaseStore):
@@ -302,8 +323,8 @@ class SqlTrustedContactStore(BaseStore):
     async def updateTrustedContact(self, session: AsyncSession, account_id: int, jid: str, tctoken: Optional[bytes] = None) -> bool:
         return await TrustedContact.update_trusted_contact(session, account_id, jid, tctoken)
 
-    async def getTcToken(self, session: AsyncSession, account_id: int, jid: str) -> Optional[bytes]:
-        return await TrustedContact.get_tc_token(session, account_id, jid)
+    async def getTcToken(self, session: AsyncSession, account_id: int, jid: str, lid: str=None) -> Optional[bytes]:
+        return await TrustedContact.get_tc_token(session, account_id, jid, lid)
 
     async def removeTrustedContact(self, session: AsyncSession, account_id: int, jid: str) -> bool:
         return await TrustedContact.remove_trusted_contact(session, account_id, jid)
@@ -448,6 +469,7 @@ class SqlAxolotlStore(AxolotlStore):
             self.pollStore = SqlPollStore()
             self.appStateStore = SqlAppStateStore()
             self.contactStore = SqlContactStore()
+            self.lidMappingStore = SqlLidMappingStore()
             self.broadcastStore = SqlBroadcastStore()
             self.trustedContactStore = SqlTrustedContactStore()
             self.taskMsgStore = SqlTaskMsgStore()
@@ -732,10 +754,13 @@ class SqlAxolotlStore(AxolotlStore):
             return await self.appStateStore.deleteAppStateKey(db, self._account_id, key_id)
 
     # Contacts
-    async def addContact(self, jid):
+    async def addContact(self, jid,lid=None,name=None):
         async with self._get_session() as db:
+            return await self.contactStore.addContact(db, self._account_id, jid, name, lid)
 
-            return await self.contactStore.addContact(db, self._account_id, jid, "")
+    async def updateContact(self, jid,lid=None,name=None):
+        async with self._get_session() as db:
+            return await self.contactStore.updateContact(db, self._account_id, jid, name,lid)
 
     async def removeContact(self, jid):
         async with self._get_session() as db:
@@ -758,6 +783,25 @@ class SqlAxolotlStore(AxolotlStore):
             return await self.contactStore.isNewContact(db, self._account_id, jid)
 
 
+    async def addLidMapping(self, jid,lid):
+        async with self._get_session() as db:
+            return await self.lidMappingStore.addLidMapping(db, jid, lid)
+
+    async def getLidMappingByJid(self, jid):
+        async with self._get_session() as db:
+            return await self.lidMappingStore.getLidMappingByJid(db,  jid)
+
+    async def deleteLidMapping(self, jid):
+        async with self._get_session() as db:
+            return await self.lidMappingStore.deleteLidMapping(db,  jid)
+
+    async def getAllLidMapping(self):
+        async with self._get_session() as db:
+            return await self.lidMappingStore.getAllLidMapping(db)
+            
+    async def getLidMappingByLid(self, lid):
+        async with self._get_session() as db:
+            return await self.lidMappingStore.getLidMappingByLid(db, lid)
 
     # Broadcasts
     async def addBroadcast(self, jids, senderJid, name=None):
@@ -778,8 +822,10 @@ class SqlAxolotlStore(AxolotlStore):
 
     async def getTcToken(self, jid):
         async with self._get_session() as db:
-
-            return await self.trustedContactStore.getTcToken(db, self._account_id, jid)
+            logger.info(f"Getting tc token for jid: {jid}")
+            lid = await self.lidMappingStore.getLidMappingByJid(db, jid)
+            logger.info(f"Lid: {lid}")
+            return await self.trustedContactStore.getTcToken(db, self._account_id, jid,lid)
 
     # Poll store facade
     async def deletePoll(self, poll_msg_id):

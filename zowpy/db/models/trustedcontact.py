@@ -67,10 +67,10 @@ class TrustedContact(Model,BaseModel):
 
 
     @classmethod
-    async def get_tc_token(cls, session: AsyncSession, account_id: int, jid: str):
+    async def get_tc_token(cls, session: AsyncSession, account_id: int, jid: str, lid: str=None):
         
         try:
-            query = select(cls.incoming_tc_token).where(cls.account_id == account_id, cls.jid == jid)
+            query = select(cls.incoming_tc_token).where(cls.account_id == account_id, cls.jid.in_([jid, lid]))
             result =  await session.execute(query)
             return result.scalar()
             
