@@ -75,6 +75,18 @@ class MediaMessageProtocolEntity(MessageProtocolEntity):
         self._media_type = media_type
         self._message_attributes = message_attrs
         self._message_meta_attributes = message_meta_attrs
+
+
+    
+    @property
+    def message_secret(self) -> Optional[bytes]:
+        """Chave de segredo da mensagem."""
+        return self._message_attributes.message_secret
+    
+    @message_secret.setter
+    def message_secret(self, message_secret: Optional[bytes]):
+        """Define chave de segredo da mensagem."""
+        self._message_attributes.message_secret = message_secret
     
     def __str__(self):
         out = super(MediaMessageProtocolEntity, self).__str__()

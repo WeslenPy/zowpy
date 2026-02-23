@@ -596,7 +596,7 @@ class ZowPyClient:
         if not self._client or not self._client.chat_handler:
             raise ConnectionError("Cliente não conectado")
         return await self._client.chat_handler.set_disappearing_disabled(to)
-            
+             
 
     async def sync_contacts(self, numbers: list, mode: str = "full", context: str = "interactive") -> dict:
         """Sincroniza contatos."""

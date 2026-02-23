@@ -44,7 +44,9 @@ async def main():
     # six_parts = "201289168953,MCVXsjVe8MawoI1knngwMgG3jT9uIiMkQaomKIy+2h8=,AHO8TSNhrJZS2fCvuW4J4tkeBknhCyQx16EYyKsrNng=,JfoetzyUPj6oUokxsftZa6o3eukx6WXNTtfKj6eVhQk=,6GR1abYzZeA95EYpoSTr1abe50JnHH0fNt4NqyMqy3Q=,MjAxMjg5MTY4OTUzIwiPgotfI6grLeCaitnx2+gEC9jc"
     # six_parts =  "201210896277,hMkBA8B2dK101mhvnk3y5mBWAYUASUfqe6WQhQg1KWg=,gNIKqwc/WKnlYteV3vneHDpNUHIwA7d6+tiqx5Dyn3k=,+l+DOhFZwjeY/Mh23GC//LAK0L2WLKqOkayjXdTXo2c=,uO/+fQmp1OAJF5WUWvgwjCDaWm7golH1xQZ9EiNTo1c=,MjAxMjEwODk2Mjc3I1VT8iO0dHfiwRtqM/JebBGW9aNf"
     
-    six_parts = "201211619577,q2sUtNbFCJPjH9dlk4dH8zGoZlc5ojreQRl114jLhjY=,oMKC6LMYm4r0cjp2qPNzVaSjlWIll6adX1Xxi3lY4nw=,fP3TfhvhKdpQkWJKVtFmi0idDM0wdmBTAilf4ZQfXEo=,oA97pQfwRM2ZEEDIVY+7if1DW+lmMrYJKHTaJK0x3lo=,MjAxMjExNjE5NTc3I70F3fbxeyzY4kHIcdPN+VfT+qoZ"
+    # six_parts = "201221940858,Edn7zoBTofjkFaYicTnU2syI5XaX2x220wgjxY9mzUQ=,aCBsVMB9QXSVqUoewGSrgpCXBWVPXuJNVaDXaXg+JEY=,vh04wIVTAvIRlJLRUHqbyoR9hiftAGNpInY3IQmXc1c=,qOiYJceU0KwISneOHdHyNaGcWAHsNF71dTCOuKodB1g=,MjAxMjIxOTQwODU4IzOZkiOjRTgwLlNkUWcJkqJJDglJ"
+    
+    six_parts = "201229481714,u0yI4HjfQ4O68gan24Q0YXlwNr/c4mD6EsHCEmRNpiI=,4Fk7V4BoMqnScy8cQzZYQSJFgWEuuZdJeSV6xmCS3Us=,cnHDF3KXUUrWBwiWBkoQPSC0DUlQOx3guQ9KMaXskAI=,UAuywOzAdiqPjh36j5DFtDRv5PzoTZkyS+iQrwCZcFQ=,MjAxMjI5NDgxNzE0I5Zhl27vSz9QFcY6R4455OvK9etu" 
     env = "smb_android"
 
     await import_account_from_six_parts(six_parts,env=env)
@@ -52,7 +54,7 @@ async def main():
     account_id = six_parts.split(",")[0]
     
     client = ZowPyClient(account_id,env=env)
-    client.set_proxy("104.239.17.120:6186:mwqfvavl:iggqj6pm1ptt", "http")
+    client.set_proxy("209.242.203.87:6802:mwqfvavl:iggqj6pm1ptt", "http")
     
     # Eventos
     @client.on_message
@@ -87,19 +89,22 @@ async def main():
         # to = "120363425653832734"
         to = "5511930023692"
         # to = "559885700260"
+        # to = "201223091608"
         print(f" Enviando mensagem para {to}...")
 
         print(f"\n📤 Exemplo: Enviando mídia usando send_media_direct...")
 
 
+        await asyncio.sleep(10)
+        
         text = "Ola, tudo bem?"
 
-        await client.set_disappearing_disabled(to)
-        await client.start_typing(to)
-        await asyncio.sleep(4)
-        message_id = await client.send_text(to, text)
-        print(f"Mensagem enviada: {message_id}")
-        await client.stop_typing(to)
+        # await client.set_disappearing_disabled(to)
+        # await client.start_typing(to)
+        # await asyncio.sleep(4)
+        # message_id = await client.send_text(to, text)
+        # print(f"Mensagem enviada: {message_id}")
+        # await client.stop_typing(to)
 
         # code = "FHeOqMRR7r4BNB7hvXHudd"
 
@@ -114,7 +119,6 @@ async def main():
         
         # result = await client.create_group(text, [])
         # print(f"Grupo criado com sucesso: {result}")
-
 
         # await client.set_profile_name("novo")
         # avatar = await client.get_user_info(to)

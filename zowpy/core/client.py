@@ -140,6 +140,9 @@ class WhatsAppClient:
             proxy: Configuração de proxy (opcional)
         """
         self.account_id = normalize(account_id)
+        self.sender_id = to_whatsapp_jid( self.account_id.split('@')[0])
+
+
         self.endpoint = endpoint or (f"g.whatsapp.net", 443)#{random.randint(1, 16)}
         
         # Normaliza proxy para ProxyConfig
@@ -1309,6 +1312,8 @@ class WhatsAppClient:
                     config.edge_routing_info = routing_info
                     await self.profile.write_config(config)
                     logger.info("edge_routing_info atualizado e salvo")
+                else:
+                    logger.info("edge_routing_info já está atualizado")
 
         self.events.on("ib:edge_routing", handle_edge_routing)
     
@@ -2841,7 +2846,7 @@ class WhatsAppClient:
                 if jid not in all_jids:
                     all_jids.append(jid)
 
-            await self.contact_handler.trust_contact(success_jids)
+            # await self.contact_handler.trust_contact(success_jids)
 
             for jid in all_jids:
                 new_contact = await self.axolotl_manager._store.isNewContact(jid)
@@ -2940,23 +2945,24 @@ class WhatsAppClient:
         participant = jids[0] if len(jids) == 1 and retry_count > 0 else None
         message_type = message_node.get_attribute_value("type")
 
-        # Whatsmeow-style: first <to> is sender (own JID) with enc type="msg"
-        if message_type != "reaction":
-            own_jid = self._own_jid()
-            own_recipient_id = own_jid.split("@")[0].split(":")[0]
-            try:
-                ciphertext_self = await self.axolotl_manager.encrypt(own_recipient_id, proto_bytes)
-                enc_type_self = EncEntity.TYPE_PKMSG if isinstance(ciphertext_self, PreKeyWhisperMessage) else EncEntity.TYPE_MSG
-                enc_node_self = EncEntity.create_enc_node(
-                    enc_type=enc_type_self,
-                    ciphertext=ciphertext_self.serialize(),
-                    type_message=message_type,
-                    mediatype=mediatype,
-                    jid=own_jid,
-                )
-                enc_entities.insert(0, enc_node_self)
-            except Exception as e:
-                logger.debug(f"Não foi possível criptografar para self ({own_jid}), seguindo sem primeiro <to>: {e}")
+        # # Whatsmeow-style: first <to> is sender (own JID) with enc type="msg"
+        # if message_type != "reaction":
+        #     own_jid = self._own_jid()
+        #     own_recipient_id = self.sender_id.split("@")[0].split(":")[0]
+        #     try:
+        #         ciphertext_self = await self.axolotl_manager.encrypt(own_recipient_id, proto_bytes)
+        #         enc_type_self =  EncEntity.TYPE_MSG
+
+        #         enc_node_self = EncEntity.create_enc_node(
+        #             enc_type=enc_type_self,
+        #             ciphertext=ciphertext_self.serialize(),
+        #             type_message=message_type,
+        #             mediatype=mediatype,
+        #             jid=own_jid,
+        #         )
+        #         enc_entities.insert(0, enc_node_self)
+        #     except Exception as e:
+        #         logger.debug(f"Não foi possível criptografar para self ({own_jid}), seguindo sem primeiro <to>: {e}")
 
         for jid in jids:
             # Garante que jid é string
@@ -3243,7 +3249,7 @@ class WhatsAppClient:
 
 
         
-        jids = []
+        jids = [self.sender_id]
 
         for recipient_id in recipient_ids:
             jid = f"{recipient_id.split('@')[0]}@{YowConstants.WHATSAPP_SERVER}"
@@ -3259,6 +3265,7 @@ class WhatsAppClient:
         if len(jids_no_session) == 0:
             logger.debug(f"Todos os JIDs já têm sessão: {jids}, retornando sem enviar IQ")
             return (list(dict.fromkeys(existing_session_jids)), {})
+
         jids_no_session_unique = deduplicate_jids_by_recipient_device(jids_no_session)
         # Cria IQ apenas para JIDs sem sessão (sem duplicatas por (r, d))
         iq_node = PrekeyBuilder.build_get_keys_iq(
@@ -3298,7 +3305,7 @@ class WhatsAppClient:
                         continue
                     username = jid.split("@")[0]
                     try:
-                        await self.axolotl_manager.create_session(username, prekey_bundle, autotrust=True)
+                        await self.axolotl_manager.create_session(username, prekey_bundle, autotrust=False)
                         success_jids.append(jid)
                         logger.info(f"Sessão criada para {jid}")
                     except exceptions.UntrustedIdentityException as e:
@@ -3594,13 +3601,9 @@ class WhatsAppClient:
         # O atributo 'to' deve sempre ser o JID do grupo, não do participante
         # Verifica se é grupo usando a função de detecção atualizada
         if not group_jid or not self._is_group_jid(group_jid):
-            # Se não é grupo válido, pode ser que o to esteja incorreto
-            # Tenta extrair o ID do grupo ou usar o to original
-            # Se o to for um JID individual, isso é um erro - mas vamos tentar corrigir
-            if group_jid and ("@s.whatsapp.net" in group_jid or "@lid" in group_jid):
-                # Extrai o ID numérico antes do @
+            if group_jid and (f"@{YowConstants.WHATSAPP_SERVER}" in group_jid or f"@{YowConstants.LID_SUFFIX}" in group_jid):
                 group_id = group_jid.split("@")[0]
-                group_jid = f"{group_id}@g.us"
+                group_jid = f"{group_id}@{YowConstants.WHATSAPP_GROUP_SERVER}"
                 logger.warning(f"Corrigindo 'to' de {message_node.get_attribute('to')} para {group_jid}")
             
             # Atualiza o atributo 'to' do message_node

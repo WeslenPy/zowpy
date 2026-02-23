@@ -106,118 +106,85 @@ class EncryptionReceiver:
         # Identifica se é grupo
         is_group = node.get_attribute("participant") is not None
         sender_jid = node.get_attribute("participant") if is_group else node.get_attribute("from")
-        sender_pn = node.get_attribute("sender_pn")
+        sender_pn = node.get_attribute("sender_pn") or node.get_attribute("participant_pn")
         
-        if not sender_jid:
-            logger.error("Não foi possível identificar sender_jid")
+        # Lista de JIDs candidatos para buscar a sessão (tenta sender_jid primeiro, depois sender_pn)
+        candidate_jids: List[str] = []
+        if sender_jid:
+            candidate_jids.append(sender_jid)
+        if sender_pn and sender_pn not in candidate_jids:
+            candidate_jids.append(sender_pn)
+        if not candidate_jids:
+            logger.error("Não foi possível identificar sender_jid nem sender_pn")
             return None
 
-
-        real_target_jid = sender_jid if sender_jid else sender_pn
-        logger.info(f"Real target jid: {real_target_jid}")
         msg_id = node.get_attribute("id")
-        try:
-            # Descriptografa baseado no tipo
-            if enc_type == self.TYPE_SKMSG:
-                out = await self._decrypt_skmsg(node, enc_data, real_target_jid)
-                self.reset_retries(msg_id)
-                return (out, enc_mediatype)
-            elif enc_type == self.TYPE_PKMSG:
-                out = await self._decrypt_pkmsg(node, enc_data, real_target_jid, enc_version)
-                self.reset_retries(msg_id)
-                return (out, enc_mediatype)
-            elif enc_type == self.TYPE_MSG:
-                out = await self._decrypt_msg(node, enc_data, real_target_jid, enc_version)
-                self.reset_retries(msg_id)
-                return (out, enc_mediatype)
-            else:
-                logger.warning(f"Tipo de mensagem criptografada não suportado: {enc_type}")
-                # await self._send_receipt_for_node(node)
+        last_exception: Optional[Exception] = None
+
+        for real_target_jid in candidate_jids:
+            try:
+                logger.debug(f"Tentando descriptografia com target_jid: {real_target_jid}")
+                if enc_type == self.TYPE_SKMSG:
+                    out = await self._decrypt_skmsg(node, enc_data, real_target_jid)
+                    self.reset_retries(msg_id)
+                    return (out, enc_mediatype)
+                elif enc_type == self.TYPE_PKMSG:
+                    out = await self._decrypt_pkmsg(node, enc_data, real_target_jid, enc_version)
+                    self.reset_retries(msg_id)
+                    return (out, enc_mediatype)
+                elif enc_type == self.TYPE_MSG:
+                    out = await self._decrypt_msg(node, enc_data, real_target_jid, enc_version)
+                    self.reset_retries(msg_id)
+                    return (out, enc_mediatype)
+                else:
+                    logger.warning(f"Tipo de mensagem criptografada não suportado: {enc_type}")
+                    return None
+            except exceptions.NoSessionException as e:
+                last_exception = e
+                logger.debug(f"No session para {real_target_jid}, tentando próximo candidato")
+                continue
+            except exceptions.InvalidMessageException as e:
+                last_exception = e
+                logger.debug(f"InvalidMessage para {real_target_jid}, tentando próximo candidato")
+                continue
+            except exceptions.InvalidKeyIdException:
+                logger.warning(f"Invalid KeyId para {real_target_jid}, enviando receipt")
+                await self._send_receipt_for_node(node)
+                return None
+            except exceptions.DuplicateMessageException:
+                logger.debug(f"Mensagem duplicada recebida (target={real_target_jid}), enviando receipt")
+                await self._send_receipt_for_node(node)
                 return None
 
-        except exceptions.InvalidKeyIdException:
-            logger.warning(f"Invalid KeyId para {real_target_jid}, enviando receipt")
-            await self._send_receipt_for_node(node)
-            return None
+        # Nenhum candidato funcionou: trata NoSession ou InvalidMessage
+        if last_exception is not None:
+            if isinstance(last_exception, exceptions.NoSessionException):
+                logger.warning(f"No session para todos os candidatos ({candidate_jids}), armazenando mensagem pendente")
+                conversation_id = (node.get_attribute("from"), node.get_attribute("participant"))
+                if conversation_id not in self._pending_messages:
+                    self._pending_messages[conversation_id] = []
+                self._pending_messages[conversation_id].append(node)
+                real_target_jid = candidate_jids[0]
+                if self._get_keys:
+                    try:
+                        import asyncio
+                        async def get_keys(conv_id: Tuple[str, Optional[str]], target_jid: str) -> None:
+                            success_jids, error_jids = await self._get_keys(target_jid, reason=None)
+                            if success_jids and self._process_pending:
+                                await self._process_pending(conv_id[0], conv_id[1], success_jids)
+                            elif error_jids:
+                                logger.warning(f"Erro ao obter chaves para {target_jid}: {error_jids}")
+                        asyncio.create_task(get_keys(conversation_id, real_target_jid))
+                    except Exception as e:
+                        logger.error(f"Erro ao obter chaves para {real_target_jid}: {e}", exc_info=True)
+                else:
+                    logger.warning("get_keys_fn não configurada, não é possível obter chaves automaticamente")
+                return None
+            if isinstance(last_exception, exceptions.InvalidMessageException):
+                error_msg = str(last_exception) or "Invalid message (Bad MAC ou sessão desincronizada)"
+                logger.warning(f"InvalidMessage para todos os candidatos ({candidate_jids}): {error_msg}")
+        return None
 
-        except exceptions.InvalidMessageException as e:
-            error_msg = str(e) if str(e) else "Invalid message (Bad MAC ou sessão desincronizada)"
-            logger.warning(f"InvalidMessage para {real_target_jid}: {error_msg}")
-            # from_jid = node.get_attribute("from")
-            # participant = node.get_attribute("participant")
-            # retry_count = self._retries.get(msg_id, 0)
-            # if retry_count >= 2:
-            #     logger.warning(f"InvalidMessage após 2 tentativas para {msg_id}, enviando receipt e desistindo")
-            #     await self._send_receipt_for_node(node)
-            #     return None
-            # self._retries[msg_id] = retry_count + 1
-            # logger.debug(f"Enviando retry para {msg_id} (tentativa {retry_count + 1}/2)")
-            # reg_id = None
-            # if self._get_registration_id_fn:
-            #     try:
-            #         reg_id = await self._get_registration_id_fn()
-            #     except Exception:
-            #         pass
-            # t = node.get_attribute("t")
-            # ts = int(t) if t and str(t).isdigit() else None
-            # retry_entity = self.create_retry_receipt(
-            #     message_id=msg_id,
-            #     to=from_jid,
-            #     retry_count=retry_count + 1,
-            #     from_jid=node.get_attribute("to"),
-            #     timestamp=ts,
-            #     retry_jid=participant or from_jid,
-            #     registration_id=reg_id,
-            # )
-            # if self._send_retry_receipt_fn:
-            #     # await self._send_retry_receipt_fn(retry_entity)
-            #     logger.warning(f"Retry receipt: {retry_entity}")
-            # else:
-            #     logger.warning("_send_retry_receipt_fn não configurada")
-            # return None
-
-        except exceptions.NoSessionException:
-            logger.warning(f"No session para {sender_jid}, armazenando mensagem pendente")
-            # Armazena mensagem pendente
-            conversation_id = (node.get_attribute("from"), node.get_attribute("participant"))
-            if conversation_id not in self._pending_messages:
-                self._pending_messages[conversation_id] = []
-            self._pending_messages[conversation_id].append(node)
-            
-            # Envia receipt para evitar push subsequente
-            # O receipt será enviado pelo MessageProcessor se tiver ReceiptBuilder
-            
-            # Obtém chaves se tiver função configurada
-            if self._get_keys:
-                try:
-                    import asyncio
-                    async def get_keys(conversation_id: Tuple[str, str], real_target_jid: str) -> Tuple[List[str], List[str]]:
-                        success_jids, error_jids  =  await self._get_keys(real_target_jid, reason=None)
-                        if success_jids:
-                            # Processa mensagens pendentes após obter sessão
-                            if self._process_pending:
-                                await self._process_pending(conversation_id[0], conversation_id[1], success_jids)
-                            else:
-                                logger.warning(f"Erro ao obter chaves para {real_target_jid}: {error_jids}")
-
-                    asyncio.create_task(get_keys(conversation_id,real_target_jid))
-
-                except Exception as e:
-                    logger.error(f"Erro ao obter chaves para {real_target_jid}: {e}", exc_info=True)
-                logger.warning("get_keys_fn não configurada, não é possível obter chaves automaticamente")
-            
-            # Retorna None para indicar que mensagem está pendente
-            return None
-        
-        except exceptions.DuplicateMessageException:
-            logger.debug(f"Mensagem duplicada recebida de {sender_jid}, enviando receipt")
-            await self._send_receipt_for_node(node)
-            return None
-        
-        except Exception as e:
-            logger.error(f"Erro inesperado ao descriptografar mensagem: {e}", exc_info=True)
-            raise
-    
     async def _decrypt_skmsg(
         self, 
         node: ProtocolNode, 

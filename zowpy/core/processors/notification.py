@@ -15,6 +15,15 @@ from ...core.processors.base import BaseProcessor
 from ...core.events import AsyncEventEmitter
 
 
+
+"""
+disappearing_mode notification:
+<notification from="120363425653832734@g.us" type="w:gp2" id="1499051216" participant="4347077386271:0@lid" participant_pn="5511930023692@s.whatsapp.net" 
+addressing_mode="lid" notify="Weslen" t="1771876769">
+  <ephemeral expiration="86400" trigger="1" />
+</notification>
+"""
+
 PASS_TYPES: List[str] = ["contacts", "subject", "w:gp2", "devices"]
 
 
