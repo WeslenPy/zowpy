@@ -114,7 +114,7 @@ class EncryptionReceiver:
 
 
         real_target_jid = sender_jid if sender_jid else sender_pn
-        
+        logger.info(f"Real target jid: {real_target_jid}")
         msg_id = node.get_attribute("id")
         try:
             # Descriptografa baseado no tipo
@@ -143,38 +143,38 @@ class EncryptionReceiver:
         except exceptions.InvalidMessageException as e:
             error_msg = str(e) if str(e) else "Invalid message (Bad MAC ou sessão desincronizada)"
             logger.warning(f"InvalidMessage para {real_target_jid}: {error_msg}")
-            from_jid = node.get_attribute("from")
-            participant = node.get_attribute("participant")
-            retry_count = self._retries.get(msg_id, 0)
-            if retry_count >= 2:
-                logger.warning(f"InvalidMessage após 2 tentativas para {msg_id}, enviando receipt e desistindo")
-                await self._send_receipt_for_node(node)
-                return None
-            self._retries[msg_id] = retry_count + 1
-            logger.debug(f"Enviando retry para {msg_id} (tentativa {retry_count + 1}/2)")
-            reg_id = None
-            if self._get_registration_id_fn:
-                try:
-                    reg_id = await self._get_registration_id_fn()
-                except Exception:
-                    pass
-            t = node.get_attribute("t")
-            ts = int(t) if t and str(t).isdigit() else None
-            retry_entity = self.create_retry_receipt(
-                message_id=msg_id,
-                to=from_jid,
-                retry_count=retry_count + 1,
-                from_jid=node.get_attribute("to"),
-                timestamp=ts,
-                retry_jid=participant or from_jid,
-                registration_id=reg_id,
-            )
-            if self._send_retry_receipt_fn:
-                # await self._send_retry_receipt_fn(retry_entity)
-                logger.warning(f"Retry receipt: {retry_entity}")
-            else:
-                logger.warning("_send_retry_receipt_fn não configurada")
-            return None
+            # from_jid = node.get_attribute("from")
+            # participant = node.get_attribute("participant")
+            # retry_count = self._retries.get(msg_id, 0)
+            # if retry_count >= 2:
+            #     logger.warning(f"InvalidMessage após 2 tentativas para {msg_id}, enviando receipt e desistindo")
+            #     await self._send_receipt_for_node(node)
+            #     return None
+            # self._retries[msg_id] = retry_count + 1
+            # logger.debug(f"Enviando retry para {msg_id} (tentativa {retry_count + 1}/2)")
+            # reg_id = None
+            # if self._get_registration_id_fn:
+            #     try:
+            #         reg_id = await self._get_registration_id_fn()
+            #     except Exception:
+            #         pass
+            # t = node.get_attribute("t")
+            # ts = int(t) if t and str(t).isdigit() else None
+            # retry_entity = self.create_retry_receipt(
+            #     message_id=msg_id,
+            #     to=from_jid,
+            #     retry_count=retry_count + 1,
+            #     from_jid=node.get_attribute("to"),
+            #     timestamp=ts,
+            #     retry_jid=participant or from_jid,
+            #     registration_id=reg_id,
+            # )
+            # if self._send_retry_receipt_fn:
+            #     # await self._send_retry_receipt_fn(retry_entity)
+            #     logger.warning(f"Retry receipt: {retry_entity}")
+            # else:
+            #     logger.warning("_send_retry_receipt_fn não configurada")
+            # return None
 
         except exceptions.NoSessionException:
             logger.warning(f"No session para {sender_jid}, armazenando mensagem pendente")

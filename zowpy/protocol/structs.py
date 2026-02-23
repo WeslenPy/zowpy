@@ -135,8 +135,14 @@ class ProtocolNode:
     def getData(self):
         return self.data
 
+    def get_data(self):
+        return self.getData()
+
     def setData(self, data):
         self.data = data
+
+    def set_data(self, data):
+        self.setData(data)
 
 
     @staticmethod

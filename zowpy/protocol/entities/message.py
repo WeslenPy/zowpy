@@ -142,7 +142,7 @@ class ProtomessageProtocolEntity(MessageProtocolEntity):
         return node
 
 
-class TextMessageProtocolEntity(MessageProtocolEntity):
+class TextMessageProtocolEntity(ProtomessageProtocolEntity):
     """
     Entidade de mensagem de texto.
     
@@ -154,7 +154,7 @@ class TextMessageProtocolEntity(MessageProtocolEntity):
         to: str,
         text: str,
         enc_node: Optional[EncProtocolEntity] = None,
-        proto_data: Optional[bytes] = None,
+        message_meta_attributes: Optional[bytes] = None,
         message_id: Optional[str] = None,
         from_jid: Optional[str] = None,
         participant: Optional[str] = None
@@ -166,32 +166,19 @@ class TextMessageProtocolEntity(MessageProtocolEntity):
             to: JID do destinatário
             text: Texto da mensagem
             enc_node: Node <enc> com dados criptografados
-            proto_data: Dados protobuf (opcional, para node <proto>)
+            message_meta_attributes: Metadados da mensagem (opcional, para node <proto>)
             message_id: ID da mensagem (gerado se None)
             from_jid: JID do remetente (opcional)
             participant: JID do participante (opcional, para grupos)
         """
+
+        from .attributes.attributes_message import MessageAttributes
+        if to:
+            message_meta_attributes = MessageMetaAttributes(recipient=to)
+
+        super(TextMessageProtocolEntity, self).__init__("text", MessageAttributes(conversation = text), message_meta_attributes)
+        
         children = []
-        
-        if enc_node:
-            children.append(enc_node)
-        
-        if proto_data:
-            proto_node = ProtocolEntity(
-                tag="proto",
-                data=proto_data
-            )
-            children.append(proto_node)
-        
-        super().__init__(
-            to=to,
-            message_type="text",
-            message_id=message_id,
-            from_jid=from_jid,
-            participant=participant,
-            children=children
-        )
-        
         self.text = text
 
 

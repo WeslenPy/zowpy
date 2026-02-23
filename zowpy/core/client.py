@@ -4339,243 +4339,118 @@ class WhatsAppClient:
     ) -> None:
         """
         Envia PKMSG para sincronização quando InvalidMessage após múltiplas tentativas.
-        
-        Baseado em AxolotlReceiveLayer.send_pkmsg_for_invalid_message() e 
-        AxolotlSendLayer.sendToContactAsPkmsg() do zowsuplib.
-        
-        Envia uma mensagem vazia/minimal como PKMSG para forçar a criação de uma nova sessão
-        e re-sincronização com o remetente. Deleta temporariamente a sessão existente para 
-        forçar envio como PKMSG.
-        
-        Se já houver uma requisição em andamento para o mesmo JID, a nova requisição será ignorada.
-        
+
+        Baseado em AxolotlReceiveLayer.send_pkmsg_for_invalid_message() e
+        AxolotlSendLayer.sendToContactAsPkmsg() do zowsuplib: envia mensagem vazia como PKMSG
+        para forçar nova sessão; deleta temporariamente a sessão existente para garantir PKMSG.
+        Se já houver requisição em andamento para o mesmo JID, ignora a nova.
+
         Args:
             from_jid: JID do remetente (pode ser grupo ou contato)
             message_id: ID da mensagem que falhou
             participant: Participante (para grupos, opcional)
         """
-        future = None
-        normalized_sender_jid = None
-        
-        try:
-            from ..utils.tools import WATools
+        from ..utils.tools import WATools
+        from ..protocol.entities.message import TextMessageProtocolEntity
+        from ..protocol.entities.attributes.attributes_message import MessageMetaAttributes
 
-            sender_jid = participant if participant else from_jid
-            
-            # Normaliza JID se necessário (baseado em zowsuplib)
-            normalized_sender_jid = WATools.normalizeJid(from_jid)
-            
-            # Verifica se já há uma requisição em andamento para este JID
-            async with self._pending_pkmsg_sync_lock:
-                if normalized_sender_jid in self._pending_pkmsg_sync_requests:
-                    existing_future = self._pending_pkmsg_sync_requests[normalized_sender_jid]
-                    if not existing_future.done():
-                        logger.debug(f"PKMSG de sincronização já em andamento para {normalized_sender_jid}, ignorando nova requisição")
-                        return
-                    else:
-                        # Future já concluída, remove da fila
-                        del self._pending_pkmsg_sync_requests[normalized_sender_jid]
-                
-                # Cria nova Future para rastrear esta requisição
-                future = asyncio.Future()
-                self._pending_pkmsg_sync_requests[normalized_sender_jid] = future
-            
+        normalized_sender_jid = WATools.normalizeJid(from_jid)
+        recipient, _, device_id = WATools.jidDecode(normalized_sender_jid)
+        future: Optional[asyncio.Future] = None
+
+        async with self._pending_pkmsg_sync_lock:
+            existing = self._pending_pkmsg_sync_requests.get(normalized_sender_jid)
+            if existing is not None and not existing.done():
+                logger.debug(f"PKMSG de sincronização já em andamento para {normalized_sender_jid}, ignorando")
+                return
+            if existing is not None:
+                del self._pending_pkmsg_sync_requests[normalized_sender_jid]
+            future = asyncio.Future()
+            self._pending_pkmsg_sync_requests[normalized_sender_jid] = future
+
+        try:
             logger.info(f"Enviando PKMSG para sincronização com {normalized_sender_jid} (mensagem {message_id})")
-            
-            # Para grupos, envia para o grupo com participant
-            to_jid = from_jid if participant else normalized_sender_jid
-            
-            # Cria mensagem de texto vazia
-            # Baseado em zowsuplib: TextMessageProtocolEntity("", message_attrs)
-            from ..proto.e2e_pb2 import Message as MessagePb
-            message_pb = MessagePb()
-            message_pb.conversation = ""  # Mensagem vazia
-            
-            # Serializa protobuf
-            proto_bytes = message_pb.SerializeToString()
-            
-            # Gera ID para a mensagem de sincronização
-            # Baseado em zowsuplib: f"sync_{message_id}_{int(time.time())}"
+
             sync_message_id = f"sync_{message_id}_{int(time.time())}"
-            
-            # Cria node de mensagem
-            # Baseado em zowsuplib: TextMessageProtocolEntity.toProtocolTreeNode()
-            message_node = ProtocolNode(
-                tag="message",
-                attributes={
-                    "to": to_jid,
-                    "type": "text",
-                    "id": sync_message_id,
-                    "t": str(int(time.time()))
-                },
-                children=[]
+            meta = MessageMetaAttributes(
+                id=sync_message_id,
+                recipient=normalized_sender_jid,
+                timestamp=int(time.time())
             )
-            
-            # Adiciona node <proto> com mediatype (seguindo padrão de _send_as_pkmsg)
-            proto_node = ProtocolNode(
-                tag="proto",
-                attributes={"mediatype": "text"},
-                data=proto_bytes
-            )
-            message_node.children.append(proto_node)
-            
-            # Para grupos, adiciona participant
+            message_entity = TextMessageProtocolEntity(text="", message_meta_attributes=meta)
+            message_node = message_entity.to_protocol_node()
+            message_node.setAttribute("to", normalized_sender_jid)
+            message_node.setAttribute("type", "text")
             if participant:
-                message_node.attributes["participant"] = normalized_sender_jid
-            
-            # Baseado em zowsuplib sendToContactAsPkmsg():
-            # 1. Deleta temporariamente a sessão existente para forçar PKMSG
-            # 2. Obtém chaves (PreKeys)
-            # 3. Encripta como PreKeyWhisperMessage
-            # 4. Restaura sessão se houver erro
-            
-            recipient_id = normalized_sender_jid.split('@')[0]
-            
-            # Backup e deleta sessão temporariamente (se existir) para forçar PKMSG
-            # Baseado em zowsuplib: session_backup e deleteSession()
+                message_node.setAttribute("participant", participant)
+
+            proto_child = message_node.get_child("proto")
+            if not proto_child:
+                raise ValueError("Node de mensagem deve ter <proto>")
+            proto_bytes = proto_child.data or proto_child.get_data()
+            mediatype = proto_child.get_attribute("mediatype") or "text"
+
             session_backup = None
             had_session = False
-            recipient_id_split = None
-            deviceid = None
-            
-            if hasattr(self, 'axolotl_manager') and self.axolotl_manager:
-                if await self.axolotl_manager.session_exists(normalized_sender_jid):
+            if await self.axolotl_manager.session_exists(recipient):
+                try:
+                    session_backup = await self.axolotl_manager._store.loadSession(recipient, device_id)
+                    had_session = True
+                    await self.axolotl_manager._store.deleteSession(recipient, device_id)
+                    logger.debug(f"Sessão deletada temporariamente para {normalized_sender_jid}")
+                except Exception as e:
+                    logger.warning(f"Erro ao fazer backup/deletar sessão: {e}")
+
+            async def restore_session():
+                if had_session and session_backup is not None:
                     try:
-                        # Decodifica JID para obter recipient_id e device_id
-                        from ..utils.tools import WATools
-                        recipient_id_split, _, deviceid = WATools.jidDecode(normalized_sender_jid)
-                        
-                        # Carrega sessão para backup
-                        if hasattr(self.axolotl_manager, '_store'):
-                            session_record = await self.axolotl_manager._store.loadSession(
-                                recipient_id_split, 
-                                deviceid
-                            )
-                            session_backup = session_record
-                            had_session = True
-                            logger.debug(f"Sessão existente encontrada para {normalized_sender_jid}, será deletada temporariamente")
-                            
-                            # Deleta sessão temporariamente para forçar PKMSG
-                            await self.axolotl_manager._store.deleteSession(recipient_id_split, deviceid)
-                            logger.debug(f"Sessão deletada temporariamente para {normalized_sender_jid}")
+                        await self.axolotl_manager._store.storeSession(recipient, device_id, session_backup)
+                        logger.debug(f"Sessão restaurada para {normalized_sender_jid}")
                     except Exception as e:
-                        logger.warning(f"Erro ao fazer backup/deletar sessão: {e}")
-            
+                        logger.warning(f"Erro ao restaurar sessão: {e}")
+
             try:
-                # Obtém chaves do remetente para atualizar sessão
-                to_jid = normalized_sender_jid
-                if "@" not in to_jid:
-                    to_jid = f"{to_jid}@{YowConstants.WHATSAPP_SERVER}"
-
-                success_jids, error_jids = await self._get_keys_for_recipient(to_jid, reason=None)
-                
+                success_jids, error_jids = await self._get_keys_for_recipient(from_jid, reason=None)
                 if not success_jids:
-                    logger.error(f"Erro ao obter chaves para sincronização: {error_jids}")
-                    # Restaura sessão se houver backup
-                    if had_session and session_backup and recipient_id_split is not None and deviceid is not None:
-                        try:
-                            await self.axolotl_manager._store.storeSession(recipient_id_split, deviceid, session_backup)
-                            logger.debug(f"Sessão restaurada após erro ao obter chaves para {normalized_sender_jid}")
-                        except Exception as e:
-                            logger.warning(f"Erro ao restaurar sessão: {e}")
-                    # Marca Future como concluída com erro e remove da fila
-                    if future and not future.done():
+                    await restore_session()
+                    if not future.done():
                         future.set_exception(Exception(f"Erro ao obter chaves: {error_jids}"))
-                    async with self._pending_pkmsg_sync_lock:
-                        if normalized_sender_jid in self._pending_pkmsg_sync_requests:
-                            if self._pending_pkmsg_sync_requests[normalized_sender_jid] == future:
-                                del self._pending_pkmsg_sync_requests[normalized_sender_jid]
-                                logger.debug(f"PKMSG de sincronização removido da fila após erro ao obter chaves para {normalized_sender_jid}")
                     return
-                
-                # Obtém mediatype do proto node (seguindo padrão de _send_as_pkmsg)
-                mediatype = proto_node.get_attribute("mediatype") if proto_node else "text"
-                
-                # Encripta como PreKeyWhisperMessage (PKMSG)
-                # Como deletamos a sessão, isso deve forçar PKMSG
-                ciphertext = await self.axolotl_manager.encrypt(recipient_id, proto_bytes)
-                
-                # Identifica tipo (seguindo padrão de _send_as_pkmsg)
-                if isinstance(ciphertext, PreKeyWhisperMessage):
-                    enc_type = EncEntity.TYPE_PKMSG
-                else:
-                    enc_type = EncEntity.TYPE_MSG
-                
-                # Cria node <enc> usando EncEntity helper (seguindo padrão de _send_as_pkmsg)
-                # Para PKMSG em mensagens normais (não peer), sempre precisa do <to> wrapper
-                # dentro de <participants>, então sempre usa normalized_sender_jid
-                # Para grupos com participant, usa jid do participant (normalized_sender_jid)
-                # Para contatos individuais, também usa normalized_sender_jid para criar <to> wrapper
-                enc_jid = normalized_sender_jid
 
-                logger.debug(f"Enc_jid: {enc_jid}")
-                
+                ciphertext = await self.axolotl_manager.encrypt(recipient, proto_bytes)
                 enc_node = EncEntity.create_enc_node(
-                    enc_type=enc_type,
+                    enc_type=EncEntity.TYPE_PKMSG,
                     ciphertext=ciphertext.serialize(),
                     mediatype=mediatype,
-                    jid=enc_jid
+                    jid=normalized_sender_jid
                 )
-                
-                # Constrói node final usando EncryptedMessageBuilder (seguindo padrão de _send_as_pkmsg)
                 message_node = EncryptedMessageBuilder.build_encrypted_message(
                     message_node=message_node,
                     enc_entities=[enc_node],
-                    participant=participant if participant else None
+                    participant=participant
                 )
-                
-                # Obtém tctoken se necessário
-                tctoken = None
-                if hasattr(self, 'axolotl_manager') and hasattr(self.axolotl_manager, '_store'):
-                    tctoken = await self.axolotl_manager._store.getTcToken(normalized_sender_jid)
-                
-                # Adiciona elementos extras
+                tctoken = await self.axolotl_manager._store.getTcToken(normalized_sender_jid)
                 await self._add_message_extras(message_node, tctoken=tctoken)
-                
-                # Enfileira mensagem antes de enviar (para retry)
                 self._enqueue_sent_message(message_node)
-                
-                # Envia
                 await self._send_protocol_node(message_node)
-                
                 logger.info(f"PKMSG de sincronização enviado para {normalized_sender_jid} (sync_message_id={sync_message_id})")
-                
-                # Marca Future como concluída com sucesso
                 if not future.done():
                     future.set_result(None)
-            
             except Exception as e:
                 logger.error(f"Erro ao enviar PKMSG para sincronização: {e}", exc_info=True)
-                # Restaura sessão se houver backup e erro
-                if had_session and session_backup and recipient_id_split is not None and deviceid is not None:
-                    try:
-                        await self.axolotl_manager._store.storeSession(recipient_id_split, deviceid, session_backup)
-                        logger.debug(f"Sessão restaurada após erro para {normalized_sender_jid}")
-                    except Exception as restore_error:
-                        logger.warning(f"Erro ao restaurar sessão: {restore_error}")
-                
-                # Marca Future como concluída com erro
+                await restore_session()
                 if not future.done():
                     future.set_exception(e)
-            
             finally:
-                # Remove da fila após conclusão (sucesso ou erro)
                 async with self._pending_pkmsg_sync_lock:
-                    if normalized_sender_jid in self._pending_pkmsg_sync_requests:
-                        # Verifica se é o mesmo future (pode ter sido substituído)
-                        if self._pending_pkmsg_sync_requests[normalized_sender_jid] == future:
-                            del self._pending_pkmsg_sync_requests[normalized_sender_jid]
-                            logger.debug(f"PKMSG de sincronização concluído para {normalized_sender_jid}, removido da fila")
-        
+                    if self._pending_pkmsg_sync_requests.get(normalized_sender_jid) is future:
+                        del self._pending_pkmsg_sync_requests[normalized_sender_jid]
+                        logger.debug(f"PKMSG de sincronização concluído para {normalized_sender_jid}")
         except Exception as e:
             logger.error(f"Erro ao enviar PKMSG para sincronização: {e}", exc_info=True)
-            # Remove da fila em caso de erro não tratado
-            if normalized_sender_jid and future:
-                async with self._pending_pkmsg_sync_lock:
-                    if normalized_sender_jid in self._pending_pkmsg_sync_requests:
-                        if self._pending_pkmsg_sync_requests[normalized_sender_jid] == future:
-                            del self._pending_pkmsg_sync_requests[normalized_sender_jid]
-                            logger.debug(f"PKMSG de sincronização removido da fila após erro não tratado para {normalized_sender_jid}")
+            async with self._pending_pkmsg_sync_lock:
+                if normalized_sender_jid and future and self._pending_pkmsg_sync_requests.get(normalized_sender_jid) is future:
+                    del self._pending_pkmsg_sync_requests[normalized_sender_jid]
     
     async def _send_retry_receipt(self, retry_receipt: ProtocolNode) -> None:
         """

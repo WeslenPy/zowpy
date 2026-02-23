@@ -224,6 +224,9 @@ class AxolotlManager(object):
         msg = WhisperMessage(serialized=data)
         recipientId,a,deviceid = WATools.jidDecode(senderid)
 
+        logger.info(f"Recipient ID: {recipientId}")
+        logger.info(f"Device ID: {deviceid}")
+
         try:
             cipher = self._get_session_cipher(recipientId,deviceid)
             plaintext = await cipher.decryptMsg(msg)
