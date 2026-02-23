@@ -13,7 +13,7 @@ from zowpy.core.import_account import import_account_from_six_parts
 from loguru import logger
 
 # Configura logging
-logger.add("logs/get_profile_picture.log", level="DEBUG")
+logger.add("logs/log_message_first.log", level="DEBUG")
 
 
 async def main():
@@ -42,7 +42,7 @@ async def main():
     # six_parts = "5555924810649,4ljWhbt1yKIN/APYKt8taDPj4kbsULb552rxRJvX0Wk=,cPjOBZVjlURZBJxZOzE4HdkUEjrAA9K/ApZyo4rgiEU=,yIdbWY5IFfBhxhGT6AO3xwlYGQ21ZThe98Lr/Cg0phM=,6CYNIsougyZ3ymOJbfI8lwK+P+6sd/WOLwMO/a2OUHU=,NTU1NTkyNDgxMDY0OSMFw8GN5rYImqEJAm9pObYCtwosxw=="
     # six_parts = "201201814380,do2SERU4/9Yj55lReaRN6aZKJQ9K3RiKXrw3da4rHm8=,6D00PFIHKSnRufG7+9NU9T5WTxuViefuu61LIxUl8Hg=,kr9WxLubsiVQmcdRsOiZ31h0khcADnA6zBmiRU1TvGk=,wCCqKCgpt1FRJxq3Q0kydhXmnk9h8Oixw94Y9FZCzEE=,MjAxMjAxODE0MzgwI1RJcf7mAfypjMTAyTeeZgV3J9ZD"
     # six_parts = "201289168953,MCVXsjVe8MawoI1knngwMgG3jT9uIiMkQaomKIy+2h8=,AHO8TSNhrJZS2fCvuW4J4tkeBknhCyQx16EYyKsrNng=,JfoetzyUPj6oUokxsftZa6o3eukx6WXNTtfKj6eVhQk=,6GR1abYzZeA95EYpoSTr1abe50JnHH0fNt4NqyMqy3Q=,MjAxMjg5MTY4OTUzIwiPgotfI6grLeCaitnx2+gEC9jc"
-    six_parts =  "201207737061,RgobkhZ55SZw2dc3OW0YCUfCax+OtcF/QxpFxn9iGA4=,IJEWbfDYvkE3KXUtlk+/NbDb7hmzM58LYcf04klVYXU=,eDk5dV78OxZYQrX6XjlRCMeKvR/dW1MKTEoXZ8VYaG8=,uHHQEh7so7ZRA+wlLuk8+PBX8wQd3/QG9gA3eCcaFnk=,MjAxMjA3NzM3MDYxI6/labSowjIdCR65F+xEXAciIvcD"
+    six_parts =  "201208108556,Nx3Ni5cNC3XpmhmJApujeA1l1FzRlB6fBYMaXCx+gmI=,GGEWBJ70vQXCKf1aiDaUmAR/yfSk26S4PTYnuCEdHHo=,uVghuaGt5Cok6UAGoimjvlCxr8wNJTr0ZvSNu4PsS1M=,WAoem7S3Bb5lsuSJ+9j9oVK9cLO6G+KD++f88YRm+H4=,MjAxMjA4MTA4NTU2I8jdbLMwW3N0ICF+3qxYPpjYtuqo"
     env = "smb_android"
 
     await import_account_from_six_parts(six_parts,env=env)
@@ -95,7 +95,7 @@ async def main():
 
         # logger.info(f"Grupos: {groups}")
 
-        await client.join_group_with_code("FHeOqMRR7r4BNB7hvXHudd")
+        # await client.join_group_with_code("FHeOqMRR7r4BNB7hvXHudd")
         
         # result=  await client.get_group_invite_code(to)
         # groups = await client.list_groups()
@@ -107,33 +107,33 @@ async def main():
 
 
         # await client.set_profile_name("novo")
-        avatar = await client.get_user_info(to)
+        # avatar = await client.get_user_info(to)
         
-        print(f"Avatar: {avatar}")
+        # print(f"Avatar: {avatar}")
 
         # await client.send_text(to, text)
         while True:
-            print(f"Mensagem: {text}")
-            await client.send_status(media_type="image",file_path_or_url="https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png")
-            await asyncio.sleep(10)
+            # print(f"Mensagem: {text}")
+            # await client.send_status(media_type="image",file_path_or_url="https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png")
+            # await asyncio.sleep(10)
             
-            await client.start_recording(to)
-            await asyncio.sleep(10)
-            await client.send_audio(to,"https://s3-bucket-waconnect.s3.us-west-2.amazonaws.com/static/api/f5ba3d484c1f8a182648272831cdcbe6155f686c8600edc703c3a75965b2a7da924d69c8d9591e32c28a1b21ab2b9820f7ca06578420839f68996c76cd6090b1.ogg")
-            await client.stop_recording(to)
-            await asyncio.sleep(10)
+            # await client.start_recording(to)
+            # await asyncio.sleep(10)
+            # await client.send_audio(to,"https://s3-bucket-waconnect.s3.us-west-2.amazonaws.com/static/api/f5ba3d484c1f8a182648272831cdcbe6155f686c8600edc703c3a75965b2a7da924d69c8d9591e32c28a1b21ab2b9820f7ca06578420839f68996c76cd6090b1.ogg")
+            # await client.stop_recording(to)
+            # await asyncio.sleep(10)
 
 
-            await client.send_document(to,"https://s3-bucket-waconnect.s3.us-west-2.amazonaws.com/static/api/5981fc257c8d45b8dd74eeccc674637baff025d19de3eeec877e571e8015732a7777214b675efc19f8d319f6daebb011f5b0d3ea0f52f721dbe015345c37a805.webp")
-            await asyncio.sleep(10)
-            await client.send_sticker(to,"https://s3-bucket-waconnect.s3.us-west-2.amazonaws.com/static/api/5981fc257c8d45b8dd74eeccc674637baff025d19de3eeec877e571e8015732a7777214b675efc19f8d319f6daebb011f5b0d3ea0f52f721dbe015345c37a805.webp")
-            await asyncio.sleep(10)
+            # await client.send_document(to,"https://s3-bucket-waconnect.s3.us-west-2.amazonaws.com/static/api/5981fc257c8d45b8dd74eeccc674637baff025d19de3eeec877e571e8015732a7777214b675efc19f8d319f6daebb011f5b0d3ea0f52f721dbe015345c37a805.webp")
+            # await asyncio.sleep(10)
+            # await client.send_sticker(to,"https://s3-bucket-waconnect.s3.us-west-2.amazonaws.com/static/api/5981fc257c8d45b8dd74eeccc674637baff025d19de3eeec877e571e8015732a7777214b675efc19f8d319f6daebb011f5b0d3ea0f52f721dbe015345c37a805.webp")
+            # await asyncio.sleep(10)
 
-            await client.start_typing(to)
-            await asyncio.sleep(4)
-            message_id = await client.send_text(to, text)
-            print(f"Mensagem enviada: {message_id}")
-            await client.stop_typing(to)
+            # await client.start_typing(to)
+            # await asyncio.sleep(4)
+            # message_id = await client.send_text(to, text)
+            # print(f"Mensagem enviada: {message_id}")
+            # await client.stop_typing(to)
 
 
             await asyncio.sleep(300)

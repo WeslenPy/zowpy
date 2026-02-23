@@ -10,11 +10,14 @@ from enum import IntEnum
 from dataclasses import dataclass
 from loguru import logger
 
+from zowpy.protocol.entities.attributes.converter import AttributesConverter
+
 from .helpers import serialize_async, deserialize_async
 
 # Imports condicionais para protobuf
 from .e2e_pb2 import Message as E2EMessage
 # wa_struct_pb2 não tem Message, apenas HandshakeMessage e ClientPayload
+
 WAStructMessage = None  # Não disponível neste protobuf
 
 
@@ -307,183 +310,4 @@ class AsyncMessageParser:
         :param data: Dados da mensagem
         :return: Dicionário com dados da mensagem
         """
-        if E2EMessage is None:
-            raise RuntimeError("E2EMessage não disponível")
-        
-        try:
-            message = await deserialize_async(data, E2EMessage)
-        except Exception as e:
-            logger.error(f"Erro ao deserializar protobuf: {e}, data_len={len(data)}")
-            result = {
-                "type": MessageType.OTHER,
-                "text": "",
-                "data": {"raw": data, "error": str(e)},
-            }
-            return result
-        
-        result = {
-            "type": None,
-            "data": None,
-        }
-        
-        # Log campos disponíveis para debug
-        available_fields = []
-        for field_descriptor in message.DESCRIPTOR.fields:
-            if message.HasField(field_descriptor.name):
-                available_fields.append(field_descriptor.name)
-        
-        if available_fields:
-            logger.debug(f"Campos disponíveis no protobuf: {available_fields}")
-        
-        # Detecta tipo de mensagem
-        if message.HasField("conversation"):
-            result["type"] = MessageType.TEXT
-            result["text"] = message.conversation
-            result["data"] = TextMessage(text=message.conversation)
-        elif message.HasField("extended_text_message"):
-            ext_text = message.extended_text_message
-            result["type"] = MessageType.TEXT
-            result["text"] = ext_text.text if ext_text.HasField("text") else ""
-            result["data"] = TextMessage(
-                text=ext_text.text if ext_text.HasField("text") else "",
-                context_info=ext_text.context_info.SerializeToString() if ext_text.HasField("context_info") else None
-            )
-        elif message.HasField("image_message"):
-            img = message.image_message
-            result["type"] = MessageType.IMAGE
-            result["data"] = ImageMessage(
-                url=img.url,
-                mimetype=img.mimetype,
-                caption=img.caption if img.HasField("caption") else None,
-                file_sha256=img.file_sha256 if img.HasField("file_sha256") else None,
-                file_length=img.file_length if img.HasField("file_length") else None,
-                height=img.height if img.HasField("height") else None,
-                width=img.width if img.HasField("width") else None,
-                media_key=img.media_key if img.HasField("media_key") else None,
-                jpeg_thumbnail=img.jpeg_thumbnail if img.HasField("jpeg_thumbnail") else None,
-            )
-        elif message.HasField("video_message"):
-            vid = message.video_message
-            result["type"] = MessageType.VIDEO
-            result["data"] = VideoMessage(
-                url=vid.url,
-                mimetype=vid.mimetype,
-                caption=vid.caption if vid.HasField("caption") else None,
-                file_sha256=vid.file_sha256 if vid.HasField("file_sha256") else None,
-                file_length=vid.file_length if vid.HasField("file_length") else None,
-                duration=vid.seconds if vid.HasField("seconds") else None,
-                height=vid.height if vid.HasField("height") else None,
-                width=vid.width if vid.HasField("width") else None,
-                media_key=vid.media_key if vid.HasField("media_key") else None,
-                jpeg_thumbnail=vid.jpeg_thumbnail if vid.HasField("jpeg_thumbnail") else None,
-            )
-        elif message.HasField("audio_message"):
-            aud = message.audio_message
-            result["type"] = MessageType.AUDIO
-            result["data"] = AudioMessage(
-                url=aud.url,
-                mimetype=aud.mimetype,
-                file_sha256=aud.file_sha256 if aud.HasField("file_sha256") else None,
-                file_length=aud.file_length if aud.HasField("file_length") else None,
-                duration=aud.seconds if aud.HasField("seconds") else None,
-                ptt=False,
-                media_key=aud.media_key if aud.HasField("media_key") else None,
-            )
-        elif message.HasField("document_message"):
-            doc = message.document_message
-            result["type"] = MessageType.DOCUMENT
-            result["data"] = DocumentMessage(
-                url=doc.url,
-                mimetype=doc.mimetype,
-                title=doc.title if doc.HasField("title") else None,
-                file_sha256=doc.file_sha256 if doc.HasField("file_sha256") else None,
-                file_length=doc.file_length if doc.HasField("file_length") else None,
-                page_count=doc.page_count if doc.HasField("page_count") else None,
-                media_key=doc.media_key if doc.HasField("media_key") else None,
-                filename=doc.file_name if doc.HasField("file_name") else None,
-            )
-        elif message.HasField("ptv_message"):
-            # Push-to-talk video (áudio PTT)
-            ptt = message.ptv_message
-            result["type"] = MessageType.AUDIO
-            result["data"] = AudioMessage(
-                url=ptt.url,
-                mimetype=ptt.mimetype,
-                file_sha256=ptt.file_sha256 if ptt.HasField("file_sha256") else None,
-                file_length=ptt.file_length if ptt.HasField("file_length") else None,
-                duration=ptt.seconds if ptt.HasField("seconds") else None,
-                ptt=True,
-                media_key=ptt.media_key if ptt.HasField("media_key") else None,
-            )
-        elif message.HasField("sticker_message"):
-            sticker = message.sticker_message
-            result["type"] = MessageType.STICKER
-            result["data"] = ImageMessage(
-                url=sticker.url,
-                mimetype=sticker.mimetype,
-                file_sha256=sticker.file_sha256 if sticker.HasField("file_sha256") else None,
-                file_length=sticker.file_length if sticker.HasField("file_length") else None,
-                height=sticker.height if sticker.HasField("height") else None,
-                width=sticker.width if sticker.HasField("width") else None,
-                media_key=sticker.media_key if sticker.HasField("media_key") else None,
-                jpeg_thumbnail=sticker.jpeg_thumbnail if sticker.HasField("jpeg_thumbnail") else None,
-            )
-        elif message.HasField("location_message"):
-            loc = message.location_message
-            result["type"] = MessageType.LOCATION
-            result["data"] = {
-                "latitude": loc.degrees_latitude if loc.HasField("degrees_latitude") else None,
-                "longitude": loc.degrees_longitude if loc.HasField("degrees_longitude") else None,
-                "name": loc.name if loc.HasField("name") else None,
-                "address": loc.address if loc.HasField("address") else None,
-            }
-        elif message.HasField("contact_message"):
-            contact = message.contact_message
-            result["type"] = MessageType.CONTACT
-            result["data"] = {
-                "display_name": contact.display_name if contact.HasField("display_name") else None,
-                "vcard": contact.vcard if contact.HasField("vcard") else None,
-            }
-        elif message.HasField("buttons_message"):
-            buttons = message.buttons_message
-            result["type"] = MessageType.BUTTONS
-            result["text"] = buttons.content_text if buttons.HasField("content_text") else ""
-            result["data"] = {
-                "content_text": buttons.content_text if buttons.HasField("content_text") else None,
-                "footer_text": buttons.footer_text if buttons.HasField("footer_text") else None,
-                "header_type": buttons.header_type if buttons.HasField("header_type") else None,
-            }
-        elif message.HasField("list_message"):
-            list_msg = message.list_message
-            result["type"] = MessageType.LIST
-            result["text"] = list_msg.description if list_msg.HasField("description") else ""
-            result["data"] = {
-                "title": list_msg.title if list_msg.HasField("title") else None,
-                "description": list_msg.description if list_msg.HasField("description") else None,
-            }
-        elif message.HasField("poll_message"):
-            poll = message.poll_message
-            result["type"] = MessageType.POLL
-            result["data"] = {
-                "name": poll.name if poll.HasField("name") else None,
-            }
-        elif message.HasField("reaction_message"):
-            reaction = message.reaction_message
-            result["type"] = MessageType.REACTION
-            result["data"] = {
-                "key": {
-                    "remote_jid": reaction.key.remote_jid if reaction.key.HasField("remote_jid") else None,
-                    "from_me": reaction.key.from_me if reaction.key.HasField("from_me") else None,
-                    "id": reaction.key.id if reaction.key.HasField("id") else None,
-                },
-                "text": reaction.text if reaction.HasField("text") else None,
-            }
-        else:
-            result["type"] = MessageType.OTHER
-            result["data"] = {"raw": data}
-            # Tenta extrair texto mesmo para OTHER (pode ser um tipo desconhecido mas com conversation)
-            if message.HasField("conversation"):
-                result["text"] = message.conversation
-        
-        return result
-
+        return AttributesConverter().proto_to_message(data)

@@ -34,6 +34,8 @@ class Account(Model,BaseModel):
     __tablename__ = "accounts"
 
     phone = Column(String(32), unique=True, nullable=False, index=True)
+    phone_lid = Column(String(32), nullable=True)
+
     pushname = Column(String(255), nullable=True)
     env = Column(String(32), nullable=True)  # android, smb_android, ios, smb_ios, ...
 

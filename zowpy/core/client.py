@@ -3740,8 +3740,6 @@ class WhatsAppClient:
         for jid in jids:
             standard_jid = jid.replace(".0:0", "").replace(".1:", ":")
             standard_jids.append(standard_jid)
-
-
         
         # Separa JIDs com sessão dos sem sessão (via session_jid helpers)
         jids_maps = await self.axolotl_manager.session_exists_bulk(standard_jids)
@@ -4093,9 +4091,9 @@ class WhatsAppClient:
         
         logger.info(f"[ZOWPY] Prekeys marcadas como enviadas: {len(prekeys)} prekeys")
         
-        if reboot_connection:
-            logger.info("[ZOWPY] Reiniciando conexão após envio de prekeys...")
-            await self.reconnect()
+        # if reboot_connection:
+        #     logger.info("[ZOWPY] Reiniciando conexão após envio de prekeys...")
+        #     await self.reconnect()
         
         logger.info("[ZOWPY] _on_keys_flushed() FINALIZADO")
         logger.info("=" * 80)

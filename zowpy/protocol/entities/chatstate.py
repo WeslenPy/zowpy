@@ -16,14 +16,18 @@ class ChatstateProtocolEntity(ProtocolEntity):
     
     STATE_COMPOSING = "composing"
     STATE_PAUSED = "paused"
+    CHAT_MEDIA_TYPE_AUDIO = "audio"
+    CHAT_MEDIA_TYPE_TEXT = ""
     
-    def __init__(self, state: str):
+    def __init__(self, state: str, media_type: Optional[str] = None):
         """
         Args:
             state: Estado do chat (composing ou paused)
+            media_type: Tipo de mídia (audio, text)
         """
         super().__init__(tag="chatstate")
         self._state = state
+        self._media_type = media_type
 
     def get_state(self) -> str:
         return self._state
@@ -33,6 +37,8 @@ class ChatstateProtocolEntity(ProtocolEntity):
         # Adiciona o estado como um nó filho vazio
         state_node = ProtocolNode(tag=self._state)
         node.children.append(state_node)
+        if self._media_type:
+            node.set_attribute("media", self._media_type)
         return node
 
 
@@ -41,14 +47,15 @@ class OutgoingChatstateProtocolEntity(ChatstateProtocolEntity):
     Entidade para estados de chat de saída <chatstate to="...">.
     """
     
-    def __init__(self, state: str, to: str, participant: Optional[str] = None):
+    def __init__(self, state: str, to: str, participant: Optional[str] = None, media_type: Optional[str] = None):
         """
         Args:
             state: Estado do chat (composing ou paused)
             to: JID do destinatário
             participant: JID do participante (opcional, para grupos)
+            media_type: Tipo de mídia (audio, video, image, document)
         """
-        super().__init__(state)
+        super().__init__(state, media_type)
         self._to = to
         self._participant = participant
 

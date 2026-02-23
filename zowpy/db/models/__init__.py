@@ -14,6 +14,7 @@ from .taskmsg import TaskMsg  # Adicionar esta linha
 from .identity import Identity  
 from .profile import ProfileConfig
 from .account import Account
+from .lid_map import LidMap
 
 
 __all__ = [
@@ -33,4 +34,5 @@ __all__ = [
     "TrustedContact",
     # "SentMessage",
     "Account",
+    "LidMap",
 ]

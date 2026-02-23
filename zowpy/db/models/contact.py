@@ -37,6 +37,16 @@ class Contact(Model,BaseModel):
 
     name = Column(String(255), nullable=True)
     jid = Column(String(255), nullable=False)
+    lid = Column(String(255), nullable=False)
+
+    pushname = Column(String(255), nullable=True)
+    profile_picture_url = Column(String(255), nullable=True)
+    business_name = Column(String(255), nullable=True)
+    verified_name = Column(String(255), nullable=True)
+    verified_level = Column(String(255), nullable=True)
+    notify = Column(String(255), nullable=True)
+    sender_pn = Column(String(255), nullable=True)
+
     timestamp = Column(BigInteger, nullable=False)
 
     account = relationship("Account", back_populates="contacts", lazy="raise")

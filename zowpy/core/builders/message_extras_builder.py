@@ -53,6 +53,12 @@ def add_message_extras(
             attributes={"v": "2"},
             data=os.urandom(16)
         )
+        reporting_tag = ProtocolNode(
+            tag="reporting_tag",
+            attributes={},
+            data=os.urandom(20)
+        )
+        reporting.children.append(reporting_tag)
         reporting.children.append(reporting_token)
         extras_to_append.append(reporting)
 
