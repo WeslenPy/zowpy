@@ -25,7 +25,7 @@ def generate_hex_token(prefix_hex: str = "040123", total_bytes: int = 11) -> byt
 
     remaining_bytes = total_bytes - prefix_bytes
 
-    return bytes.fromhex("040123bb46719716ce71db")
+    # return bytes.fromhex("0401235016c0aff54fd55c")
 
     return bytes.fromhex(prefix_hex + secrets.token_hex(remaining_bytes))
 

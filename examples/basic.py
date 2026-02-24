@@ -46,7 +46,7 @@ async def main():
     
     # six_parts = "201221940858,Edn7zoBTofjkFaYicTnU2syI5XaX2x220wgjxY9mzUQ=,aCBsVMB9QXSVqUoewGSrgpCXBWVPXuJNVaDXaXg+JEY=,vh04wIVTAvIRlJLRUHqbyoR9hiftAGNpInY3IQmXc1c=,qOiYJceU0KwISneOHdHyNaGcWAHsNF71dTCOuKodB1g=,MjAxMjIxOTQwODU4IzOZkiOjRTgwLlNkUWcJkqJJDglJ"
     
-    six_parts = "201225693261,z8f4Mb8ymtNb+CdRAqMARhcd7V9UGFJR/CBBj58scTc=,UDE+6B4hMH2XZv0ocT8baFG5Iwyi9uGZ0UxiMwHMlng=,vYs/+YvmFqot4y0rebABf1fFk9t/yDf7Hcb7mKLSVUU=,SN/s/yLDiIbdVUp+v/hp7fa2Z+eO+DMgyC1wC+J4mF4=,MjAxMjI1NjkzMjYxI1N3jv1QzEQsZqXvKjLoWIlLfDhF" 
+    six_parts = "201228763949,q88xv5cR+7JTpzxtOC+R6JcIRMcmW+Z+YTa56Lxu6EM=,iBGFroLBCMwPHkfD17JbBc+xTVKAVYvzFtDiqPgPDFM=,r1FOP+TmfWeB64Ll+4osYIYbTpFroYwFKDgfpHt59FI=,KF9w2SyxfuKeJ73yh35vsrdpv93eQ8WzrMnHHlzJfV0=,MjAxMjI4NzYzOTQ5I9QqZJxIO9/9NB2B4/9SysLNk7cD" 
     env = "smb_android"
 
     await import_account_from_six_parts(six_parts,env=env)
@@ -54,7 +54,7 @@ async def main():
     account_id = six_parts.split(",")[0]
     
     client = ZowPyClient(account_id,env=env)
-    client.set_proxy("82.23.222.173:6479:mwqfvavl:iggqj6pm1ptt", "http")
+    client.set_proxy("209.242.203.87:6802:mwqfvavl:iggqj6pm1ptt", "http")
     
     # Eventos
     @client.on_message
@@ -113,17 +113,17 @@ async def main():
             await client.set_website_business("https://nigtech.com")
             await client.set_address_business("Rua da empresa, 123, Cidade, Estado")
 
-        await mount_profile()
+        # await mount_profile()
 
         await asyncio.sleep(10)
 
-        result = await client.get_business_profile(client.account_id)
-        print(f"Resultado: {result}")
+        # result = await client.get_business_profile(client.account_id)
+        # print(f"Resultado: {result}")
 
 
 
 
-        await client.set_disappearing_disabled(to)
+        # await client.set_disappearing_disabled(to)
         await client.start_typing(to)
         await asyncio.sleep(4)
         message_id = await client.send_text(to, text)
