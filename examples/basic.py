@@ -17,25 +17,6 @@ logger.add("logs/tc_token.log", level="DEBUG")
 
 
 async def main():
-    """
-    Exemplo básico usando o ZowPy Client - Mantendo online indefinidamente.
-    
-    O cliente implementa um fluxo completo baseado no zowsuplib:
-    1. Conecta TCP
-    2. Envia header WA\x06\x03
-    3. Carrega prekeys
-    4. Inicia bridge TCP ↔ Stream
-    5. Executa handshake (Noise Protocol)
-    6. Autentica (WAUTH-2)
-    7. Envia prekeys
-    8. Envia presence "available"
-    9. Cliente pronto!
-    
-    Mantém a conta online indefinidamente:
-    - Keepalive automático a cada 20 segundos
-    - Reconexão automática em caso de desconexão
-    - Tratamento de sinais para desconexão limpa (Ctrl+C)
-    """
     
     # Cria cliente
     # six_parts= "14373206374,4ljWhbt1yKIN/APYKt8taDPj4kbsULb552rxRJvX0Wk=,cPjOBZVjlURZBJxZOzE4HdkUEjrAA9K/ApZyo4rgiEU=,yIdbWY5IFfBhxhGT6AO3xwlYGQ21ZThe98Lr/Cg0phM=,6CYNIsougyZ3ymOJbfI8lwK+P+6sd/WOLwMO/a2OUHU=,NTU1NTkyNDgxMDY0OSMFw8GN5rYImqEJAm9pObYCtwosxw=="
@@ -62,7 +43,7 @@ async def main():
         """Handler de mensagens recebidas"""
         await client.mark_as_read(message.get('id'), message.get('from'), message.get('participant'))
         logger.info(f"Mensagem recebida: {message}")
-        print(f"📨 Mensagem recebida de {message.get('from', 'unknown')}: {message.get('text', '')}")
+        print(f"Mensagem recebida de {message.get('from', 'unknown')}: {message.get('text', '')}")
     
     @client.on_connected
     async def handle_connected(data=None):
@@ -91,6 +72,10 @@ async def main():
         # to = "559885700260"
         # to = "201223091608"
         print(f" Enviando mensagem para {to}...")
+
+        print(f"\n Exemplo: Enviando mídia usando send_media_direct...")
+        await client.send_text(to, text)
+
 
         print(f"\n📤 Exemplo: Enviando mídia usando send_media_direct...")
 
@@ -203,10 +188,10 @@ async def main():
     
     except KeyboardInterrupt:
         await client.disconnect()
-        print("\n🛑 Interrupção recebida, desconectando...")
+        print("\n Interrupção recebida, desconectando...")
     
     except Exception as e:
-        print(f"❌ Erro: {e}")
+        print(f"Erro: {e}")
         logger.exception("Erro no exemplo básico")
     
  
