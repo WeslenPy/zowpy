@@ -71,7 +71,7 @@ class UpdateBusinessProfileIqProtocolEntity(IqProtocolEntity):
             tag=self.info_type,
             attributes={},
             children=[],
-            data=self.info_data,
+            data=self.info_data.encode("utf-8"),
         )
         
         business_profile.children.append(content_node)

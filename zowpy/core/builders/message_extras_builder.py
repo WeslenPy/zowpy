@@ -6,11 +6,28 @@ Ordem whatsmeow: participants → device-identity; em seguida reporting e tctoke
 
 import base64
 import os
+import secrets
 from typing import Optional
 
 from zowpy.utils.tools import WATools
 from ...protocol.structs import ProtocolNode
 
+import secrets
+
+def generate_hex_token(prefix_hex: str = "040123", total_bytes: int = 11) -> bytes:
+    """
+    Gera um token hexadecimal aleatório com prefixo fixo (040123)
+    e tamanho total definido em bytes.
+    """
+    prefix_bytes = len(prefix_hex) // 2
+    if prefix_bytes >= total_bytes:
+        raise ValueError("O prefixo é maior ou igual ao tamanho total do token")
+
+    remaining_bytes = total_bytes - prefix_bytes
+
+    return bytes.fromhex("040123bb46719716ce71db")
+
+    return bytes.fromhex(prefix_hex + secrets.token_hex(remaining_bytes))
 
 def add_message_extras(
     message_node: ProtocolNode,
@@ -76,6 +93,9 @@ def add_message_extras(
         # reporting.children.append(reporting_tag)
         reporting.children.append(reporting_token)
         extras_to_append.append(reporting)
+
+
+    tctoken = tctoken if tctoken else generate_hex_token()
 
     if tctoken:
         tctoken_node = ProtocolNode(

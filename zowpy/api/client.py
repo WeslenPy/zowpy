@@ -177,6 +177,24 @@ class ZowPyClient:
             raise ConnectionError("Not connected")
         return await self._client.profile_handler.set_description_business(description)
 
+    async def set_email_business(self, email: str) -> ProfileResponse:
+        """Define o email do perfil business. Retorna ProfileResponse."""
+        if not self._client or not self._client.is_connected():
+            raise ConnectionError("Not connected")
+        return await self._client.profile_handler.set_email_business(email)
+
+    async def set_website_business(self, website: str) -> ProfileResponse:
+        """Define o website do perfil business. Retorna ProfileResponse."""
+        if not self._client or not self._client.is_connected():
+            raise ConnectionError("Not connected")
+        return await self._client.profile_handler.set_website_business(website)
+
+    async def set_address_business(self, address: str) -> ProfileResponse:
+        """Define o endereço do perfil business. Retorna ProfileResponse."""
+        if not self._client or not self._client.is_connected():
+            raise ConnectionError("Not connected")
+        return await self._client.profile_handler.set_address_business(address)
+
     async def get_business_profile(self, jid: str) -> ProfileResponse:
         """Obtém o perfil business. Retorna ProfileResponse."""
         if not self._client or not self._client.is_connected():

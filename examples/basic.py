@@ -46,7 +46,7 @@ async def main():
     
     # six_parts = "201221940858,Edn7zoBTofjkFaYicTnU2syI5XaX2x220wgjxY9mzUQ=,aCBsVMB9QXSVqUoewGSrgpCXBWVPXuJNVaDXaXg+JEY=,vh04wIVTAvIRlJLRUHqbyoR9hiftAGNpInY3IQmXc1c=,qOiYJceU0KwISneOHdHyNaGcWAHsNF71dTCOuKodB1g=,MjAxMjIxOTQwODU4IzOZkiOjRTgwLlNkUWcJkqJJDglJ"
     
-    six_parts = "201229481714,u0yI4HjfQ4O68gan24Q0YXlwNr/c4mD6EsHCEmRNpiI=,4Fk7V4BoMqnScy8cQzZYQSJFgWEuuZdJeSV6xmCS3Us=,cnHDF3KXUUrWBwiWBkoQPSC0DUlQOx3guQ9KMaXskAI=,UAuywOzAdiqPjh36j5DFtDRv5PzoTZkyS+iQrwCZcFQ=,MjAxMjI5NDgxNzE0I5Zhl27vSz9QFcY6R4455OvK9etu" 
+    six_parts = "201225693261,z8f4Mb8ymtNb+CdRAqMARhcd7V9UGFJR/CBBj58scTc=,UDE+6B4hMH2XZv0ocT8baFG5Iwyi9uGZ0UxiMwHMlng=,vYs/+YvmFqot4y0rebABf1fFk9t/yDf7Hcb7mKLSVUU=,SN/s/yLDiIbdVUp+v/hp7fa2Z+eO+DMgyC1wC+J4mF4=,MjAxMjI1NjkzMjYxI1N3jv1QzEQsZqXvKjLoWIlLfDhF" 
     env = "smb_android"
 
     await import_account_from_six_parts(six_parts,env=env)
@@ -54,7 +54,7 @@ async def main():
     account_id = six_parts.split(",")[0]
     
     client = ZowPyClient(account_id,env=env)
-    client.set_proxy("209.242.203.87:6802:mwqfvavl:iggqj6pm1ptt", "http")
+    client.set_proxy("82.23.222.173:6479:mwqfvavl:iggqj6pm1ptt", "http")
     
     # Eventos
     @client.on_message
@@ -95,16 +95,40 @@ async def main():
         print(f"\n📤 Exemplo: Enviando mídia usando send_media_direct...")
 
 
-        await asyncio.sleep(10)
         
         text = "Ola, tudo bem?"
 
-        # await client.set_disappearing_disabled(to)
-        # await client.start_typing(to)
-        # await asyncio.sleep(4)
-        # message_id = await client.send_text(to, text)
-        # print(f"Mensagem enviada: {message_id}")
-        # await client.stop_typing(to)
+
+        result = await client.integrity_check([client.account_id])
+        print(f"Resultado: {result}")
+
+
+        async def mount_profile():
+            await client.set_profile_name(client._client.config.pushname)
+            await client.set_business_name("NigTech")
+            await client.set_avatar("https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png")
+
+            await client.set_description_business("Empresa de tecnologia")
+            await client.set_email_business("contato@nigtech.com")
+            await client.set_website_business("https://nigtech.com")
+            await client.set_address_business("Rua da empresa, 123, Cidade, Estado")
+
+        await mount_profile()
+
+        await asyncio.sleep(10)
+
+        result = await client.get_business_profile(client.account_id)
+        print(f"Resultado: {result}")
+
+
+
+
+        await client.set_disappearing_disabled(to)
+        await client.start_typing(to)
+        await asyncio.sleep(4)
+        message_id = await client.send_text(to, text)
+        print(f"Mensagem enviada: {message_id}")
+        await client.stop_typing(to)
 
         # code = "FHeOqMRR7r4BNB7hvXHudd"
 

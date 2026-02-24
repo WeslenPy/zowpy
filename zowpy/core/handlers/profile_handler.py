@@ -593,16 +593,15 @@ class ProfileHandler:
             raise
 
 
-
-    async def set_description_business(self, description: str) -> ProfileResponse:
-        """Define a descrição do perfil business (w:biz)."""
+    async def set_update_business_profile(self, info_type: str, info_data: str) -> ProfileResponse:
+        """Atualiza o perfil business (w:biz)."""
         if not self._config or not self._config.is_business:
             return ProfileResponse.fail(
                 error_message="Conta não é business",
                 error_code="not_business",
             )
         try:
-            entity = UpdateBusinessProfileIqProtocolEntity(info_type="description", info_data=description)
+            entity = UpdateBusinessProfileIqProtocolEntity(info_type=info_type, info_data=info_data)
         except Exception as e:
             return ProfileResponse.fail(
                 error_message=str(e),
@@ -616,20 +615,19 @@ class ProfileHandler:
         async def on_iq_response(node: ProtocolNode) -> None:
             resp_type = node.get_attribute("type")
             if resp_type == "result":
-                logger.info("set_description_business (w:biz) success")
+                logger.info("set_update_business_profile (w:biz) success")
                 if not future.done():
-                    future.set_result(ProfileResponse.ok(message="Descrição do negócio atualizada"))
+                    future.set_result(ProfileResponse.ok(message="Perfil business atualizado"))
             else:
-                code = node.get_attribute("code") or node.get_attribute("reason") or "unknown"
+                code = node.get_attribute("code") or node.get_attribute("reason") or "unknown" 
                 reason = node.get_attribute("reason")
-                logger.error(f"set_description_business (w:biz) error: {code}")
+                logger.error(f"set_update_business_profile (w:biz) error: {code}")
                 if not future.done():
                     future.set_result(ProfileResponse.fail(
-                        error_message="Erro ao atualizar descrição do negócio",
+                        error_message="Erro ao atualizar perfil business",
                         error_code=code,
                         reason=reason,
                     ))
-
         timeout = 30.0
         try:
             self._iq_processor.register_callback(iq_id, on_iq_response, timeout=timeout)
@@ -638,7 +636,7 @@ class ProfileHandler:
         except asyncio.TimeoutError:
             self._iq_processor.unregister_callback(iq_id)
             return ProfileResponse.fail(
-                error_message="Timeout aguardando resposta do set_description_business",
+                error_message="Timeout aguardando resposta do set_update_business_profile",
                 error_code="timeout",
             )
         except Exception as e:
@@ -650,6 +648,21 @@ class ProfileHandler:
             )
 
 
+    async def set_description_business(self, description: str) -> ProfileResponse:
+        """Define a descrição do perfil business (w:biz)."""
+        return await self.set_update_business_profile(info_type="description", info_data=description)
+
+    async def set_email_business(self, email: str) -> ProfileResponse:
+        """Define o email do perfil business (w:biz)."""
+        return await self.set_update_business_profile(info_type="email", info_data=email)
+
+    async def set_website_business(self, website: str) -> ProfileResponse:
+        """Define o website do perfil business (w:biz)."""
+        return await self.set_update_business_profile(info_type="website", info_data=website)
+
+    async def set_address_business(self, address: str) -> ProfileResponse:
+        """Define o endereço do perfil business (w:biz)."""
+        return await self.set_update_business_profile(info_type="address", info_data=address)
 
 
     async def get_business_profile(self, jid: str) -> ProfileResponse:

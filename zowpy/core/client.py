@@ -1286,10 +1286,12 @@ class WhatsAppClient:
             self._notification_processor._send_ack = _send_ack_notification
             self._notification_processor._flush_prekeys = self._check_and_flush_prekeys
             self._notification_processor._get_keys = self._get_keys_for_recipient
-            if self.axolotl_manager and hasattr(self.axolotl_manager, "_store"):
-                async def _update_trusted_contact(jid: str, tctoken: bytes) -> None:
-                    await self.axolotl_manager._store.updateTrustedContact(jid, tctoken)
-                self._notification_processor._update_trusted_contact = _update_trusted_contact
+
+
+            async def _update_trusted_contact(jid: str, tctoken: bytes) -> None:
+                await self.axolotl_manager._store.updateTrustedContact(jid, tctoken)
+
+            self._notification_processor._update_trusted_contact = _update_trusted_contact
 
         # Atualiza GroupProcessor com send_ack
         if self._group_processor:
@@ -1896,7 +1898,17 @@ class WhatsAppClient:
         
         from ..protocol.entities.attributes import MessageMetaAttributes, ExtendedTextAttributes
         from ..protocol.entities import ExtendedTextMessageProtocolEntity
-        
+
+        normalized_to = Jid.normalize(to)
+
+        # Cria metadados
+        meta = MessageMetaAttributes(
+            id=message_id,
+            recipient=normalized_to,
+            timestamp=int(time.time()),
+            # participant=normalized_to
+        )
+
 
         if disappearing:
             # Cria atributos de texto estendido
@@ -1916,15 +1928,7 @@ class WhatsAppClient:
             )
 
 
-            normalized_to = Jid.normalize(to)
 
-            # Cria metadados
-            meta = MessageMetaAttributes(
-                id=message_id,
-                recipient=normalized_to,
-                timestamp=int(time.time()),
-                # participant=normalized_to
-            )
             
             # 3. Cria ExtendedTextMessageProtocolEntity
             message_entity = ExtendedTextMessageProtocolEntity(
@@ -1939,11 +1943,15 @@ class WhatsAppClient:
             logger.debug(f"Message node: {message_node}")
 
         else:
+
+            
             message_entity = TextMessageProtocolEntity(
                 to=to_jid,
                 text=text,
                 message_id=message_id,
+                message_meta_attributes=meta,
             )
+
             message_node = message_entity.to_protocol_node()
         
         # 5. Processa e envia mensagem
@@ -2846,7 +2854,7 @@ class WhatsAppClient:
                 if jid not in all_jids:
                     all_jids.append(jid)
 
-            # await self.contact_handler.trust_contact(success_jids)
+            await self.contact_handler.trust_contact(success_jids)
 
             for jid in all_jids:
                 new_contact = await self.axolotl_manager._store.isNewContact(jid)
@@ -3249,7 +3257,7 @@ class WhatsAppClient:
 
 
         
-        jids = [self.sender_id]
+        jids = []
 
         for recipient_id in recipient_ids:
             jid = f"{recipient_id.split('@')[0]}@{YowConstants.WHATSAPP_SERVER}"
@@ -3814,6 +3822,7 @@ class WhatsAppClient:
         Adiciona elementos extras à mensagem (reporting, tctoken, device-identity).
         Delega para message_extras_builder.
         """
+
         category = message_node.get_attribute("category")
         device_identity_b64 = None
         if self.profile and self.config and hasattr(self.config, "device_identity") and self.config.device_identity:

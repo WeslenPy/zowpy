@@ -232,15 +232,14 @@ class ContactHandler:
 
                 logger.info(f"On Contact Handler: {result.to_dict()}")
                 
-                # Confia nos contatos sincronizados com sucesso
-                # if in_numbers:
-                #     try:
-                #         # Converte números para JIDs completos para o TrustContact
-                #         jids_to_trust = [to_whatsapp_jid(num) for num in in_numbers]
-                #         asyncio.create_task(self.trust_contact(jids_to_trust))
-                #         logger.info(f"Solicitado trust para {len(jids_to_trust)} contatos")
-                #     except Exception as e:
-                #         logger.warning(f"Erro na automação de trust_contact: {e}")
+                if in_numbers:
+                    try:
+                        # Converte números para JIDs completos para o TrustContact
+                        jids_to_trust = [to_whatsapp_jid(num) for num in in_numbers]
+                        asyncio.create_task(self.trust_contact(jids_to_trust))
+                        logger.info(f"Solicitado trust para {len(jids_to_trust)} contatos")
+                    except Exception as e:
+                        logger.warning(f"Erro na automação de trust_contact: {e}")
 
                 logger.info(
                     f"Contatos sincronizados: version={result.version}, mode={result.mode}, lids={len(result.lids)}"
