@@ -56,11 +56,13 @@ class FFMpegOptionalModule:
 class Jid:
     @staticmethod
     def normalize(tos):
-        #这里的参数修改为逗号分隔的号码, 用于支持多个收件人
-
         numbers = tos.split(",")
         ret = []
         for number in numbers:
+            number = number.strip()
+            if f"@{YowConstants.LID_SUFFIX}" in number:
+                ret.append(number)
+                continue
             if '@' in number:
                 ret.append(number)                
                 continue
@@ -70,7 +72,6 @@ class Jid:
                         
             ret.append("%s@%s" % (number, YowConstants.WHATSAPP_SERVER))
 
-        #返回的也是处理过的逗号分隔账号信息
         return ','.join(ret)
         
 
@@ -97,10 +98,14 @@ class WATools:
 
     @staticmethod
     def normalizeJid(tos):
-
         numbers = tos.split(",")
         ret = []
         for number in numbers:
+            number = number.strip()
+            # Preserve LID: do not force @s.whatsapp.net
+            if f"@{YowConstants.LID_SUFFIX}" in number:
+                ret.append(number)
+                continue
             if '@' in number:
                 ret.append(number)                
                 continue
@@ -124,22 +129,24 @@ class WATools:
     def jidDecode(jid)->list[str,int,int]:
         """
         Decodifica um JID em um recipientId, recipientType e deviceId.
-        :param jid: JID a ser decodificado
+        Suporta JID (user@s.whatsapp.net), LID (user:device@lid) e formato completo (user.type:device).
+        :param jid: JID ou LID a ser decodificado
         :type jid: str
         :return: Lista contendo recipientId, recipientType e deviceId
         :rtype: list[str,int,int]
         """
         username = jid.split("@")[0]
-        nps = re.split(':|\\.',username)
+        nps = re.split(':|\\.', username)
         recipientId = nps[0]
 
         if len(recipientId) < 14:
-            recipientType = int(nps[1]) if len(nps)>=2 else 0
+            recipientType = int(nps[1]) if len(nps) >= 2 else 0
         else:
             recipientType = 1
 
-        deviceId = int(nps[2]) if len(nps)>=3 else 0
-        return [recipientId,recipientType,deviceId]
+        # LID user:device -> deviceId = second part; full form user.type:device -> deviceId = third part
+        deviceId = int(nps[2]) if len(nps) >= 3 else (int(nps[1]) if len(nps) >= 2 else 0)
+        return [recipientId, recipientType, deviceId]
 
     @staticmethod
     def jid_to_non_ad_string(jid: str) -> str:

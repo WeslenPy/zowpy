@@ -32,7 +32,8 @@ class Config(config.Config):
             c2dm_reg_id=None,
             fcm_creds=None,
             fcm_cat=None,
-            business_name=None
+            business_name=None,
+            phone_lid=None
     ):
         super(Config, self).__init__(1)
 
@@ -61,7 +62,7 @@ class Config(config.Config):
         self._manufacturer=manufacturer
         self._device_name=device_name
         self._device_model_type = device_model_type
-
+        self._phone_lid = phone_lid 
         self._c2dm_reg_id = c2dm_reg_id
         self._fcm_creds = fcm_creds
         self._fcm_cat = fcm_cat
@@ -322,3 +323,11 @@ class Config(config.Config):
     def is_business(self):
         return self.os_name in ["SMBA","SMBI"]
 
+    @property
+    def phone_lid(self):
+        return self._phone_lid
+
+    @phone_lid.setter
+    def phone_lid(self, value):
+        self._phone_lid = value
+    

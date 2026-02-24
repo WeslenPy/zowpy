@@ -10,6 +10,7 @@ from typing import Optional
 from loguru import logger
 
 from zowpy.utils.constants import YowConstants
+from zowpy.utils.jid import is_lid
 
 from ...protocol.structs import ProtocolNode
 from ...core.encryption.sender import EncryptionSender
@@ -41,7 +42,10 @@ class MessageBuilder:
         to: str,
         text: str,
         message_id: Optional[str] = None,
-        from_jid: Optional[str] = None
+        from_jid: Optional[str] = None,
+        sender_pn: Optional[str] = None,
+        notify: Optional[str] = None,
+        
     ) -> ProtocolNode:
         """
         Constrói mensagem de texto.
@@ -89,18 +93,20 @@ class MessageBuilder:
         )
         
         # 7. Cria node de mensagem completo
+        message_attrs = {
+            "to": to,
+            "type": "text",
+            "id": message_id
+        }
+
+
         message_node = ProtocolNode(
             tag="message",
-            attributes={
-                "to": to,
-                "type": "text",
-                "id": message_id
-            },
+            attributes=message_attrs,
             children=[enc_node, proto_node]
         )
         
-        if from_jid:
-            message_node.attributes["from"] = from_jid
+   
         
         logger.debug(f"Mensagem construída: id={message_id}, to={to}")
         return message_node
@@ -112,7 +118,9 @@ class MessageBuilder:
         media_data: bytes,
         caption: Optional[str] = None,
         message_id: Optional[str] = None,
-        from_jid: Optional[str] = None
+        from_jid: Optional[str] = None,
+        sender_pn: Optional[str] = None,
+        notify: Optional[str] = None,
     ) -> ProtocolNode:
         """
         Constrói mensagem de mídia.
@@ -156,18 +164,18 @@ class MessageBuilder:
         
         # 5. Cria node de mensagem
         # CORREÇÃO: zowsuplib não adiciona atributo "t"
+        message_attrs = {
+            "to": to,
+            "type": media_type,
+            "id": message_id
+        }
+
+        
         message_node = ProtocolNode(
             tag="message",
-            attributes={
-                "to": to,
-                "type": media_type,
-                "id": message_id
-            },
+            attributes=message_attrs,
             children=[enc_node, proto_node]
         )
-        
-        if from_jid:
-            message_node.attributes["from"] = from_jid
         
         logger.debug(f"Mensagem de mídia construída: id={message_id}, type={media_type}")
         return message_node

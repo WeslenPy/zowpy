@@ -8,6 +8,7 @@ from typing import List, Optional
 from loguru import logger
 
 from ...protocol.structs import ProtocolNode
+from ...utils.jid import is_lid
 
 
 class ReceiptBuilder:

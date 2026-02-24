@@ -13,7 +13,7 @@ from zowpy.core.import_account import import_account_from_six_parts
 from loguru import logger
 
 # Configura logging
-logger.add("logs/tc_token.log", level="DEBUG")
+logger.add("logs/lib_migration_now.log", level="DEBUG")
 
 
 async def main():
@@ -46,7 +46,7 @@ async def main():
     
     # six_parts = "201221940858,Edn7zoBTofjkFaYicTnU2syI5XaX2x220wgjxY9mzUQ=,aCBsVMB9QXSVqUoewGSrgpCXBWVPXuJNVaDXaXg+JEY=,vh04wIVTAvIRlJLRUHqbyoR9hiftAGNpInY3IQmXc1c=,qOiYJceU0KwISneOHdHyNaGcWAHsNF71dTCOuKodB1g=,MjAxMjIxOTQwODU4IzOZkiOjRTgwLlNkUWcJkqJJDglJ"
     
-    six_parts = "201229481714,u0yI4HjfQ4O68gan24Q0YXlwNr/c4mD6EsHCEmRNpiI=,4Fk7V4BoMqnScy8cQzZYQSJFgWEuuZdJeSV6xmCS3Us=,cnHDF3KXUUrWBwiWBkoQPSC0DUlQOx3guQ9KMaXskAI=,UAuywOzAdiqPjh36j5DFtDRv5PzoTZkyS+iQrwCZcFQ=,MjAxMjI5NDgxNzE0I5Zhl27vSz9QFcY6R4455OvK9etu" 
+    six_parts = "201277242658,vVhTpqeBjD5gaSqOATTpq7HLcqvPVPYoSbHOvSBGa34=,ENPZSxT2d5mNgxbJjBrLBaAKYPilM84RKYLapHAHLHU=,VmSFe8t9qLPrrHe5X0Zbb66HE7kedSTa9VVGOAGEVkg=,UGHL/lOloaZw30MUQnv9RqN1RCWYbR4nP42vBFpUuEA=,MjAxMjc3MjQyNjU4I3ACevAX5df9eqDbZ3SywygvFhPL" 
     env = "smb_android"
 
     await import_account_from_six_parts(six_parts,env=env)
@@ -87,24 +87,26 @@ async def main():
         
         # Envia mensagem inicial (opcional)
         # to = "120363425653832734"
-        to = "5511930023692"
-        # to = "559885700260"
+        # to = "5511930023692"
+        to = "559885700260"
+
         # to = "201223091608"
         print(f" Enviando mensagem para {to}...")
 
         print(f"\n📤 Exemplo: Enviando mídia usando send_media_direct...")
 
 
-        await asyncio.sleep(10)
-        
         text = "Ola, tudo bem?"
 
         # await client.set_disappearing_disabled(to)
-        # await client.start_typing(to)
-        # await asyncio.sleep(4)
-        # message_id = await client.send_text(to, text)
-        # print(f"Mensagem enviada: {message_id}")
-        # await client.stop_typing(to)
+        await client.start_typing(to)
+        await asyncio.sleep(4)
+        message_id = await client.send_text(to, text)
+        print(f"Mensagem enviada: {message_id}")
+        await client.stop_typing(to)
+
+        result= await client.integrity_check([to])
+        print(f"Resultado: {result}")
 
         # code = "FHeOqMRR7r4BNB7hvXHudd"
 

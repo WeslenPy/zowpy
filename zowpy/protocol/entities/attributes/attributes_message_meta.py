@@ -33,6 +33,7 @@ class MessageMetaAttributes:
         edit: Optional[str] = None,
         sender_pn: Optional[str] = None,
         from_pn: Optional[str] = None,
+        from_lid: Optional[str] = None,
     ):
         """
         Inicializa MessageMetaAttributes.
@@ -67,7 +68,7 @@ class MessageMetaAttributes:
         self.category = category
         self.phash = phash
         self.edit = edit
-
+        self.from_lid = from_lid
     def to_dict(self) -> dict:
         """Retorna atributos para o node <message>."""
         attrs = {}
@@ -84,6 +85,7 @@ class MessageMetaAttributes:
         if self.edit: attrs["edit"] = self.edit
         if self.sender_pn: attrs["sender_pn"] = self.sender_pn
         if self.from_pn: attrs["from_pn"] = self.from_pn
+        if self.from_lid: attrs["from"] = self.from_lid
         return attrs
     
     @staticmethod
@@ -118,6 +120,7 @@ class MessageMetaAttributes:
         return MessageMetaAttributes(
             id=node.attributes.get("id"),
             sender=node.attributes.get("from"),
+            from_lid=node.attributes.get("from"),
             recipient=node.attributes.get("to") if to is None else to,
             notify=node.attributes.get("notify"),
             timestamp=node.attributes.get("t"),
@@ -129,6 +132,6 @@ class MessageMetaAttributes:
             phash=node.attributes.get("phash"),
             edit=node.attributes.get("edit"),
             sender_pn=sender_pn,
-            from_pn=from_pn
+            from_pn=from_pn,
         )
 

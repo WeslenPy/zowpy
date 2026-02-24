@@ -53,7 +53,7 @@ from ..protocol.presence import AsyncPresenceHandler
 from ..protocol.auth import AsyncAuthHandler
 from ..protocol.structs import ProtocolNode
 from ..db.manager import AxolotlManager
-from ..utils.jid import normalize, to_whatsapp_jid
+from ..utils.jid import normalize, to_whatsapp_jid, is_lid
 from ..axolotl.protocol.whispermessage import WhisperMessage
 from ..axolotl.protocol.prekeywhispermessage import PreKeyWhisperMessage
 
@@ -140,7 +140,7 @@ class WhatsAppClient:
             proxy: Configuração de proxy (opcional)
         """
         self.account_id = normalize(account_id)
-        self.sender_id = to_whatsapp_jid( self.account_id.split('@')[0])
+        self.sender_pn = to_whatsapp_jid( self.account_id.split('@')[0])
 
 
         self.endpoint = endpoint or (f"g.whatsapp.net", 443)#{random.randint(1, 16)}
@@ -1042,6 +1042,10 @@ class WhatsAppClient:
             # Processa node
             if node.tag == "success":
                 logger.info("✓ <success> recebido do servidor")
+                my_lid =node.get_attribute("lid")
+                self.config.phone_lid = my_lid
+                await self.profile.write_config(self.config)
+
                 return  # Sucesso!
             elif node.tag == "failure" and not ( self._connected and self._authenticated):
                 await self.auth_handler.handle_failure(node)
@@ -1534,6 +1538,7 @@ class WhatsAppClient:
         
         
         to_jid = to_whatsapp_jid(to, is_group)
+        resolved_to = await self.resolve_recipient_for_send(to)
 
         is_new_contact = await self.axolotl_manager._store.isNewContact(to_jid)
 
@@ -1557,7 +1562,7 @@ class WhatsAppClient:
                             await self.axolotl_manager._store.addContact(jid,lid)
                             await self.axolotl_manager._store.addLidMapping(jid,lid)
 
-                    return await self._send_text_direct(to=to, text=text, message_id=message_id,
+                    return await self._send_text_direct(to=to_jid, text=text, message_id=message_id,
                                                         quoted=quoted,
                                                         options=options)
                 except Exception as e:
@@ -1570,14 +1575,14 @@ class WhatsAppClient:
                     raise
             else:
                 logger.warning("ContactHandler não disponível, enviando sem sincronizar")
-                return await self._send_text_direct(to=to, text=text, 
+                return await self._send_text_direct(to=to_jid, text=text, 
                                                     message_id=message_id, 
                                                     quoted=quoted,
                                                     options=options)    
         else:
             logger.debug(f"Contato {normalized_jid} já existe nos contatos")
             # Aplica rate limiting mesmo para contatos conhecidos
-            return await self._send_text_direct(to=to, 
+            return await self._send_text_direct(to=to_jid, 
                                                 text=text, message_id=message_id, 
                                                 quoted=quoted,
                                                 options=options)
@@ -1666,7 +1671,7 @@ class WhatsAppClient:
 
 
     async def delete_message(self,to:str,message_id:str):
-        jid = to_whatsapp_jid(to)
+        jid = await self.resolve_recipient_for_send(to)
 
 
         message_key_attr = MessageKeyAttributes(
@@ -1702,7 +1707,7 @@ class WhatsAppClient:
     async def edit_message(self,to:str,message_id:str,text:str):
 
 
-        jid = to_whatsapp_jid(to)
+        jid = await self.resolve_recipient_for_send(to)
 
         context_info = self._prepare_context_info()
 
@@ -1816,17 +1821,16 @@ class WhatsAppClient:
         if not self._authenticated:
             raise RuntimeError("Not authenticated")
         
-        # Normaliza e corrige JID de grupo se necessário
         to = self._normalize_and_fix_group_jid(to)
+        to_jid = await self.resolve_recipient_for_send(to)
         is_group = self._is_group_jid(to)
-        to_jid = to_whatsapp_jid(to, is_group)
         
         if not message_id:
             raise ValueError("message_id is required")
         
         message_meta_attrs = MessageMetaAttributes(
             # id=message_id,
-            recipient=to,
+            recipient=to_jid,
             fromMe=from_me,
             timestamp=int(time.time())
         )
@@ -1878,10 +1882,9 @@ class WhatsAppClient:
         if not self._authenticated:
             raise RuntimeError("Not authenticated")
         
-        # Normaliza e corrige JID de grupo se necessário
-        to = self._normalize_and_fix_group_jid(to)
-        is_group = self._is_group_jid(to)
-        to_jid = to_whatsapp_jid(to, is_group)
+        target_jid = self._normalize_and_fix_group_jid(to)
+        is_group = self._is_group_jid(target_jid)
+        to_jid = await self.resolve_recipient_for_send(target_jid)
         
         # 1. Gera ID se não fornecido
         if not message_id:
@@ -1897,8 +1900,9 @@ class WhatsAppClient:
         from ..protocol.entities.attributes import MessageMetaAttributes, ExtendedTextAttributes
         from ..protocol.entities import ExtendedTextMessageProtocolEntity
         
+        normalized_to = Jid.normalize(to)
 
-        if disappearing:
+        if not disappearing:
             # Cria atributos de texto estendido
             extended_text_attrs = ExtendedTextAttributes(
                 text=text,
@@ -1915,13 +1919,10 @@ class WhatsAppClient:
                 invite_link_group_type_v2=options.get("invite_link_group_type_v2",0),
             )
 
-
-            normalized_to = Jid.normalize(to)
-
             # Cria metadados
             meta = MessageMetaAttributes(
                 id=message_id,
-                recipient=normalized_to,
+                recipient=target_jid,
                 timestamp=int(time.time()),
                 # participant=normalized_to
             )
@@ -1938,14 +1939,50 @@ class WhatsAppClient:
 
             logger.debug(f"Message node: {message_node}")
 
-        else:
-            message_entity = TextMessageProtocolEntity(
-                to=to_jid,
-                text=text,
-                message_id=message_id,
-            )
-            message_node = message_entity.to_protocol_node()
+
         
+
+        else:
+            # message_entity = TextMessageProtocolEntity(
+            #     to=to_jid,
+            #     text=text,
+            #     message_id=message_id,
+            # )
+
+            from ..protocol.entities.attributes import (
+                    ContextInfoAttributes, 
+                )
+        
+            context_info =ContextInfoAttributes()
+            context_info.entry_point_conversion_source = "non_contact"
+            context_info.entry_point_conversion_app = "whatsapp"
+            context_info.entry_point_conversion_delay_seconds = random.randint(4, 8)
+
+            extended_text_attrs = ExtendedTextAttributes(
+                text=text,
+                preview_type=0,
+                context_info=context_info,
+                invite_link_group_type_v2=0,
+            )            
+            meta = MessageMetaAttributes(
+                id=message_id,
+                recipient=normalized_to,
+                timestamp=int(time.time()),
+                # participant=normalized_to
+            )
+
+            # 3. Cria ExtendedTextMessageProtocolEntity
+            message_entity = ExtendedTextMessageProtocolEntity(
+                extended_text_attributes=extended_text_attrs,
+                meta_attributes=meta,
+                message_id=message_id,
+                message_secret=b"",
+            )
+            
+            # 4. Converte para ProtocolNode (isso já gera o <proto> internamente)
+            message_node = message_entity.to_protocol_node()
+
+
         # 5. Processa e envia mensagem
         await self.process_plaintext_node_and_send(message_node)
         
@@ -2640,6 +2677,7 @@ class WhatsAppClient:
         Fluxo comum: normaliza to, upload_and_build, monta node via callback, envia.
         """
         to = self._normalize_and_fix_group_jid(to)
+        to = await self.resolve_recipient_for_send(to)
         from_jid = self._own_jid()
         upload_result = await builder.upload_and_build(to, from_jid)
         if not message_id:
@@ -2661,7 +2699,25 @@ class WhatsAppClient:
         - Tem >= 15 caracteres
         """
         return "-" in jid or ("." not in jid and ":" not in jid and len(jid) >= 15) or f"@{YowConstants.WHATSAPP_GROUP_SERVER}" in jid or jid == "status@broadcast"
-    
+
+    async def resolve_recipient_for_send(self, to: str) -> str:
+        """
+        Resolve o destinatário para envio usando apenas o lid_map.
+        Grupos permanecem JID; contatos 1:1 usam LID quando existir no lid_map, senão JID.
+        """
+        if not to:
+            raise ValueError("recipient is required")
+        single = WATools.normalizeJid(to).split(",")[0].strip()
+        if not single:
+            raise ValueError("Invalid recipient")
+        if self._is_group_jid(single) or self._is_group_jid(to):
+            return to_whatsapp_jid(to, is_group=True)
+        if is_lid(single):
+            return single
+        jid = to_whatsapp_jid(to, is_group=False)
+        lid = await self.axolotl_manager._store.getLidMappingByJid(jid)
+        return lid if lid else jid
+
     def _normalize_and_fix_group_jid(self, jid: str) -> str:
         """
         Normaliza e corrige JID de grupo se necessário.
@@ -2846,7 +2902,7 @@ class WhatsAppClient:
                 if jid not in all_jids:
                     all_jids.append(jid)
 
-            # await self.contact_handler.trust_contact(success_jids)
+            await self.contact_handler.trust_contact(success_jids)
 
             for jid in all_jids:
                 new_contact = await self.axolotl_manager._store.isNewContact(jid)
@@ -2898,7 +2954,15 @@ class WhatsAppClient:
         Returns:
             Tuple[List[str], Dict[str, Exception]]: (success_jids, error_jids)
         """
-        recipients_ids = [jid.split('@')[0] for jid in jids]
+        recipients_ids = []
+        for jid in jids:
+            jid_normalized = WATools.jid_to_non_ad_string(jid)
+            if jid_normalized not in recipients_ids:
+                recipients_ids.append(jid_normalized)
+
+
+
+        logger.info(f"Recipients ids: {recipients_ids}")
 
         success_jids, error_jids = await self._get_keys_for_recipient(recipients_ids, reason=reason)
         
@@ -2939,6 +3003,11 @@ class WhatsAppClient:
         
         # Obtém tctoken se necessário
         target_jid = message_node.get_attribute("to")
+        is_group = self._is_group_jid(target_jid)
+
+
+
+
         tctoken = await self.axolotl_manager._store.getTcToken(target_jid)
         
         enc_entities = []
@@ -3020,6 +3089,7 @@ class WhatsAppClient:
             # CORREÇÃO: usa to_jid_for_node (JID completo) no formato do zowsuplib
             enc_node = EncEntity.create_enc_node(
                 enc_type=enc_type,
+
                 ciphertext=ciphertext.serialize(),
                 type_message =message_type,
                 mediatype=mediatype,
@@ -3031,6 +3101,7 @@ class WhatsAppClient:
         
         # Constrói node final usando EncryptedMessageBuilder
         message_node = EncryptedMessageBuilder.build_encrypted_message(
+            is_group=is_group,
             message_type = message_type,
             message_node=message_node,
             enc_entities=enc_entities,
@@ -3249,7 +3320,7 @@ class WhatsAppClient:
 
 
         
-        jids = [self.sender_id]
+        jids = []
 
         for recipient_id in recipient_ids:
             jid = f"{recipient_id.split('@')[0]}@{YowConstants.WHATSAPP_SERVER}"
@@ -3545,6 +3616,8 @@ class WhatsAppClient:
                 # Verifica addressing_mode para determinar qual atributo usar
                 addressing_mode = group_node.get_attribute("addressing_mode")
                 value_name = "phone_number" if addressing_mode == "lid" else "jid"
+
+                
                 
                 # Extrai participantes
                 for child in group_node.children:
@@ -3840,8 +3913,7 @@ class WhatsAppClient:
         
         # Normaliza JID
         is_group = self._is_group_jid(to)
-
-        to_jid = to_whatsapp_jid(to,is_group)
+        to_jid = await self.resolve_recipient_for_send(to)
 
         participant = to_whatsapp_jid(self.account_id)
 
@@ -3873,7 +3945,7 @@ class WhatsAppClient:
         
       # Normaliza JID
         is_group = self._is_group_jid(to)
-        to_jid = to_whatsapp_jid(to,is_group)
+        to_jid = await self.resolve_recipient_for_send(to)
         participant = to_whatsapp_jid(self.account_id)
 
         logger.debug(f"Parando indicador de typing para {to_jid} e participant {participant}")

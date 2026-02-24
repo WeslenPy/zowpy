@@ -53,7 +53,8 @@ class LidMap(Model,BaseModel):
 
     @classmethod
     async def get_lid_mapping_by_jid(cls, session: AsyncSession, jid: str):
-        query = select(cls.lid,cls.pn).where(cls.pn == jid)
+        """Return the LID string for the given JID, or None if not in map."""
+        query = select(cls.lid).where(cls.pn == jid)
         result = await session.execute(query)
         return result.scalar_one_or_none()
 

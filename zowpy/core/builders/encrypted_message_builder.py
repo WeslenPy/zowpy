@@ -19,6 +19,7 @@ class EncryptedMessageBuilder:
     
     @staticmethod
     def build_encrypted_message(
+        is_group: bool,
         message_node: ProtocolNode,
         enc_entities: List[ProtocolNode],
         message_type:str = "text",
@@ -112,12 +113,19 @@ class EncryptedMessageBuilder:
             if message_type !="reaction":
                 for enc_entity in enc_entities:
                     # Ignora SKMSG já processado
+
+                    logger.debug(f"Enc entity: {enc_entity}")
+
                     if enc_entity == skmsg_entity:
                         continue
                     
                     # Se enc_entity é <to> node, adiciona ao participants (sender key distribution)
-                    if enc_entity.tag == "to":
+                    if enc_entity.tag == "to" :
                         participants_node.children.append(enc_entity)
+                        # if is_group:
+                        # else:
+                            # message_node.children.append(enc_entity.get_child("enc"))
+
                     elif enc_entity.tag == "enc":
                         # Outros tipos de enc sem <to> wrapper não devem acontecer em mensagens normais
                         enc_type = enc_entity.get_attribute("type")
@@ -127,7 +135,7 @@ class EncryptedMessageBuilder:
                         logger.warning(f"Enc entity tipo '{enc_entity.tag}' não esperado em mensagem normal. Ignorando.")
                 
                 # Adiciona participants node se tiver children
-                if participants_node.children:
+                if participants_node.children :
                     message_node.children.append(participants_node)
 
             else:

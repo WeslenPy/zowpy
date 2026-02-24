@@ -5,10 +5,14 @@ Baseado em MessageProtocolEntity do zowsuplib.
 """
 
 import time
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, TYPE_CHECKING
 from dataclasses import dataclass
 
+if TYPE_CHECKING:
+    from ..structs import ProtocolNode
+
 from zowpy.protocol.entities.attributes.attributes_message import MessageAttributes
+from zowpy.utils.jid import is_lid
 from .base import ProtocolEntity
 from .enc import EncProtocolEntity
 from .attributes.attributes_message_meta import MessageMetaAttributes
@@ -29,6 +33,8 @@ class MessageProtocolEntity(ProtocolEntity):
         from_jid: Optional[str] = None,
         timestamp: Optional[int] = None,
         participant: Optional[str] = None,
+        sender_pn: Optional[str] = None,
+        notify: Optional[str] = None,
         children: Optional[List[ProtocolEntity]] = None
     ):
         """
@@ -41,6 +47,8 @@ class MessageProtocolEntity(ProtocolEntity):
             from_jid: JID do remetente (opcional)
             timestamp: Timestamp (gerado se None)
             participant: JID do participante (opcional, para grupos)
+            sender_pn: PN do remetente (opcional)
+            notify: Notificação (opcional)
             children: Filhos do node (enc, proto, etc.)
         """
         if not message_id:
@@ -54,17 +62,9 @@ class MessageProtocolEntity(ProtocolEntity):
             "id": message_id,
         }
 
-
         logger.debug(f"Timestamp: {timestamp}")
 
-        # if timestamp:
-        #     attributes["t"] = str(timestamp)
-        
-        if from_jid:
-            attributes["from"] = from_jid
-            
-        if participant:
-            attributes["participant"] = participant
+        attributes["t"] = timestamp or str(int(time.time()))
         
         super().__init__(
             tag="message",
@@ -211,6 +211,7 @@ class ExtendedTextMessageProtocolEntity(ProtomessageProtocolEntity):
         extended_text_attributes: Any,  # ExtendedTextAttributes
         meta_attributes: MessageMetaAttributes,
         message_id:Optional[str]=None,
+        message_secret:Optional[bytes]=None,
     ):
         """
         Cria mensagem de texto estendida.
@@ -223,7 +224,8 @@ class ExtendedTextMessageProtocolEntity(ProtomessageProtocolEntity):
         
         # Cria MessageAttributes envolvendo os atributos de texto estendido
         self.message_attributes = MessageAttributes(
-            extended_text=extended_text_attributes
+            extended_text=extended_text_attributes,
+            message_secret=message_secret
         )
         
         # Inicializa via ProtomessageProtocolEntity
@@ -231,6 +233,7 @@ class ExtendedTextMessageProtocolEntity(ProtomessageProtocolEntity):
             message_attributes=self.message_attributes,
             message_meta_attributes=meta_attributes,
             message_id=message_id,
+
         )
         
         self.extended_text_attributes = extended_text_attributes

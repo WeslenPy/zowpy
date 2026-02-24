@@ -18,9 +18,16 @@ def is_group_jid( jid: str) -> bool:
     
 
 
+def is_lid(jid: str) -> bool:
+    """Return True if jid is a LID (ends with @lid)."""
+    return bool(jid and (jid.endswith(f"@{YowConstants.LID_SUFFIX}") or jid.rstrip().endswith(f"@{YowConstants.LID_SUFFIX}")))
+
+
 def normalize(jid: str) -> Optional[str]:
     """
     Normaliza JID.
+    
+    Preserva endereços LID (@lid); não converte LID em JID.
     
     Args:
         jid: JID para normalizar
@@ -30,7 +37,10 @@ def normalize(jid: str) -> Optional[str]:
     """
     if not jid:
         return None
-    
+    jid = jid.strip()
+    # Preservar LID: não alterar sufixo @lid
+    if f"@{YowConstants.LID_SUFFIX}" in jid:
+        return jid
     # Remove @s.whatsapp.net se presente
     jid = jid.replace(f"@{YowConstants.WHATSAPP_SERVER}", "").replace("+", "")
     jid = jid.replace(f"@{YowConstants.WHATSAPP_GROUP_SERVER}", "")
@@ -48,13 +58,21 @@ def to_whatsapp_jid(jid: str, is_group: bool = False) -> str:
     """
     Converte JID para formato WhatsApp.
     
+    Preserva LID (@lid); não converte LID em JID.
+    
     Args:
         jid: JID para converter
         is_group: Se é grupo
     
     Returns:
-        JID no formato WhatsApp
+        JID no formato WhatsApp ou LID inalterado
     """
+    if not jid:
+        raise ValueError("Invalid JID")
+    jid = jid.strip()
+    # Preservar LID
+    if is_lid(jid):
+        return jid
     jid = normalize(jid)
     if not jid:
         raise ValueError("Invalid JID")

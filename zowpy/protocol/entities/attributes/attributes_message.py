@@ -98,7 +98,7 @@ class MessageAttributes:
         self._protocol = protocol
         self._fromMe = fromMe
         self._to = to
-        self._message_secret = message_secret or os.urandom(32)
+        self._message_secret = message_secret if isinstance(message_secret, bytes) else  os.urandom(32)
     def __str__(self):
         attrs = []
         if self.conversation is not None:

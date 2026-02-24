@@ -361,7 +361,9 @@ class AttributesConverter:
         message = Message()
         mctx = MessageContextInfo()
 
-        mctx.message_secret = message_attributes.message_secret
+        if message_attributes.message_secret is not None and message_attributes.message_secret != b'':
+            mctx.message_secret = message_attributes.message_secret
+
         # mctx.device_list_metadata.sender_timestamp = int(time.time())
         # mctx.device_list_metadata_version = 2
         #mctx.device_list_metadata.sender_account_type = 0
@@ -369,7 +371,8 @@ class AttributesConverter:
         
 
         if message_attributes.reaction is None:
-            message.message_context_info.MergeFrom(mctx)
+            if mctx.message_secret is not None and mctx.message_secret != b'':
+                message.message_context_info.MergeFrom(mctx)
 
         if message_attributes.conversation:
             message.conversation = message_attributes.conversation
