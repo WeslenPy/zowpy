@@ -108,10 +108,15 @@ class ZowPyClient:
                 error_data = args[0] if args else kwargs
                 await self._events.emit("connection:error", error_data)
             
+            async def forward_notification(*args, **kwargs):
+                notification_data = args[0] if args else kwargs
+                await self._events.emit("notification", notification_data)
+            
             self._client.events.on("connected", forward_connected)
             self._client.events.on("disconnected", forward_disconnected)
             self._client.events.on("message", forward_message)
             self._client.events.on("connection:error", forward_connection_error)
+            self._client.events.on("notification", forward_notification)
             
             await self._client.connect()
             
@@ -321,6 +326,16 @@ class ZowPyClient:
         message_id = await self._client.send_reaction(to=to, reaction="",
                                                       message_id=message_id,
                                                       from_me=from_me)
+        
+        return message_id
+
+
+    async def send_empty_message(self, to: str) -> str:
+        if not self._client or not self._client.is_connected():
+            raise ConnectionError("Not connected")
+        
+        # Envia mensagem via cliente
+        message_id = await self._client._send_pkmsg_for_invalid_message(to=to)
         
         return message_id
 
@@ -625,8 +640,12 @@ class ZowPyClient:
 
         for number in numbers:
             is_new_contact =  await self._client.axolotl_manager._store.isNewContact(number)
+            
             if is_new_contact:
                 new_sync.append(number)
+
+
+        logger.info(f"Sincronizando {len(new_sync)} contatos")
 
         if len(new_sync) > 0:
             result = await self._client.contact_handler.sync_contacts(new_sync, mode, context)
@@ -660,6 +679,28 @@ class ZowPyClient:
         
         result = await self._client.integrity_handler.integrity_check(phones)
         return result
+
+    async def get_tc_token_for_contact(self, contact: str) -> Optional[bytes]:
+        """
+        Retorna o tctoken (trusted contact) armazenado para o contato, ou None.
+
+        Args:
+            contact: Número ou JID PN (ex.: 5511999999999 ou 5511999999999@s.whatsapp.net)
+
+        Returns:
+            Bytes do token ou None se não houver registro confiável
+        """
+        if not self._client or not self._client.axolotl_manager:
+            raise ConnectionError("Cliente não conectado")
+        return await self._client.get_tc_token_for_contact(contact)
+
+    async def has_tc_token_for_contact(self, contact: str) -> bool:
+        """
+        True se existe tctoken salvo localmente para o contato.
+        """
+        if not self._client or not self._client.axolotl_manager:
+            raise ConnectionError("Cliente não conectado")
+        return await self._client.has_tc_token_for_contact(contact)
 
 
     async def sync_devices(self, jids: list, mode: str = "full", context: str = "interactive") -> list:
@@ -826,6 +867,10 @@ class ZowPyClient:
     def on_disconnected(self, handler: Callable) -> None:
         """Registra handler de desconexão"""
         self._events.on("disconnected", handler)
+    
+    def on_notification(self, handler: Callable) -> None:
+        """Registra handler de notificação (ex.: privacy_token, encrypt, etc.)."""
+        self._events.on("notification", handler)
 
 
 

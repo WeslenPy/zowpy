@@ -1277,6 +1277,11 @@ class WhatsAppClient:
             self._encryption_receiver._get_registration_id_fn = self._get_registration_id
 
         # Atualiza NotificationProcessor com funções disponíveis (send_ack, flush_prekeys, get_keys, update_trusted_contact)
+
+
+        async def _update_trusted_contact(jid: str, tctoken: bytes) -> None:
+            await self.axolotl_manager._store.updateTrustedContact(jid, tctoken)
+
         if self._notification_processor:
             async def _send_ack_notification(
                 nid: str, _cls: str, ntype: str, from_jid: str, participant: Optional[str] = None
@@ -1287,11 +1292,12 @@ class WhatsAppClient:
             self._notification_processor._flush_prekeys = self._check_and_flush_prekeys
             self._notification_processor._get_keys = self._get_keys_for_recipient
 
-
-            async def _update_trusted_contact(jid: str, tctoken: bytes) -> None:
-                await self.axolotl_manager._store.updateTrustedContact(jid, tctoken)
-
             self._notification_processor._update_trusted_contact = _update_trusted_contact
+
+
+        if self.contact_handler:
+            self.contact_handler._update_trusted_contact = _update_trusted_contact
+
 
         # Atualiza GroupProcessor com send_ack
         if self._group_processor:
@@ -1910,7 +1916,7 @@ class WhatsAppClient:
         )
 
 
-        if disappearing:
+        if not disappearing:
             # Cria atributos de texto estendido
             extended_text_attrs = ExtendedTextAttributes(
                 text=text,
@@ -2710,6 +2716,51 @@ class WhatsAppClient:
             return f"{jid}@{YowConstants.WHATSAPP_GROUP_SERVER}"
         else:
             return f"{jid}@{YowConstants.WHATSAPP_SERVER}"
+
+    def _user_jid_for_tc_token(self, contact: str) -> str:
+        """
+        Converte número ou JID PN em JID no formato users (não grupos),
+        para consulta de trusted contact / tctoken no store.
+        """
+        c = (contact or "").strip()
+        if not c:
+            raise ValueError("contact is required")
+        if "@" in c:
+            if (
+                f"@{YowConstants.WHATSAPP_GROUP_SERVER}" in c
+                or c.endswith("@broadcast")
+            ):
+                raise ValueError(
+                    "tctoken aplica-se apenas a contatos individuais, não grupos"
+                )
+            return c
+        n = normalize(c)
+        if not n:
+            raise ValueError("invalid contact")
+        return f"{n}@{YowConstants.WHATSAPP_SERVER}"
+
+    async def get_tc_token_for_contact(self, contact: str) -> Optional[bytes]:
+        """
+        Retorna o tctoken (trusted contact) armazenado localmente para o contato,
+        ou None se não existir.
+
+        Args:
+            contact: Número (ex.: 5511999999999) ou JID PN (ex.: 5511999999999@s.whatsapp.net)
+
+        Returns:
+            Bytes do token ou None
+        """
+        jid = self._user_jid_for_tc_token(contact)
+        if not self.axolotl_manager:
+            return None
+        return await self.axolotl_manager._store.getTcToken(jid)
+
+    async def has_tc_token_for_contact(self, contact: str) -> bool:
+        """
+        Indica se existe tctoken salvo para o contato (ex.: após notification privacy_token).
+        """
+        token = await self.get_tc_token_for_contact(contact)
+        return bool(token)
     
     async def _check_account_restriction(self) -> bool:
         """
@@ -3829,7 +3880,7 @@ class WhatsAppClient:
             device_identity_b64 = self.config.device_identity
 
 
-        build_message_extras(message_node, message_secret, proto_bytes, sender_jid, category, tctoken=tctoken, device_identity_b64=device_identity_b64)
+        return build_message_extras(message_node=message_node, message_secret=message_secret, proto_bytes=proto_bytes, sender_jid=sender_jid, category=category, tctoken=tctoken, device_identity_b64=device_identity_b64)
     
 
 
@@ -4366,9 +4417,9 @@ class WhatsAppClient:
     
     async def _send_pkmsg_for_invalid_message(
         self,
-        from_jid: str,
-        message_id: str,
-        participant: Optional[str] = None
+        to: str,
+        participant: Optional[str] = None,
+        message_id: Optional[str] = None,
     ) -> None:
         """
         Envia PKMSG para sincronização quando InvalidMessage após múltiplas tentativas.
@@ -4385,9 +4436,8 @@ class WhatsAppClient:
         """
         from ..utils.tools import WATools
         from ..protocol.entities.message import TextMessageProtocolEntity
-        from ..protocol.entities.attributes.attributes_message import MessageMetaAttributes
 
-        normalized_sender_jid = WATools.normalizeJid(from_jid)
+        normalized_sender_jid = WATools.normalizeJid(to)
         recipient, _, device_id = WATools.jidDecode(normalized_sender_jid)
         future: Optional[asyncio.Future] = None
 
@@ -4403,20 +4453,21 @@ class WhatsAppClient:
 
         try:
             logger.info(f"Enviando PKMSG para sincronização com {normalized_sender_jid} (mensagem {message_id})")
+            
+            
+            message_id = message_id or ProtocolNode._generateId()
 
             sync_message_id = f"sync_{message_id}_{int(time.time())}"
             meta = MessageMetaAttributes(
                 id=sync_message_id,
                 recipient=normalized_sender_jid,
-                timestamp=int(time.time())
+                timestamp=int(time.time()),
+                participant=participant
             )
-            message_entity = TextMessageProtocolEntity(to=normalized_sender_jid, text="", message_meta_attributes=meta)
+            message_entity = TextMessageProtocolEntity(to=normalized_sender_jid, text="", message_meta_attributes=meta, message_id=message_id)
             message_node = message_entity.to_protocol_node()
-            message_node.setAttribute("to", normalized_sender_jid)
-            message_node.setAttribute("type", "text")
-            if participant:
-                message_node.setAttribute("participant", participant)
-
+            
+            message_secret = message_entity.message_secret
             proto_child = message_node.get_child("proto")
             if not proto_child:
                 raise ValueError("Node de mensagem deve ter <proto>")
@@ -4443,7 +4494,7 @@ class WhatsAppClient:
                         logger.warning(f"Erro ao restaurar sessão: {e}")
 
             try:
-                success_jids, error_jids = await self._get_keys_for_recipient(from_jid, reason=None)
+                success_jids, error_jids = await self._get_keys_for_recipient(to, reason=None)
                 if not success_jids:
                     await restore_session()
                     if not future.done():
@@ -4466,7 +4517,7 @@ class WhatsAppClient:
 
                 
                 await self._add_message_extras(message_node,
-                    message_secret=message_node.message_secret,
+                    message_secret=message_secret,
                     proto_bytes=proto_bytes,
                     sender_jid=to_whatsapp_jid(self.account_id),
                     tctoken=tctoken)

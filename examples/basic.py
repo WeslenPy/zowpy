@@ -13,7 +13,7 @@ from zowpy.core.import_account import import_account_from_six_parts
 from loguru import logger
 
 # Configura logging
-logger.add("logs/tc_token.log", level="DEBUG")
+logger.add("logs/send/test_send.log", level="DEBUG",rotation="10 MB")
 
 
 async def main():
@@ -27,7 +27,7 @@ async def main():
     
     # six_parts = "201221940858,Edn7zoBTofjkFaYicTnU2syI5XaX2x220wgjxY9mzUQ=,aCBsVMB9QXSVqUoewGSrgpCXBWVPXuJNVaDXaXg+JEY=,vh04wIVTAvIRlJLRUHqbyoR9hiftAGNpInY3IQmXc1c=,qOiYJceU0KwISneOHdHyNaGcWAHsNF71dTCOuKodB1g=,MjAxMjIxOTQwODU4IzOZkiOjRTgwLlNkUWcJkqJJDglJ"
     
-    six_parts = "201228763949,q88xv5cR+7JTpzxtOC+R6JcIRMcmW+Z+YTa56Lxu6EM=,iBGFroLBCMwPHkfD17JbBc+xTVKAVYvzFtDiqPgPDFM=,r1FOP+TmfWeB64Ll+4osYIYbTpFroYwFKDgfpHt59FI=,KF9w2SyxfuKeJ73yh35vsrdpv93eQ8WzrMnHHlzJfV0=,MjAxMjI4NzYzOTQ5I9QqZJxIO9/9NB2B4/9SysLNk7cD" 
+    six_parts = "201203320149,XUq52Yqs+QBJrjgYlTwnlW27bpmwkDVm4zx8Uliov30=,aCoxRBjrLLYeKgvnyGJ3ueHwCJwQHU/P4K8RUIYcoEw=,I2Di9TqZoofbgitcxp3DCTJF9VtgDIFSwNtfOcMeUFc=,EFtKIH3jQWLqzqEOZmXj7AysOOn+HOPw7aywvh3zOHk=,MjAxMjAzMzIwMTQ5Iy3O3ZUoA7eBs3Hp+Y7WynCTCbTp" 
     env = "smb_android"
 
     await import_account_from_six_parts(six_parts,env=env)
@@ -68,19 +68,11 @@ async def main():
         
         # Envia mensagem inicial (opcional)
         # to = "120363425653832734"
-        to = "5511930023692"
-        # to = "559885700260"
+        # to = "5511930023692"
+        to = "559885700260"
         # to = "201223091608"
         print(f" Enviando mensagem para {to}...")
 
-        print(f"\n Exemplo: Enviando mídia usando send_media_direct...")
-        await client.send_text(to, text)
-
-
-        print(f"\n📤 Exemplo: Enviando mídia usando send_media_direct...")
-
-
-        
         text = "Ola, tudo bem?"
 
 
@@ -109,6 +101,8 @@ async def main():
 
 
         # await client.set_disappearing_disabled(to)
+        # await client.send_empty_message(to)
+        
         await client.start_typing(to)
         await asyncio.sleep(4)
         message_id = await client.send_text(to, text)

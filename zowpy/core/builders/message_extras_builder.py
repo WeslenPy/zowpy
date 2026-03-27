@@ -95,7 +95,7 @@ def add_message_extras(
         extras_to_append.append(reporting)
 
 
-    tctoken = tctoken if tctoken else generate_hex_token()
+    # tctoken = tctoken if tctoken else generate_hex_token()
 
     if tctoken:
         tctoken_node = ProtocolNode(

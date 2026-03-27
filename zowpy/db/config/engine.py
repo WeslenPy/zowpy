@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-
+from sqlalchemy.pool import NullPool, StaticPool
 
 from sqlalchemy.orm.session import sessionmaker
 
@@ -26,18 +26,29 @@ conf_engine = dict(
     echo=settings.zowpy_db_echo,
 )
 
-if  settings.zowpy_db_url.lower().strip().startswith(("mysql", "postgresql")):
-    extend = dict(
-        pool_pre_ping=True,
-        pool_size=settings.zowpy_db_pool_size,
-        max_overflow=settings.zowpy_db_max_overflow,
-        pool_recycle=settings.zowpy_db_pool_recycle,
-        pool_timeout=settings.zowpy_db_pool_timeout,
+if settings.zowpy_db_url.lower().strip().startswith(("mysql", "postgresql")):
+    conf_engine.update(
+        dict(
+            pool_pre_ping=True,
+            pool_size=settings.zowpy_db_pool_size,
+            max_overflow=settings.zowpy_db_max_overflow,
+            pool_recycle=settings.zowpy_db_pool_recycle,
+            pool_timeout=settings.zowpy_db_pool_timeout,
+        )
     )
-    conf_engine.update(extend)
-    
 else:
-    conf_engine.update(dict(connect_args={"check_same_thread": False}))
+    # SQLite: StaticPool evita "no active connection" com muitas contas/async.
+    # Uma única conexão persistente, reutilizada por todas as sessões (acesso serializado ao DB).
+    # timeout: segundos que o SQLite espera pelo lock do arquivo (default 5); 60 reduz "database is locked".
+    conf_engine.update(
+        dict(
+            # poolclass=StaticPool,
+            connect_args={
+                "check_same_thread": False,
+                # "timeout": 60,
+            },
+        )
+    )
 
 
 engine: AsyncEngine = create_async_engine(**conf_engine)

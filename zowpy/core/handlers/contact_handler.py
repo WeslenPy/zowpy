@@ -6,9 +6,10 @@ Handler público para todas as operações de contatos do WhatsApp.
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
+from typing import Awaitable, Callable, List, Dict, Any, Optional
 from loguru import logger
 
+from zowpy.core.builders.message_extras_builder import generate_hex_token
 from zowpy.utils.constants import YowConstants
 
 from ...protocol.structs import ProtocolNode
@@ -63,7 +64,8 @@ class ContactHandler:
     def __init__(
         self,
         send_iq_fn: callable,
-        iq_response_processor: IQResponseProcessor
+        iq_response_processor: IQResponseProcessor,
+        update_trusted_contact_fn: Optional[Callable[[str, bytes], Awaitable[Any]]] = None,
     ):
         """
         Inicializa handler.
@@ -71,9 +73,12 @@ class ContactHandler:
         Args:
             send_iq_fn: Função async para enviar IQ (recebe ProtocolNode)
             iq_response_processor: Processor para gerenciar respostas de IQ
+            update_trusted_contact_fn: Função async para atualizar contato confiado
         """
         self._send_iq = send_iq_fn
         self._iq_processor = iq_response_processor
+        self._update_trusted_contact = update_trusted_contact_fn
+
     
     async def sync_contacts(
         self,
@@ -235,9 +240,12 @@ class ContactHandler:
                 if in_numbers:
                     try:
                         # Converte números para JIDs completos para o TrustContact
-                        jids_to_trust = [to_whatsapp_jid(num) for num in in_numbers]
-                        asyncio.create_task(self.trust_contact(jids_to_trust))
-                        logger.info(f"Solicitado trust para {len(jids_to_trust)} contatos")
+                        # jids_to_trust = [to_whatsapp_jid(num) for num in in_numbers]
+                        for num in in_numbers:
+                            jid_trust = to_whatsapp_jid(num)
+                            asyncio.create_task(self.trust_contact([jid_trust]))
+                            
+                            logger.info(f"Solicitado trust para {jid_trust} contatos")
                     except Exception as e:
                         logger.warning(f"Erro na automação de trust_contact: {e}")
 
@@ -448,6 +456,14 @@ class ContactHandler:
         
         if timestamp is None:
             timestamp = int(time())
+            
+
+
+        # for jid in jids:
+        #     tc_token = generate_hex_token()
+        #     if self._update_trusted_contact:
+        #         await self._update_trusted_contact(jid, tc_token)
+
         
         # Cria entidade
         entity = TrustContactIqProtocolEntity(

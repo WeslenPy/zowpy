@@ -19,7 +19,9 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+*.txt
 
+fluxo.py
 basic.py
 advanced.py
 
