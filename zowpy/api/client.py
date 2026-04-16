@@ -534,7 +534,7 @@ class ZowPyClient:
         config: Optional[Config] = None,
         env: Optional[Any] = None,
         encrypt: bool = False,
-    ) -> dict:
+    ) -> Optional[MessageContent]:
         """
         Verifica existência de conta para um número (endpoint /v2/exists).
         """
@@ -575,13 +575,13 @@ class ZowPyClient:
         config: Optional[Config] = None,
         env: Optional[Any] = None,
         encrypt: bool = True,
-    ) -> dict:
+    ) -> MessageContent:
         """
         Finaliza registro com código (endpoint /v2/register).
         """
         target_phone = phone_number or self.account_id
-        resolved_config = await self._resolve_registration_config(target_phone, config=config, env=resolved_env)
         resolved_env = await self._resolve_registration_env(env=env)
+        resolved_config = await self._resolve_registration_config(target_phone, config=config, env=resolved_env)
 
         request = AsyncRegRequest(
             phone_number=target_phone,

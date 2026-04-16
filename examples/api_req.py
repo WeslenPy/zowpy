@@ -29,7 +29,7 @@ async def main() -> None:
         phone_number=account_id,
         encrypt=False,
     )
-    print("exists_result:", exists_result)
+    print("exists_result:", exists_result.status)
     
     
     # unban = await client.registration_unban(

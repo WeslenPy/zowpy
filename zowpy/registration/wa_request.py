@@ -26,7 +26,7 @@ from ..utils.phone import PhoneUtils
 from ..utils.tools import WATools
 from loguru import logger
 
-from .parser import JSONResponseParser, ResponseParser
+from .parser import JSONResponseParser, MessageContent, ResponseManager, ResponseParser
 from zowpy.db.config.engine import AsyncSessionMaker
 
 
@@ -249,7 +249,7 @@ class WARequest(object):
         preview: bool = False,
         cert: Optional[Any] = None,
         proxy: Optional[Any] = None,
-    ) -> Optional[dict[str, Any]]:
+    ) -> Optional[MessageContent]:
         logger.debug(
             f"send(parser={None if parser is None else '[omitted]'}, encrypt={encrypt}, preview={preview})"
         )
@@ -279,6 +279,9 @@ class WARequest(object):
                 logger.warning("Falha ao parsear resposta de registration: {}", exc)
                 return dict(raw)
         return dict(raw)
+
+    def _wrap_message_content(self, body: dict[str, Any]) -> MessageContent:
+        return MessageContent(body, ResponseManager(self.response))
 
     def getConnectionParameters(self) -> tuple[str, int, str]:
         if not getattr(self, "url", None):
@@ -311,7 +314,7 @@ class WARequest(object):
         preview: bool = False,
         cert: Optional[Any] = None,
         proxy: Optional[Any] = None,
-    ) -> Optional[dict[str, Any]]:
+    ) -> Optional[MessageContent]:
         logger.debug(
             f"sendGetRequest(parser={None if parser is None else '[omitted]'}, encrypt_params={encrypt_params}, preview={preview})"
         )
@@ -350,12 +353,12 @@ class WARequest(object):
             return None
         if self.response.status_code != WARequest.OK:
             logger.error(f"Request not successful, status was {self.response.status_code}")
-            return {}
-        return self._finalize_json_body(self.response.json())
+            return self._wrap_message_content({})
+        return self._wrap_message_content(self._finalize_json_body(self.response.json()))
 
     async def sendPostRequest(
         self, parser: Optional[ResponseParser] = None, proxy: Optional[Any] = None
-    ) -> dict[str, Any]:
+    ) -> MessageContent:
         self.response = None
         params = self.params
         parser = parser or self.parser or ResponseParser()
@@ -376,10 +379,10 @@ class WARequest(object):
         )
         if self.response.status_code != WARequest.OK:
             logger.error(f"Request not successful, status was {self.response.status_code}")
-            return {}
+            return self._wrap_message_content({})
 
         self.sent = True
-        return self._finalize_json_body(self.response.json())
+        return self._wrap_message_content(self._finalize_json_body(self.response.json()))
 
     def b64encode(self, value: bytes) -> bytes:
         return base64.urlsafe_b64encode(value)
