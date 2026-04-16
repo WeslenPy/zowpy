@@ -6,12 +6,25 @@ Estilo whatsmeow: wait_for_message com filtros e condições.
 """
 
 import asyncio
+import os
 import random
-from typing import Optional, Callable, Dict, Any, Union
+from typing import Optional, Callable, Dict, Any, Union, Sequence
 from loguru import logger
+import names
 
+from zowpy.config.bot_env import BotEnv
+from zowpy.config.device_env import DeviceEnv
 from zowpy.config.network import ProxyConfig
+from zowpy.config.v1.config import Config
 from zowpy.db.config.engine import AsyncSessionMaker
+from zowpy.profile.profile import AsyncProfile
+from zowpy.registration.code_request import AsyncCodeRequest
+from zowpy.registration.exists_request import AsyncExistsRequest
+from zowpy.registration.reg_request import AsyncRegRequest
+from zowpy.registration.unban_request import AsyncUnbanRequest
+from zowpy.registration.parser import MessageContent
+from zowpy.utils.phone import PhoneUtils
+from zowpy.utils.tools import WATools
 
 from ..core.client import MediaType, WhatsAppClient
 from ..core.events import AsyncEventEmitter
@@ -472,7 +485,147 @@ class ZowPyClient:
         )
         
         return message_id
-    
+
+    # ========== Registration (alto nível) ==========
+
+    async def _resolve_registration_env(self, env: Optional[str] = None) -> Optional[BotEnv]:
+        return BotEnv(deviceEnv=DeviceEnv(env or self.env))
+        
+
+    async def _resolve_registration_config(
+        self,
+        phone_number: str,
+        config: Optional[Config] = None,
+        env: Optional[BotEnv] = None,
+    ) -> AsyncProfile:
+        if config is not None:
+            return config
+
+        try: 
+            profile = AsyncProfile(phone_number, session_maker=AsyncSessionMaker)
+            await profile.axolotl_manager
+            return profile
+        
+        except Exception as e:
+            device_env = env.deviceEnv
+            mcc, mnc = PhoneUtils.get_mcc_mnc(phone_number)
+            cc = PhoneUtils.getMobileCC(phone_number)
+            config=  Config(phone=phone_number, 
+                          cc=cc, mcc=mcc, mnc=mnc,
+                          login=phone_number,
+                          pushname=names.get_first_name(),
+                          os_name=device_env.getOSName(),
+                          id= os.urandom(20),
+                          os_version=device_env.getOSVersion(),
+                          manufacturer=device_env.getManufacturer(),
+                          device_name=device_env.getDeviceName2(),
+                          device_model_type=device_env.getDeviceModelType(),
+                          )
+
+            new_profile = AsyncProfile(phone_number, config=config, session_maker=AsyncSessionMaker)
+            await new_profile.write_config(config)
+            return new_profile
+        
+        
+
+    async def registration_request_exists(
+        self,
+        phone_number: Optional[str] = None,
+        config: Optional[Config] = None,
+        env: Optional[Any] = None,
+        encrypt: bool = False,
+    ) -> dict:
+        """
+        Verifica existência de conta para um número (endpoint /v2/exists).
+        """
+        target_phone = phone_number or self.account_id
+        resolved_env = await self._resolve_registration_env(env=env)
+        resolved_config = await self._resolve_registration_config(target_phone, config=config, env=resolved_env)
+
+        request = AsyncExistsRequest(
+            phone_number=target_phone,
+            config=resolved_config,
+            env=resolved_env,
+        )
+        return await request.send(encrypt=encrypt, proxy=self.proxy)
+
+    async def registration_request_code(
+        self,
+        phone_number: Optional[str] = None,
+        method: str = "sms",
+        config: Optional[Dict[str, Any]] = None,
+        env: Optional[Any] = None,
+    ) -> dict:
+        """
+        Solicita código de verificação (endpoint /v2/code).
+        """
+        target_phone = phone_number or self.account_id
+        request = AsyncCodeRequest(
+            method=method,
+            phone_number=target_phone,
+            config=config,
+            env=env or self._resolve_registration_env(),
+        )
+        return await request.send()
+
+    async def registration_register(
+        self,
+        code: str,
+        phone_number: Optional[str] = None,
+        config: Optional[Config] = None,
+        env: Optional[Any] = None,
+        encrypt: bool = True,
+    ) -> dict:
+        """
+        Finaliza registro com código (endpoint /v2/register).
+        """
+        target_phone = phone_number or self.account_id
+        resolved_config = await self._resolve_registration_config(target_phone, config=config, env=resolved_env)
+        resolved_env = await self._resolve_registration_env(env=env)
+
+        request = AsyncRegRequest(
+            phone_number=target_phone,
+            code=code,
+            config=resolved_config,
+            env=resolved_env,
+        )
+        return await request.send(encrypt=encrypt, proxy=self.proxy)
+
+    async def registration_unban(
+        self,
+        token: str,
+        phone_number: Optional[str] = None,
+        *,
+        config: Optional[Config] = None,
+        env: Optional[str] = None,
+        version: Optional[str] = None,
+        appeal_description: Optional[str] = None,
+        appeal_reasons: Optional[Sequence[str]] = None,
+        proxy: Optional[Any] = None,
+        timeout: float = 30.0,
+    ) -> MessageContent:
+        """
+        Recurso de desbanimento (appeal) via GraphQL em ``graph.whatsapp.com/graphql``.
+
+        Usa :class:`AsyncUnbanRequest`. Informe ``token`` (request_token do fluxo de appeal).
+
+        ``config`` ou ``profile`` preenchem o payload; se ambos forem omitidos e o cliente
+        estiver conectado, usa ``self._client.profile``.
+        """
+        resolved_env = await self._resolve_registration_env(env=env)
+
+        resolved_config = await self._resolve_registration_config(phone_number or self.account_id, config=config, env=resolved_env)
+
+        req = AsyncUnbanRequest(
+            config=await resolved_config.config,
+            appeal_description=appeal_description,
+            appeal_reasons=appeal_reasons,
+            version=version,
+            env=resolved_env,
+        )
+        use_proxy = proxy if proxy is not None else self.proxy
+        return await req.unban(token, proxy=use_proxy, timeout=timeout)
+
     async def send_sticker(
         self,
         to: str,

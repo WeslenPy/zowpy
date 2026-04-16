@@ -1,7 +1,7 @@
 """
 WhatsApp Client V2 - Cliente com fluxo linear assíncrono.
 
-Baseado no zowsuplib, mas totalmente assíncrono e sem eventos complexos.
+Baseado no zowpy, mas totalmente assíncrono e sem eventos complexos.
 Fluxo direto: conexão → handshake → autenticação.
 """
 
@@ -116,7 +116,7 @@ class WhatsAppClient:
     """
     Cliente WhatsApp com fluxo linear assíncrono.
     
-    Baseado no zowsuplib, mas totalmente assíncrono e sem eventos complexos.
+    Baseado no zowpy, mas totalmente assíncrono e sem eventos complexos.
     Fluxo direto: conexão → handshake → autenticação.
     """
     
@@ -260,10 +260,10 @@ class WhatsAppClient:
             # 2. Gera prekeys ANTES da conexão para evitar timeout
             logger.info("Gerando prekeys antes da conexão...")
             prekeys_generated = await self._load_prekeys()
-            logger.info("✓ Prekeys gerados")
+            logger.info(" Prekeys gerados")
             
             # 2.5. Verifica prekeys não enviadas e define passive=True se necessário
-            # (Baseado em AxolotlControlLayer.on_connected() no zowsuplib)
+            # (Baseado em AxolotlControlLayer.on_connected() no zowpy)
             if self.axolotl_manager:
                 try:
                     unsent_prekeys = await self.axolotl_manager.load_unsent_prekeys()
@@ -304,20 +304,20 @@ class WhatsAppClient:
             self.connection = AsyncConnection(self.endpoint, proxy=self.proxy.to_dict() if self.proxy else None)
             await self.connection.connect()
             if self.proxy:
-                logger.info("✓ TCP socket conectado via PROXY")
+                logger.info(" TCP socket conectado via PROXY")
             else:
-                logger.info("✓ TCP socket conectado (direto)")
+                logger.info(" TCP socket conectado (direto)")
             
             # 4. Envia header WA\x06\x03 (e EDGE_HEADER se disponível)
             logger.info("Enviando header...")
             edge_routing_info = self.config.edge_routing_info if self.config else None
             await self.connection.send_header(edge_routing_info=edge_routing_info)
-            logger.info("✓ Header enviado")
+            logger.info(" Header enviado")
             
             # 5. Cria stream
             logger.info("Criando stream segmentado...")
             self.stream = AsyncSegmentedStream()
-            logger.info("✓ Stream criado")
+            logger.info(" Stream criado")
             
             # 6. Inicia bridge TCP ↔ Stream (CRÍTICO: ANTES do handshake)
             logger.info("Iniciando bridge TCP ↔ Stream (ANTES do handshake)...")
@@ -325,42 +325,40 @@ class WhatsAppClient:
             self._bridge_task = asyncio.create_task(self.bridge.start())
             # Pequeno delay para garantir que bridge está rodando
             await asyncio.sleep(0.1)
-            logger.info("✓ Bridge ativo")
+            logger.info(" Bridge ativo")
             
             # 7. Executa handshake IMEDIATAMENTE após header (servidor espera atividade)
             logger.info("Executando handshake Noise...")
             await self._perform_handshake()
-            logger.info("✓ Handshake concluído")
+            logger.info(" Handshake concluído")
             
-            # 7.5. Envia stream:stream após handshake (conforme fluxograma zowsuplib)
             # logger.info("Enviando stream:stream...")
             # await self._send_stream_start()
-            # logger.info("✓ stream:stream enviado")
+            # logger.info(" stream:stream enviado")
             
             # 8. Aguarda <success> do servidor (pode receber stream:features antes)
             logger.info("Aguardando confirmação do servidor (<success> ou stream:features)...")
             await self._wait_for_success()
-            logger.info("✓ Autenticado com sucesso")
+            logger.info(" Autenticado com sucesso")
             
-            # 8.5. Define PROP_IDENTITY_AUTOTRUST = True (conforme fluxograma zowsuplib)
             logger.info("Definindo PROP_IDENTITY_AUTOTRUST = True...")
             await self._set_identity_autotrust(True)
-            logger.info("✓ PROP_IDENTITY_AUTOTRUST definido")
+            logger.info(" PROP_IDENTITY_AUTOTRUST definido")
             
             # 8.6. Atualiza status da conta no banco de dados
             logger.info("Atualizando status da conta no banco...")
             await self._update_account_status()
-            logger.info("✓ Status da conta atualizado")
+            logger.info(" Status da conta atualizado")
             
             # 9. Inicializa handlers públicos (após conexão)
             logger.info("Inicializando handlers públicos...")
             await self._initialize_handlers()
-            logger.info("✓ Handlers inicializados")
+            logger.info(" Handlers inicializados")
             
             # 9.5. Envia prekeys não enviadas (se houver)
             logger.info("Verificando prekeys não enviadas...")
             await self._check_and_flush_prekeys()
-            logger.info("✓ Prekeys verificadas")
+            logger.info(" Prekeys verificadas")
             
             # 10. Inicia loops de processamento
             logger.info("Iniciando loops de processamento...")
@@ -369,21 +367,19 @@ class WhatsAppClient:
             self._authenticated = True
             self._message_loop_task = asyncio.create_task(self._message_loop())
             self._keepalive_task = asyncio.create_task(self._keepalive_loop())
-            logger.info("✓ Cliente pronto")
+            logger.info(" Cliente pronto")
             
             # Emite eventos para compatibilidade com API pública
             await self.events.emit("connected", {"account_id": self.account_id})
             await self.events.emit("authenticated", {"account_id": self.account_id})
             
-            # Envia presence "available" após login (igual ao zowsuplib)
-            # Baseado em yowbot_layer.onSuccess() linha 1025
             try:
                 from .builders.presence_builder import PresenceBuilder
                 presence_node = PresenceBuilder.build_presence(
                     presence_type=PresenceBuilder.TYPE_AVAILABLE
                 )
                 await self._send_protocol_node(presence_node)
-                logger.debug("Presence 'available' enviado após login (igual ao zowsuplib)")
+                logger.debug("Presence 'available' enviado após login")
             except Exception as e:
                 logger.warning(f"Erro ao enviar presence após login: {e}")
 
@@ -394,7 +390,7 @@ class WhatsAppClient:
                         await self.config_handler.get_config()
                         account.is_initialized = True
                         await session.commit()
-                        logger.info("✓ Config obtida")
+                        logger.info(" Config obtida")
             except Exception as e:
                 logger.warning(f"Erro ao definir config auto_trust: {e}")
             
@@ -511,7 +507,6 @@ class WhatsAppClient:
                         return
                     
                     # Extrai hosts
-                    # Baseado em ResultRequestMediaConnIqProtocolEntity.fromProtocolTreeNode() do zowsuplib
                     # Os nodes são <host> com atributo hostname (não <hostname>)
                     hosts = []
                     host_nodes = media_conn_node.get_all_children("host")
@@ -813,7 +808,6 @@ class WhatsAppClient:
         """
         Executa handshake de forma totalmente linear, sem eventos.
         
-        Baseado no zowsuplib:
         - Carrega local_static e remote_static
         - Executa handshake IK (se RS existe) ou XX (se não existe)
         - Cria transport após handshake
@@ -870,15 +864,14 @@ class WhatsAppClient:
             logger.info("Salvando chave RS remota recebida durante handshake...")
             self.config.server_static_public = handshake.rs
             await self.profile.write_config(self.config)
-            logger.info("✓ Chave RS remota salva")
+            logger.info(" Chave RS remota salva")
         
-        logger.info("✓ Transport criado")
+        logger.info(" Transport criado")
     
     async def _send_stream_start(self) -> None:
         """
         Envia stream:stream para o servidor após handshake.
         
-        Baseado no fluxograma do zowsuplib:
         - Após ProtocolReady, envia stream:stream para iniciar o stream XMPP
         """
         logger.info("Enviando stream:stream para o servidor...")
@@ -894,15 +887,14 @@ class WhatsAppClient:
         )
         
         await self._send_protocol_node(stream_node)
-        logger.info("✓ stream:stream enviado")
+        logger.info(" stream:stream enviado")
     
     async def _send_auth_credentials(self) -> None:
         """
         Envia credenciais de autenticação após receber stream:features.
         
-        Baseado no fluxograma do zowsuplib:
         - Após receber stream:features, envia <auth> com credenciais
-        - Inclui o atributo 'passive' conforme client_config.passive (igual ao zowsuplib)
+        - Inclui o atributo 'passive' conforme client_config.passive 
         """
         logger.info("Enviando <auth> com credenciais...")
         
@@ -915,24 +907,22 @@ class WhatsAppClient:
         passive = getattr(self.client_config, 'passive', False) if self.client_config else False
         
         # Cria node <auth> conforme protocolo WhatsApp
-        # CRÍTICO: Incluir 'passive' como no zowsuplib (AuthProtocolEntity.toProtocolTreeNode)
         auth_node = ProtocolNode(
             tag="auth",
             attributes={
                 "mechanism": "WAUTH-2",
                 "user": str(username),
-                "passive": "true" if passive else "false",  # Conforme zowsuplib
+                "passive": "true" if passive else "false",  
             }
         )
         
         await self._send_protocol_node(auth_node)
-        logger.info(f"✓ <auth> enviado com user={username}, passive={passive}")
+        logger.info(f" <auth> enviado com user={username}, passive={passive}")
     
     async def _set_identity_autotrust(self, value: bool) -> None:
         """
         Define PROP_IDENTITY_AUTOTRUST.
         
-        Baseado no fluxograma do zowsuplib:
         - Após login bem-sucedido, define PROP_IDENTITY_AUTOTRUST = True
         - Isso permite confiar automaticamente em identidades recebidas
         
@@ -954,7 +944,6 @@ class WhatsAppClient:
         """
         Atualiza status da conta no banco de dados após autenticação.
         
-        Baseado no fluxograma do zowsuplib:
         - update_account_status: marca conta como logged_in
         """
         if not self.session_maker:
@@ -988,7 +977,6 @@ class WhatsAppClient:
         """
         Aguarda <success> do servidor de forma linear.
         
-        Baseado no zowsuplib:
         - Após enviar stream:stream, servidor pode enviar stream:features
         - Se receber stream:features, envia <auth> com credenciais
         - Servidor então envia <success> ou <failure>
@@ -1041,7 +1029,7 @@ class WhatsAppClient:
              
             # Processa node
             if node.tag == "success":
-                logger.info("✓ <success> recebido do servidor")
+                logger.info(" <success> recebido do servidor")
                 return  # Sucesso!
             elif node.tag == "failure" and not ( self._connected and self._authenticated):
                 await self.auth_handler.handle_failure(node)
@@ -1054,7 +1042,7 @@ class WhatsAppClient:
                 await self.auth_handler.handle_stream_features(node)
                 # Envia <auth> após receber stream:features
                 await self._send_auth_credentials()
-                logger.info("✓ <auth> enviado após stream:features")
+                logger.info(" <auth> enviado após stream:features")
                 continue
             else:
                 logger.debug(f"Node {node.tag} recebido antes de autenticação, ignorando...")
@@ -1506,7 +1494,6 @@ class WhatsAppClient:
         """
         Garante que contato está sincronizado antes de enviar mensagem.
         
-        Equivalente ao assureContactsAndSend() do zowsuplib.
         Implementa estratégia anti-banimento com validações robustas.
         
         Args:
@@ -1602,7 +1589,6 @@ class WhatsAppClient:
         options: Optional[dict] = None,
     ) -> str:
         """
-        Envia mensagem de texto seguindo o fluxo completo do zowsuplib.
         
         Suporta mensagens de texto estendidas com contexto (citações, menções, etc).
         
@@ -2121,7 +2107,6 @@ class WhatsAppClient:
         progress_callback: Optional[callable] = None
     ) -> str:
         """
-        Envia imagem seguindo o fluxo completo do zowsuplib.
         
         Fluxo:
         1. Processa imagem (dimensões, thumbnail, SHA256)
@@ -2225,7 +2210,6 @@ class WhatsAppClient:
         Útil quando você já tem os dados do upload (URL, direct_path, etc.)
         e quer apenas enviar a mensagem.
         
-        Agora usa as novas Protocol Entities seguindo o padrão do zowsuplib.
         
         Args:
             to: JID do destinatário
@@ -2409,7 +2393,6 @@ class WhatsAppClient:
         progress_callback: Optional[callable] = None
     ) -> str:
         """
-        Envia áudio seguindo o fluxo completo do zowsuplib.
         
         Args:
             to: JID do destinatário
@@ -2486,7 +2469,6 @@ class WhatsAppClient:
         progress_callback: Optional[callable] = None
     ) -> str:
         """
-        Envia documento seguindo o fluxo completo do zowsuplib.
         
         Args:
             to: JID do destinatário
@@ -2568,7 +2550,7 @@ class WhatsAppClient:
         progress_callback: Optional[callable] = None
     ) -> str:
         """
-        Envia sticker seguindo o fluxo completo do zowsuplib.
+        Envia sticker seguindo o fluxo completo do zowpy.
         
         Args:
             to: JID do destinatário
@@ -2860,7 +2842,7 @@ class WhatsAppClient:
         """
         Garante que há sessões para os JIDs e envia mensagem.
         
-        Equivalente ao ensureSessionsAndSendToContacts() do zowsuplib.
+        Equivalente ao ensureSessionsAndSendToContacts() do zowpy.
         Separa JIDs com sessão dos sem sessão, obtém chaves se necessário.
         
         Args:
@@ -3033,21 +3015,21 @@ class WhatsAppClient:
 
 
 
-            # CORREÇÃO: Converte JID para formato do zowsuplib
+            # CORREÇÃO: Converte JID para formato do zowpy
             # get_all_session_usernames() retorna formato "recipient_id.recipient_type:device_id"
-            # mas zowsuplib espera JID completo "recipient_id@s.whatsapp.net" no node <to>
+            # mas zowpy espera JID completo "recipient_id@s.whatsapp.net" no node <to>
             if "@" in jid:
                 # JID completo: extrai apenas o recipient_id para encrypt()
                 recipient_id = jid.split('@')[0]
                 # Remove device_id se existir (ex: "559885700260:0" -> "559885700260")
                 recipient_id = recipient_id.split(':')[0] if ':' in recipient_id else recipient_id
-                # JID para o node <to> (zowsuplib usa JID completo)
+                # JID para o node <to> (zowpy usa JID completo)
                 to_jid_for_node = jid
             else:
                 # Formato interno "recipient_id.recipient_type:device_id"
                 # Extrai apenas o recipient_id (parte antes do primeiro ponto)
                 recipient_id = jid.split('.')[0]
-                # Converte para JID completo no formato do zowsuplib
+                # Converte para JID completo no formato do zowpy
                 to_jid_for_node = f"{recipient_id}@{YowConstants.WHATSAPP_SERVER}"
             
             # Criptografa para este dispositivo (usa recipient_id interno)
@@ -3076,13 +3058,13 @@ class WhatsAppClient:
             
             # Cria node <enc> usando EncEntity helper
             # Para contatos individuais, usa <to> wrapper dentro de <participants>
-            # CORREÇÃO: usa to_jid_for_node (JID completo) no formato do zowsuplib
+            # CORREÇÃO: usa to_jid_for_node (JID completo) no formato do zowpy
             enc_node = EncEntity.create_enc_node(
                 enc_type=enc_type,
                 ciphertext=ciphertext.serialize(),
                 type_message =message_type,
                 mediatype=mediatype,
-                jid=to_jid_for_node,  # JID completo no formato do zowsuplib
+                jid=to_jid_for_node,  # JID completo no formato do zowpy
                 count=str(retry_count) if retry_count > 0 else None
             )
             
@@ -3455,9 +3437,9 @@ class WhatsAppClient:
         participants:Optional[list[str]] = None,
     ) -> None:
         """
-        Envia mensagem para grupo seguindo fluxo completo do zowsuplib.
+        Envia mensagem para grupo seguindo fluxo completo do zowpy.
         
-        Baseado em AxolotlSendLayer.sendToGroup() do zowsuplib.
+        Baseado em AxolotlSendLayer.sendToGroup() do zowpy.
         
         Fluxo:
         1. Verifica se sender key record existe
@@ -3647,7 +3629,7 @@ class WhatsAppClient:
         """
         Envia mensagem para grupo com sender key distribution para participantes.
         
-        Baseado em AxolotlSendLayer.sendToGroupWithSessions() do zowsuplib.
+        Baseado em AxolotlSendLayer.sendToGroupWithSessions() do zowpy.
         
         Args:
             message_node: ProtocolNode da mensagem (com <proto>)
@@ -3812,7 +3794,7 @@ class WhatsAppClient:
         """
         Garante que há sessões para os JIDs e envia mensagem para grupo.
         
-        Baseado em AxolotlSendLayer.ensureSessionsAndSendToGroup() do zowsuplib.
+        Baseado em AxolotlSendLayer.ensureSessionsAndSendToGroup() do zowpy.
         
         Args:
             message_node: ProtocolNode da mensagem (com <proto>)
@@ -4344,7 +4326,7 @@ class WhatsAppClient:
         """
         Processa node de mensagem plaintext e envia.
         
-        Equivalente ao processPlaintextNodeAndSend() do zowsuplib.
+        Equivalente ao processPlaintextNodeAndSend() do zowpy.
         
         Args:
             node: ProtocolNode da mensagem (com <proto> ainda não criptografado)
@@ -4425,7 +4407,7 @@ class WhatsAppClient:
         Envia PKMSG para sincronização quando InvalidMessage após múltiplas tentativas.
 
         Baseado em AxolotlReceiveLayer.send_pkmsg_for_invalid_message() e
-        AxolotlSendLayer.sendToContactAsPkmsg() do zowsuplib: envia mensagem vazia como PKMSG
+        AxolotlSendLayer.sendToContactAsPkmsg() do zowpy: envia mensagem vazia como PKMSG
         para forçar nova sessão; deleta temporariamente a sessão existente para garantir PKMSG.
         Se já houver requisição em andamento para o mesmo JID, ignora a nova.
 
@@ -4548,7 +4530,7 @@ class WhatsAppClient:
         """
         Envia retry receipt para solicitar reenvio de mensagem.
         
-        Baseado em AxolotlReceiveLayer.send_retry() do zowsuplib.
+        Baseado em AxolotlReceiveLayer.send_retry() do zowpy.
         
         Args:
             retry_receipt: RetryOutgoingReceiptProtocolEntity a ser enviado
@@ -4564,7 +4546,7 @@ class WhatsAppClient:
     ) -> None:
         """
         Envia OutgoingReceipt (delivered) em erros de descriptografia.
-        Fluxo zowsuplib: InvalidKeyId, Duplicate, Unknown type, InvalidMessage após 2 retries.
+        Fluxo zowpy: InvalidKeyId, Duplicate, Unknown type, InvalidMessage após 2 retries.
         """
         from .builders.receipt_builder import ReceiptBuilder
 
@@ -4602,7 +4584,7 @@ class WhatsAppClient:
         """
         Marca mensagem(s) como lida(s) enviando receipt de leitura.
         
-        Baseado em OutgoingReceiptProtocolEntity do zowsuplib.
+        Baseado em OutgoingReceiptProtocolEntity do zowpy.
         
         Args:
             message_ids: ID da mensagem ou lista de IDs de mensagens

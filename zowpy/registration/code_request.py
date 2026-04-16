@@ -9,6 +9,8 @@ import random
 from typing import Optional, Dict, Any
 from loguru import logger
 
+from zowpy.config.bot_env import BotEnv
+
 try:
     import aiohttp
 except ImportError:
@@ -24,7 +26,7 @@ class AsyncCodeRequest:
         method: str,
         phone_number: str,
         config: Optional[Dict[str, Any]] = None,
-        env: Optional[Any] = None,
+        env: Optional[BotEnv] = None,
     ):
         """
         :param method: Método de envio ("sms" ou "voice")

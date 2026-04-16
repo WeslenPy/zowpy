@@ -29,7 +29,7 @@ class AsyncProfile(object):
 
     async def _load_axolotl_manager(self, session_maker=None):
         # type: () -> AxolotlManager
-        return await AxolotlManagerFactory().get_manager(self._profile_name, self.username, session_maker=session_maker or self._session_maker)
+        return await AxolotlManagerFactory().get_manager(self._profile_name, await self.username, session_maker=session_maker or self._session_maker)
 
     async def write_config(self, config, session_maker=None):
         # type: (Config) -> None
