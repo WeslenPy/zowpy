@@ -67,59 +67,59 @@ class MessageContent:
 
     @property
     def reason(self) -> str:
-        return str(self.data.get("reason", "")).upper()
+        return (self.data.get("reason", "") or "").upper()
 
     @property
     def status(self) -> str:
-        return str(self.data.get("status", "fail")).upper()
+        return (self.data.get("status", "fail") or "fail").upper()
 
     @property
     def violation_type(self) -> str:
-        return str(self.data.get("violation_type", "21"))
+        return self.data.get("violation_type", "21") or "21"
 
     @property
     def token(self) -> str:
-        return str(self.data.get("appeal_token", ""))
+        return self.data.get("appeal_token", "") or ""
 
     @property
     def phone(self) -> str:
-        return str(self.data.get("login", ""))
+        return self.data.get("login", "") or ""
 
     @property
     def sms_wait(self) -> Any:
-        return self.data.get("sms_wait", "")
+        return self.data.get("sms_wait", "") or ""
 
     @property
     def type_account(self) -> str:
-        return str(self.data.get("type", ""))
+        return self.data.get("type", "") or ""
 
     @property
     def lid(self) -> str:
-        return str(self.data.get("lid", ""))
+        return self.data.get("lid", "") or ""
 
     @property
     def send_sms_eligible(self) -> Any:
-        return self.data.get("send_sms_eligible", "")
+        return self.data.get("send_sms_eligible", "") or ""
 
     @property
     def wa_old_eligible(self) -> Any:
-        return self.data.get("wa_old_eligible", "")
+        return self.data.get("wa_old_eligible", "") or ""
 
     @property
     def wa_old_wait(self) -> Any:
-        return self.data.get("wa_old_wait", "")
+        return self.data.get("wa_old_wait", "") or ""
 
     @property
     def send_sms_wait(self) -> Any:
-        return self.data.get("send_sms_wait", "")
+        return self.data.get("send_sms_wait", "") or ""
 
     @property
     def cert(self) -> Any:
-        return self.data.get("cert", "")
+        return self.data.get("cert", "") or ""
 
     @property
     def possible_migration(self) -> Any:
-        return self.data.get("possible_migration", "")
+        return self.data.get("possible_migration", "") or ""
 
 
 class ResponseParser:
